@@ -29,6 +29,7 @@ pub unsafe extern "C" fn esp32sim_jumperly_mode(e: *mut Emu) -> u32 {
         m.console.raw = Some(Default::default());
         m.bus.pin_watch = Some(esp32c3::jumperly::PinWatch::new(&m.bus.periph, C3_ALL_PINS));
         m.bus.rmt_tap = Some(Vec::new());
+        m.bus.pwm_tap = Some(Default::default());   // Jumperly patch J4
         m.bus.periph.adc.adc_linear = true;   // Jumperly patch J5
         return 0;
     }
@@ -237,17 +238,22 @@ pub unsafe extern "C" fn esp32sim_pwm_take(e: *mut Emu) -> u32 {
     // SAFETY: the caller provides exclusive access to a live emulator.
     let e = unsafe { &mut *e };
     e.buf.clear();
-    let outs = match e.m.s3_mut().and_then(|m| m.bus.pwm_tap.as_mut()) {
-        Some(tap) => std::mem::take(&mut tap.events),
-        None => return 0,
-    };
-    for (cycle, o) in &outs {
-        e.buf.extend_from_slice(&(*cycle as f64).to_le_bytes());
-        e.buf.extend_from_slice(&o.signal.to_le_bytes());
-        e.buf.extend_from_slice(&(u32::from(o.enabled) | (u32::from(o.idle_high) << 1)).to_le_bytes());
-        e.buf.extend_from_slice(&o.freq.to_le_bytes());
-        e.buf.extend_from_slice(&o.duty.to_le_bytes());
+    fn push(buf: &mut Vec<u8>, cycle: u64, signal: u32, enabled: bool, idle_high: bool, freq: f64, duty: f64) {
+        buf.extend_from_slice(&(cycle as f64).to_le_bytes());
+        buf.extend_from_slice(&signal.to_le_bytes());
+        buf.extend_from_slice(&(u32::from(enabled) | (u32::from(idle_high) << 1)).to_le_bytes());
+        buf.extend_from_slice(&freq.to_le_bytes());
+        buf.extend_from_slice(&duty.to_le_bytes());
     }
+    if let Some(m) = e.m.c3_mut() {
+        let Some(tap) = m.bus.pwm_tap.as_mut() else { return 0 };
+        let outs = std::mem::take(&mut tap.events);
+        for (cycle, o) in &outs { push(&mut e.buf, *cycle, o.signal, o.enabled, o.idle_high, o.freq, o.duty); }
+        return outs.len() as u32;
+    }
+    let Some(tap) = e.m.s3_mut().and_then(|m| m.bus.pwm_tap.as_mut()) else { return 0 };
+    let outs = std::mem::take(&mut tap.events);
+    for (cycle, o) in &outs { push(&mut e.buf, *cycle, o.signal, o.enabled, o.idle_high, o.freq, o.duty); }
     outs.len() as u32
 }
 
@@ -329,6 +335,16 @@ impl esp32s3::i2c::I2cHost for HostI2c {
 pub unsafe extern "C" fn esp32sim_bus_host(e: *mut Emu, i2c: u32, spi: u32) -> u32 {
     // SAFETY: the caller provides exclusive access to a live emulator.
     let e = unsafe { &mut *e };
+    if let Some(m) = e.m.c3_mut() {
+        m.bus.i2c_host = i2c != 0;
+        let mut finished = m.bus.periph.i2c.set_defer(i2c != 0);
+        m.bus.spi_host = spi != 0;
+        if spi == 0 {
+            if let Some(t) = m.bus.periph.spi2.host_wait.take() { m.bus.periph.spi2.finish_transfer(t, &[]); finished = true; }
+        }
+        if finished { m.bus.irq_dirty = true; }
+        return 0;
+    }
     let Some(m) = e.m.s3_mut() else { return 1 };
     m.bus.i2c_host = i2c != 0;
     let mut finished = false;
@@ -351,6 +367,20 @@ pub unsafe extern "C" fn esp32sim_bus_host(e: *mut Emu, i2c: u32, spi: u32) -> u
 pub unsafe extern "C" fn esp32sim_bus_service(e: *mut Emu) -> u32 {
     // SAFETY: the caller provides exclusive access to a live emulator.
     let e = unsafe { &mut *e };
+    if let Some(m) = e.m.c3_mut() {
+        let mut n = 0;
+        let mut host = HostI2c { bus: 0 };
+        if m.bus.periph.i2c.service(&mut host) { n += 1; }
+        if let Some(t) = m.bus.periph.spi2.host_wait.take() {
+            let mut rx = vec![0xffu8; t.rx_len];
+            // SAFETY: both buffers live for the call; the host only writes `rx_len` bytes to `rx`.
+            unsafe { host_spi(t.tx.as_ptr(), t.tx.len(), rx.as_mut_ptr(), rx.len()) };
+            m.bus.periph.spi2.finish_transfer(t, &rx);
+            n += 1;
+        }
+        if n > 0 { m.bus.irq_dirty = true; }
+        return n;
+    }
     let Some(m) = e.m.s3_mut() else { return 0 };
     let mut n = 0;
     for bus in 0..2 {
@@ -376,8 +406,14 @@ pub unsafe extern "C" fn esp32sim_bus_service(e: *mut Emu) -> u32 {
 pub unsafe extern "C" fn esp32sim_gpio_in_pin(e: *mut Emu, signal: u32) -> u32 {
     // SAFETY: the caller provides exclusive access to a live emulator.
     let e = unsafe { &mut *e };
-    let Some(m) = e.m.s3_mut() else { return 255 };
-    match m.bus.periph.gpio.func_in_sel.get(signal as usize) { Some(&sel) if sel & 0x80 != 0 => sel & 0x3f, _ => 255 }
+    let sel = if let Some(m) = e.m.c3_mut() {
+        m.bus.periph.gpio.func_in_sel.get(signal as usize).copied()
+    } else if let Some(m) = e.m.s3_mut() {
+        m.bus.periph.gpio.func_in_sel.get(signal as usize).copied()
+    } else {
+        None
+    };
+    match sel { Some(sel) if sel & 0x80 != 0 => sel & 0x3f, _ => 255 }
 }
 
 #[cfg(test)]

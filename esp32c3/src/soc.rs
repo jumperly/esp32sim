@@ -118,6 +118,8 @@ impl esp_soc::SocBus for SocBus {
         p.efuse = old.efuse;
         p.adc.analog = old.adc.analog;
         p.adc.adc_linear = old.adc.adc_linear;   // Jumperly patch J5: the straight-line ADC survives a reset
+        if let Some(tap) = &mut self.pwm_tap { if tap.reset(self.cycles) { self.slice_yield = true; } }   // Jumperly patch J4
+        p.i2c.defer = self.i2c_host;   // Jumperly patch J6: the bridge survives a chip reset
         p.misc.log_unknown = old.misc.log_unknown;
         p.usb.connected = old.usb.connected;
         p.rtc.reset_cause = cause;

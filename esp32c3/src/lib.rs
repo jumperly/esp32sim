@@ -5,6 +5,7 @@
 pub mod bus;
 pub mod jumperly;   // Jumperly patch J9
 pub mod periph;
+pub mod pwm;        // Jumperly patch J4 on the C3 LEDC
 pub mod soc;
 
 pub use esp_soc::Stop;
