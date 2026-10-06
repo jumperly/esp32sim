@@ -61,6 +61,7 @@ impl esp_soc::SocBus for SocBus {
         match self.periph.cycles_until_timer() { u32::MAX => None, cycles => Some(cycles.max(1) as u64) }
     }
     fn irq_dirty(&mut self) -> &mut bool { &mut self.irq_dirty }
+    fn take_slice_yield(&mut self) -> bool { std::mem::take(&mut self.slice_yield) }   // Jumperly patch J1/J9
     fn refresh_irq(&mut self) -> bool { self.periph.refresh_lines(); true }
     fn misc(&mut self) -> &mut Misc { &mut self.periph.misc }
     fn load_bytes(&mut self, addr: u32, data: &[u8]) -> Result<(), String> { SocBus::load_bytes(self, addr, data) }
@@ -125,11 +126,13 @@ impl esp_soc::SocBus for SocBus {
         p.spi0.jedec = old.spi0.jedec;
         p.spi1.jedec = old.spi1.jedec;
         p.gpio.strap = old.gpio.strap;      // strapping pins are board wiring, not chip state
+        if self.pin_watch.is_some() { p.gpio.input = old.gpio.input; }   // Jumperly patch J9: the outside circuit is not reset with the chip
         // Publish the cause where the ROM reads it, so the boot banner says RTC_SW_CPU_RST like
         // real silicon rather than POWERON.
         p.rtc.ram.write(0x38, cause | (cause << 6));
         self.mmu = [MMU_INVALID; MMU_ENTRIES];
         self.attach_board_devices();
+        self.note_pin_write();   // Jumperly patch J9: the reset released every pin; report it
         cause
     }
     fn sw_reset(&self) -> bool { self.periph.rtc.sw_reset }

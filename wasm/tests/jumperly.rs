@@ -186,8 +186,8 @@ fn rgb_led_write_produces_an_rmt_frame_on_gpio48() {
 }
 
 #[test]
-fn jumperly_mode_is_s3_only_and_before_boot() {
-    let board = "esp32c3";
+fn jumperly_mode_is_s3_and_c3_only_and_before_boot() {
+    let board = "esp32c6";
     let e = unsafe { esp32sim_new(board.as_ptr(), board.len(), 4, 0) };
     assert!(!e.is_null());
     assert_eq!(unsafe { esp32sim_jumperly_mode(e) }, 1);
@@ -307,4 +307,124 @@ fn run_with_bus_service(e: &mut Emu, until: &str) -> String {
         text += &e.uart(0);
     }
     text
+}
+
+// ------------------------------------------------------------------ Jumperly patch J9: ESP32-C3
+
+const C3_MHZ: u64 = 160;
+const C3_RMT_SIGNAL: u32 = 51;
+
+/// The C3 fixture as a whole-flash image: its own bootloader and partitions, the app at 0x10000.
+fn merged_c3(app: &str) -> Vec<u8> {
+    let mut flash = vec![0xffu8; 4 << 20];
+    for (off, file) in [(0x0, format!("fixtures/bin/{app}.bootloader.bin")), (0x8000, format!("fixtures/bin/{app}.partitions.bin")), (0x10000, format!("fixtures/bin/{app}.bin"))] {
+        let d = read(&file);
+        flash[off..off + d.len()].copy_from_slice(&d);
+    }
+    flash
+}
+
+impl Emu {
+    fn boot_c3(app: &str) -> Emu {
+        let board = "esp32c3";
+        // SAFETY: the board name is readable for the call; the pointer is checked for null.
+        let e = unsafe { esp32sim_new(board.as_ptr(), board.len(), 4, 0) };
+        assert!(!e.is_null());
+        let emu = Emu(e);
+        let (rom, flash) = (read("rom/esp32c3_rev3_rom.elf"), merged_c3(app));
+        // SAFETY: `e` is live and exclusively ours; the buffers are readable for each call.
+        unsafe {
+            assert_eq!(esp32sim_jumperly_mode(e), 0);
+            assert_eq!(esp32sim_load(e, 0, rom.as_ptr(), rom.len()), 0);
+            assert_eq!(esp32sim_load(e, 5, flash.as_ptr(), flash.len()), 0);
+            assert_eq!(esp32sim_boot(e, 0), 0);
+        }
+        emu
+    }
+    /// The RMT frames since the last call: (cycle, pin, bits).
+    fn rmt_frames(&mut self) -> Vec<(u64, u32, Vec<bool>)> {
+        let n = unsafe { esp32sim_rmt_take(self.0) } as usize;
+        let b = self.buf(n * 20);                                 // the fixtures send 24-bit frames: 16 + 4 bytes each
+        let mut at = 0;
+        let mut out = Vec::new();
+        for _ in 0..n {
+            let cycle = f64::from_le_bytes(b[at..at + 8].try_into().unwrap()) as u64;
+            let pin = u32::from_le_bytes(b[at + 8..at + 12].try_into().unwrap());
+            let count = u32::from_le_bytes(b[at + 12..at + 16].try_into().unwrap()) as usize;
+            assert_eq!(count, 24, "only 24-bit frames are expected here");
+            let packed = &b[at + 16..at + 16 + count.div_ceil(8).next_multiple_of(4)];
+            out.push((cycle, pin, (0..count).map(|i| packed[i / 8] & (0x80 >> (i % 8)) != 0).collect()));
+            at += 16 + packed.len();
+        }
+        out
+    }
+    /// Like `run_for`, but also collecting the RMT frames, at the C3 clock.
+    fn run_c3(&mut self, us: u64) -> (Vec<(u64, u8, u32)>, Vec<(u64, u32, Vec<bool>)>, String) {
+        let end = self.cycles() + us * C3_MHZ;
+        let (mut ev, mut frames, mut text) = (Vec::new(), Vec::new(), String::new());
+        while self.cycles() < end {
+            let left = (end - self.cycles()).min(u32::MAX as u64) as u32;
+            assert_eq!(self.run(left), 0);
+            ev.extend(self.pin_events());
+            frames.extend(self.rmt_frames());
+            text += &self.uart(0);
+        }
+        (ev, frames, text)
+    }
+}
+
+#[test]
+fn c3_blink_prints_on_uart0_and_drives_the_rgb_led_through_rmt_on_gpio8() {
+    let mut e = Emu::boot_c3("c3-blink");
+    let (ev, frames, text) = e.run_c3(2_200_000);
+    assert!(text.contains("Ready") && text.contains("led=1") && text.contains("led=0"), "{text}");
+    // Every digitalWrite(LED_BUILTIN) is one 24-bit WS2812 frame on GPIO8: lit, then dark, 500 ms apart.
+    assert!(frames.len() >= 4, "{} frames", frames.len());
+    assert!(frames.iter().all(|f| f.1 == 8 && f.2.len() == 24), "{frames:?}");
+    let lit = |f: &(u64, u32, Vec<bool>)| f.2.iter().any(|&b| b);
+    assert!(lit(&frames[0]) && !lit(&frames[1]) && lit(&frames[2]), "{frames:?}");
+    let period_us = (frames[2].0 - frames[0].0) / C3_MHZ;
+    assert!((999_000..=1_001_000).contains(&period_us), "period {period_us} us");
+    // GPIO8 is routed to the RMT output signal; the C3 reports it in the S3 state-word layout.
+    let s8 = ev.iter().rev().find(|x| x.1 == 8).expect("no GPIO8 state").2;
+    assert_eq!(s8 >> 16, C3_RMT_SIGNAL, "GPIO8 state {s8:#x}");
+}
+
+#[test]
+fn c3_an_rmt_frame_ends_the_slice_early() {
+    let mut e = Emu::boot_c3("c3-blink");
+    e.run_c3(1_000_000);
+    let start = e.cycles();
+    assert_eq!(e.run((1_000_000 * C3_MHZ) as u32), 0);
+    let ran = e.cycles() - start;
+    assert!(!e.rmt_frames().is_empty(), "no RMT frame");
+    assert!(ran < 600_000 * C3_MHZ, "ran {} us", ran / C3_MHZ);
+}
+
+#[test]
+fn c3_pin_ranges_and_console_ports() {
+    let mut e = Emu::boot_c3("c3-blink");
+    e.run_c3(300_000);
+    unsafe {
+        assert_eq!(esp32sim_gpio_set_input(e.0, 21, 1), 0);
+        assert_eq!(esp32sim_gpio_set_input(e.0, 22, 1), 1);          // the C3 has GPIO0..21
+        assert_eq!(esp32sim_pin_state(e.0, 22), 0);
+        assert_eq!(esp32sim_pin_watch(e.0, 0x3f, 0), 0);
+        assert_eq!(esp32sim_uart_take(e.0, 2), 0);                   // no third UART
+        let msg = b"x";
+        assert_eq!(esp32sim_uart_in(e.0, 1, msg.as_ptr(), 1), 1);    // UART1 exists
+        assert_eq!(esp32sim_uart_in(e.0, 2, msg.as_ptr(), 1), 0);
+    }
+}
+
+#[test]
+fn c3_a_host_reset_reboots_the_chip_and_keeps_the_clock() {
+    let mut e = Emu::boot_c3("c3-blink");
+    let (_, _, text) = e.run_c3(600_000);
+    assert_eq!(text.matches("Ready").count(), 1, "{text}");
+    let before = e.cycles();
+    assert_eq!(unsafe { esp32sim_reset(e.0) }, 0);
+    let (_, _, text) = e.run_c3(600_000);
+    assert_eq!(text.matches("Ready").count(), 1, "{text}");
+    assert!(e.cycles() >= before + 600_000 * C3_MHZ);
 }

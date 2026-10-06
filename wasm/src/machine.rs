@@ -84,6 +84,14 @@ impl MachineKind {
     pub fn s3_mut(&mut self) -> Option<&mut esp32s3::Machine> {
         match self { Self::S3(m) => Some(m), _ => None }
     }
+    /// Jumperly patch J9: the C3 takes the same host ABI calls as the S3 where it models them.
+    pub fn c3_mut(&mut self) -> Option<&mut esp32c3::Machine> {
+        match self { Self::C3(m) => Some(m), _ => None }
+    }
+    /// The console of the chips with a Jumperly ABI (S3, C3).
+    pub fn console_mut(&mut self) -> Option<&mut esp_soc::Console> {
+        match self { Self::S3(m) => Some(&mut m.console), Self::C3(m) => Some(&mut m.console), _ => None }
+    }
 }
 
 impl std::ops::Deref for MachineKind {

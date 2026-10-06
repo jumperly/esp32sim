@@ -53,6 +53,12 @@ pub struct SocBus {
     /// GPIO edges for observers, while one wants them: (cycle, pin, level)
     pub gpio_events: Option<Vec<(u64, u8, bool)>>,
     pub debug: esp_soc::DebugFlags,
+    /// Jumperly patch J9: pin states with cycles (`crate::jumperly`), RMT frames with cycles, and the
+    /// request to end the slice (`SocBus::take_slice_yield`).
+    pub pin_watch: Option<crate::jumperly::PinWatch>,
+    /// Jumperly patch J9: RMT frames (cycle, pin, bits), pin 255 when the channel is not routed.
+    pub rmt_tap: Option<Vec<(u64, u8, Vec<bool>)>>,
+    pub(crate) slice_yield: bool,
 }
 
 impl SocBus {
@@ -67,6 +73,14 @@ impl SocBus {
             mmu: [MMU_INVALID; MMU_ENTRIES],
             periph: Peripherals::new(mac), board: Box::new(esp_soc::NoBoard), uart_pins: false, board_edges: false, pins_active: false,
             cycles: 0, last_fault: None, irq_dirty: true, gpio_events: None, debug: Default::default(),
+            pin_watch: None, rmt_tap: None, slice_yield: false,
+        }
+    }
+
+    /// Jumperly patch J9: a GPIO or IO_MUX register changed — record pin states, end the slice.
+    pub(crate) fn note_pin_write(&mut self) {
+        if let Some(w) = &mut self.pin_watch {
+            if w.check(&self.periph, self.cycles) { self.slice_yield = true; }
         }
     }
 
@@ -117,6 +131,7 @@ impl SocBus {
         if drive != (self.periph.gpio.enable, self.periph.gpio.out) {
             self.deliver_gpio_output();
         }
+        if matches!(a >> 12, 0x60004 | 0x60009) { self.note_pin_write(); }   // Jumperly patch J9: GPIO, IO_MUX
         if let Some(port) = match a { 0x60000000 => Some(0), 0x60010000 => Some(1), _ => None } {
             if self.uart_pins { self.board.uart_tx(self.cycles, self.periph.uart_route(port), v as u8); }
         }
@@ -337,6 +352,7 @@ impl SocBus {
         if self.periph.rmt.rmt.is_running() { self.periph.rmt.rmt.tick(cycles as u64); }
         for (ch, bits) in std::mem::take(&mut self.periph.rmt.rmt.done) {
             let pin = self.periph.gpio.pin_for_signal(51 + ch as u32).unwrap_or(u8::MAX);
+            if let Some(tap) = &mut self.rmt_tap { tap.push((self.cycles, pin, bits.clone())); self.slice_yield = true; }   // Jumperly patch J9
             self.board.rmt_frame(pin, &bits);
             self.irq_dirty = true;
         }

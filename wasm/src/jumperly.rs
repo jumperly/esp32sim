@@ -1,6 +1,7 @@
 //! Jumperly patch J3: the ABI `@jumperly/mcu-esp32` drives — pin states with cycles, GPIO inputs,
-//! raw console bytes per port, RMT frames. ESP32-S3 only. Variable-size results go to `Emu::buf`,
-//! read through `esp32sim_buf_ptr` until the next `*_take` call.
+//! raw console bytes per port, RMT frames. ESP32-S3 and (patch J9) ESP32-C3; the PWM, ADC and bus
+//! calls are S3 only. Variable-size results go to `Emu::buf`, read through `esp32sim_buf_ptr` until
+//! the next `*_take` call.
 use super::{bytes, log, Emu};
 use esp_soc::SocBus;
 use esp32s3::jumperly::{pin_state, PinWatch, PINS};
@@ -8,9 +9,13 @@ use esp32s3::jumperly::{pin_state, PinWatch, PINS};
 /// USB-Serial/JTAG as a fourth console "port" after UART0..2.
 const USB_PORT: u32 = 3;
 const ALL_PINS: u64 = (1u64 << PINS) - 1;
+/// Jumperly patch J9: the C3 has two UARTs; its USB-Serial/JTAG keeps the port number 3.
+const C3_UARTS: u32 = 2;
+const C3_ALL_PINS: u64 = (1u64 << esp32c3::jumperly::PINS) - 1;
 
 /// Switch an S3 emulator to Jumperly mode before boot: no JSON outbox, raw console bytes, every pin
-/// watched, RMT frames recorded. Returns 1 for other chips or after boot.
+/// watched, RMT frames recorded. Returns 1 for other chips or after boot. (J9: the C3 gets the same
+/// minus PWM/ADC.)
 ///
 /// # Safety
 /// `e` must point to a live emulator to which the caller has exclusive access.
@@ -19,7 +24,14 @@ pub unsafe extern "C" fn esp32sim_jumperly_mode(e: *mut Emu) -> u32 {
     // SAFETY: the caller provides exclusive access to a live emulator.
     let e = unsafe { &mut *e };
     if e.booted { return 1; }
-    let Some(m) = e.m.s3_mut() else { log("[emu] jumperly mode: ESP32-S3 only"); return 1; };
+    if let Some(m) = e.m.c3_mut() {
+        m.web = None;
+        m.console.raw = Some(Default::default());
+        m.bus.pin_watch = Some(esp32c3::jumperly::PinWatch::new(&m.bus.periph, C3_ALL_PINS));
+        m.bus.rmt_tap = Some(Vec::new());
+        return 0;
+    }
+    let Some(m) = e.m.s3_mut() else { log("[emu] jumperly mode: ESP32-S3 and ESP32-C3 only"); return 1; };
     m.web = None;
     m.console.raw = Some(Default::default());
     m.bus.pin_watch = Some(PinWatch::new(&m.bus.periph, ALL_PINS));
@@ -54,9 +66,15 @@ pub unsafe extern "C" fn esp32sim_adc_set(e: *mut Emu, gpio: u32, mv: u32) -> u3
 pub unsafe extern "C" fn esp32sim_pin_watch(e: *mut Emu, lo: u32, hi: u32) -> u32 {
     // SAFETY: the caller provides exclusive access to a live emulator.
     let e = unsafe { &mut *e };
+    let mask = u64::from(lo) | (u64::from(hi) << 32);
+    if let Some(m) = e.m.c3_mut() {
+        let Some(w) = &mut m.bus.pin_watch else { return 1 };
+        w.mask = mask & C3_ALL_PINS;
+        return 0;
+    }
     let Some(m) = e.m.s3_mut() else { return 1 };
     let Some(w) = &mut m.bus.pin_watch else { return 1 };
-    w.mask = (u64::from(lo) | (u64::from(hi) << 32)) & ALL_PINS;
+    w.mask = mask & ALL_PINS;
     0
 }
 
@@ -68,6 +86,9 @@ pub unsafe extern "C" fn esp32sim_pin_watch(e: *mut Emu, lo: u32, hi: u32) -> u3
 pub unsafe extern "C" fn esp32sim_pin_state(e: *mut Emu, pin: u32) -> u32 {
     // SAFETY: the caller provides exclusive access to a live emulator.
     let e = unsafe { &mut *e };
+    if let Some(m) = e.m.c3_mut() {
+        return if (pin as usize) < esp32c3::jumperly::PINS { esp32c3::jumperly::pin_state(&m.bus.periph, pin as usize) } else { 0 };
+    }
     match e.m.s3_mut() {
         Some(m) if (pin as usize) < PINS => pin_state(&m.bus.periph, pin as usize),
         _ => 0,
@@ -84,9 +105,10 @@ pub unsafe extern "C" fn esp32sim_pin_events_take(e: *mut Emu) -> u32 {
     // SAFETY: the caller provides exclusive access to a live emulator.
     let e = unsafe { &mut *e };
     e.buf.clear();
-    let events = match e.m.s3_mut().and_then(|m| m.bus.pin_watch.as_mut()) {
-        Some(w) => std::mem::take(&mut w.events),
-        None => return 0,
+    let events = if let Some(m) = e.m.c3_mut() {
+        match m.bus.pin_watch.as_mut() { Some(w) => std::mem::take(&mut w.events), None => return 0 }
+    } else {
+        match e.m.s3_mut().and_then(|m| m.bus.pin_watch.as_mut()) { Some(w) => std::mem::take(&mut w.events), None => return 0 }
     };
     for (cycle, pin, state) in &events {
         e.buf.extend_from_slice(&(*cycle as f64).to_le_bytes());
@@ -104,6 +126,11 @@ pub unsafe extern "C" fn esp32sim_pin_events_take(e: *mut Emu) -> u32 {
 pub unsafe extern "C" fn esp32sim_gpio_set_input(e: *mut Emu, pin: u32, level: u32) -> u32 {
     // SAFETY: the caller provides exclusive access to a live emulator.
     let e = unsafe { &mut *e };
+    if let Some(m) = e.m.c3_mut() {
+        if pin as usize >= esp32c3::jumperly::PINS { return 1; }
+        m.bus.gpio_set_input(pin as u8, level != 0);
+        return 0;
+    }
     let Some(m) = e.m.s3_mut() else { return 1 };
     if pin as usize >= PINS { return 1; }
     m.bus.gpio_set_input(pin as u8, level != 0);
@@ -119,8 +146,9 @@ pub unsafe extern "C" fn esp32sim_uart_take(e: *mut Emu, port: u32) -> u32 {
     // SAFETY: the caller provides exclusive access to a live emulator.
     let e = unsafe { &mut *e };
     e.buf.clear();
-    let index = match port { 0..=2 => port as usize + 1, USB_PORT => 0, _ => return 0 };
-    let data = match e.m.s3_mut().and_then(|m| m.console.raw.as_mut()) {
+    let uarts = if e.m.c3_mut().is_some() { C3_UARTS } else { 3 };
+    let index = match port { p if p < uarts => port as usize + 1, USB_PORT => 0, _ => return 0 };
+    let data = match e.m.console_mut().and_then(|c| c.raw.as_mut()) {
         Some(raw) => std::mem::take(&mut raw[index]),
         None => return 0,
     };
@@ -142,7 +170,18 @@ pub unsafe extern "C" fn esp32sim_uart_in(e: *mut Emu, port: u32, ptr: *const u8
     let e = unsafe { &mut *e };
     // SAFETY: the caller provides a readable input buffer for this call.
     let data = unsafe { bytes(ptr, len) };
-    let Some(m) = e.m.s3_mut() else { log("[emu] uart in: ESP32-S3 only"); return 0 };
+    if let Some(m) = e.m.c3_mut() {
+        return match port {
+            p if p < C3_UARTS => {
+                let n = data.len().min(m.bus.periph.uart[p as usize].rx_free());
+                if n > 0 { m.bus.uart_input(p as usize, &data[..n]); }
+                n as u32
+            }
+            USB_PORT => { m.bus.serial_input(data); data.len() as u32 }
+            _ => { log(&format!("[emu] uart in: no console port {port}")); 0 }
+        };
+    }
+    let Some(m) = e.m.s3_mut() else { log("[emu] uart in: ESP32-S3 and ESP32-C3 only"); return 0 };
     match port {
         0..=2 => {
             let n = data.len().min(m.bus.periph.uart[port as usize].rx_free());
@@ -164,9 +203,10 @@ pub unsafe extern "C" fn esp32sim_rmt_take(e: *mut Emu) -> u32 {
     // SAFETY: the caller provides exclusive access to a live emulator.
     let e = unsafe { &mut *e };
     e.buf.clear();
-    let frames = match e.m.s3_mut().and_then(|m| m.bus.rmt_tap.as_mut()) {
-        Some(tap) => std::mem::take(tap),
-        None => return 0,
+    let frames = if let Some(m) = e.m.c3_mut() {
+        match m.bus.rmt_tap.as_mut() { Some(tap) => std::mem::take(tap), None => return 0 }
+    } else {
+        match e.m.s3_mut().and_then(|m| m.bus.rmt_tap.as_mut()) { Some(tap) => std::mem::take(tap), None => return 0 }
     };
     for (cycle, pin, bits) in &frames {
         e.buf.extend_from_slice(&(*cycle as f64).to_le_bytes());
@@ -214,7 +254,8 @@ pub unsafe extern "C" fn esp32sim_reset(e: *mut Emu) -> u32 {
     // SAFETY: the caller provides exclusive access to a live emulator.
     let e = unsafe { &mut *e };
     if !e.booted { return 1; }
-    let Some(m) = e.m.s3_mut() else { log("[emu] reset: ESP32-S3 only"); return 1 };
+    if let Some(m) = e.m.c3_mut() { crate::machine::reboot(m); return 0; }
+    let Some(m) = e.m.s3_mut() else { log("[emu] reset: ESP32-S3 and ESP32-C3 only"); return 1 };
     crate::machine::reboot(m);
     0
 }
