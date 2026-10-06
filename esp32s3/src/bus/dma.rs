@@ -143,6 +143,7 @@ impl SocBus {
             self.board.gpio_output_at(self.cycles, changes, self.periph.gpio.enable, self.periph.gpio.out);
             self.periph.gpio.changes.clear();
         }
+        if self.spi_host { self.spi2_pins = None; self.periph.spi2.host_wait = Some(transfer); self.slice_yield = true; return; }   // Jumperly patch J7
         let rx = if let Some(pins) = self.spi2_pins.take() {
             self.board.spi_transfer_pins(2, pins, &transfer.tx, transfer.rx_len)
         } else {

@@ -71,6 +71,8 @@ impl Uart {
     }
     pub fn clock_config(&self) -> u32 { self.ram.read(0x78) }
     pub fn rx_pending(&self) -> usize { self.rx.len() }
+    /// Jumperly patch J3: room left in the receive FIFO — what `host_input` takes without overflowing.
+    pub fn rx_free(&self) -> usize { RX_FIFO_SIZE.saturating_sub(self.rx.len()) }
     /// Classic ESP32 has a 20-bit divider and selects APB or the 1 MHz reference tick.
     /// ESP-IDF v5.5.4: components/soc/esp32/register/soc/uart_reg.h
     /// (UART_CLKDIV, UART_CLKDIV_FRAG, UART_TICK_REF_ALWAYS_ON) and

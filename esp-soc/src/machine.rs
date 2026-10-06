@@ -34,6 +34,8 @@ pub struct Console {
     pub prefix: bool,
     /// keep the text instead of printing it (the WebAssembly build has no stdout worth writing to)
     pub capture: bool,
+    /// Jumperly patch J3: every console byte per stream ([usb, uart0, uart1, uart2]) until the host takes it.
+    pub raw: Option<[Vec<u8>; 4]>,
 }
 
 /// Host actions scheduled at emulated times (`--script`, and the UI's encoder detents).
@@ -152,7 +154,7 @@ impl<S: Soc> Machine<S> {
             observers: Vec::new(), probes: Wants::NONE, prev_irq: vec![0; S::CORES],
             exceptions: 0, interrupts: 0, irq_hist: vec![[0; 32]; S::CORES],
             script: Script { events: Vec::new(), pos: 0, log: true, knob_next: 0, uart0_seen: Vec::new(), wait_mark: None }, max_cycles: u64::MAX,
-            console: Console { all: Vec::new(), usb: Vec::new(), uart0: Vec::new(), mask: 3, prefix: false, capture: false },
+            console: Console { all: Vec::new(), usb: Vec::new(), uart0: Vec::new(), mask: 3, prefix: false, capture: false, raw: None },
             web: None, ws: WebState { last_push_cycles: 0, push_interval: 0, audio_sent: 0, ring_updates: 0, grid_updates: Vec::new(), px_pending: 0, px_sent: 0, px_deferred: false, cam_pushed: u64::MAX, cam_sent: false },
             rt: Realtime { enabled: false, wall_start: None, last_check: 0, behind: 0.0, resyncs: 0, speed: None, speed_mark: None, log: false, log_last: None, log_insns: (0, 0) },
             debug_rom: false, cost: None, model_accesses: Vec::new(), approximate_jit_timing: None, approximate_jit_frontiers: false, model_ready_at: vec![0; S::CORES], model_stop: None, model_attach_error: None,
@@ -331,6 +333,8 @@ impl<S: Soc> Machine<S> {
             let _ = o.flush();
         };
         for (i, d) in streams.into_iter().enumerate() {
+            // Jumperly patch J3: the host takes the raw streams; nothing drains the aggregate, the backlogs or a web UI there
+            if let Some(raw) = &mut self.console.raw { raw[i].extend_from_slice(&d); continue; }
             let src = ["usb", "uart0", "uart1", "uart2"][i];
             if i < 2 {
                 if i == 1 && !d.is_empty() {
@@ -481,6 +485,10 @@ impl<S: Soc> Machine<S> {
         None
     }
 
+    /// Jumperly patch J1: the slice `run_slice` asked for is over — its cycle budget is spent, or
+    /// the bus wants the host to see an event first. Always consumes the yield flag.
+    fn slice_over(&mut self) -> bool { let y = self.bus.take_slice_yield(); self.bus.cycles() >= self.max_cycles || y }
+
     /// Run until something stops us or the `max_insns` scheduling-step budget is reached. The no-model path
     /// uses complete quanta (`QUANTUM` by default), so a busy round can exceed the budget by up to
     /// `quantum - 1` steps. The modeled path schedules one priced event at a time.
@@ -522,7 +530,7 @@ impl<S: Soc> Machine<S> {
     pub fn finish_browser_external_quantum(&mut self) -> Option<Stop> {
         self.after_round(self.quantum);
         if self.bus.sw_reset() { self.drain_console(); return Some(Stop::SwReset); }
-        if self.bus.cycles() >= self.max_cycles { self.drain_console(); return Some(Stop::Halted); }
+        if self.slice_over() { self.drain_console(); return Some(Stop::Halted); }
         self.drain_console();
         None
     }
@@ -554,7 +562,7 @@ impl<S: Soc> Machine<S> {
             self.apply_script_events();
             self.refresh_irq();
             if self.bus.sw_reset() { self.drain_console(); return Stop::SwReset; }
-            if self.bus.cycles() >= self.max_cycles { self.drain_console(); return Stop::Halted; }
+            if self.slice_over() { self.drain_console(); return Stop::Halted; }
             for (i, state) in on.iter_mut().enumerate().take(S::CORES).skip(1) {
                 *state = match S::core_state(&self.bus, i) {
                     CoreState::Reset => { self.core_held[i] = true; false }
@@ -577,7 +585,7 @@ impl<S: Soc> Machine<S> {
                 self.run_steps += chunk;
                 self.after_round(chunk);
                 if self.bus.sw_reset() { self.drain_console(); return Stop::SwReset; }
-                if self.bus.cycles() >= self.max_cycles { self.drain_console(); return Stop::Halted; }
+                if self.slice_over() { self.drain_console(); return Stop::Halted; }
                 if n & 0xffff < chunk { self.drain_console(); }
                 continue;
             }
@@ -727,7 +735,7 @@ impl<S: Soc> Machine<S> {
             }
             self.after_round(elapsed + stall);
             if self.bus.sw_reset() { self.drain_console(); return Stop::SwReset; }
-            if self.bus.cycles() >= self.max_cycles { self.drain_console(); return Stop::Halted; }
+            if self.slice_over() { self.drain_console(); return Stop::Halted; }
             if n & 0xffff < quantum { self.drain_console(); }
         }
     }
@@ -765,7 +773,7 @@ impl<S: Soc> Machine<S> {
         self.run_steps += self.quantum;
         self.after_round(self.quantum);
         if self.bus.sw_reset() { self.drain_console(); return Some(Stop::SwReset); }
-        if self.bus.cycles() >= self.max_cycles { self.drain_console(); return Some(Stop::Halted); }
+        if self.slice_over() { self.drain_console(); return Some(Stop::Halted); }
         if *n & 0xffff < self.quantum { self.drain_console(); }
         None
     }
@@ -853,7 +861,7 @@ impl<S: Soc> Machine<S> {
             if done > 0 {
                 self.after_round(done * q);
                 if self.bus.sw_reset() { self.drain_console(); return Err(Stop::SwReset); }
-                if self.bus.cycles() >= self.max_cycles { self.drain_console(); return Err(Stop::Halted); }
+                if self.slice_over() { self.drain_console(); return Err(Stop::Halted); }
                 if *n & 0xffff < q { self.drain_console(); }
             }
             return Ok(());

@@ -18,6 +18,14 @@ pub trait I2cDevice {
     fn stop(&mut self) {}
 }
 
+/// Jumperly patch J6: the target of a transaction for an address no attached device answers.
+pub trait I2cHost {
+    fn start(&mut self, addr: u8, read: bool) -> bool;
+    fn write(&mut self, b: u8) -> bool;
+    fn read(&mut self) -> u8;
+    fn stop(&mut self);
+}
+
 pub const INT_END_DETECT: u32 = 1 << 3;
 pub const INT_TRANS_COMPLETE: u32 = 1 << 7;
 pub const INT_NACK: u32 = 1 << 10;
@@ -36,12 +44,17 @@ pub struct I2c {
     nack: bool,
     pub log: bool,
     pub transactions: u64,
+    /// Jumperly patch J6: with `defer`, TRANS_START only sets `deferred`; `service` runs the
+    /// transaction later with a host for unknown addresses (`host_cur`: the host owns this one).
+    pub defer: bool,
+    pub deferred: bool,
+    host_cur: bool,
 }
 
 impl I2c {
     pub fn new() -> Self {
         I2c { regs: RegRam::new(), tx: VecDeque::new(), rx: VecDeque::new(), int_raw: 0, int_ena: 0, cmd: [0; 8], devices: Vec::new(), cur: None, pins: None, expect_addr: false, nack: false,
-              log: false, transactions: 0 }
+              log: false, transactions: 0, defer: false, deferred: false, host_cur: false }
     }
     /// A device attached at an occupied address and pin pair replaces the one there: a board swapped before
     /// boot (`esp32sim_set_measured_te`) must not leave the old board's devices answering.
@@ -89,7 +102,7 @@ impl I2c {
     #[allow(clippy::possible_missing_else)]
     pub fn write(&mut self, off: u32, v: u32) {
         match off {
-            0x04 => { self.regs.write(off, v & !(1 << 5)); if v & (1 << 5) != 0 { self.run(); } }               // CTR.TRANS_START
+            0x04 => { self.regs.write(off, v & !(1 << 5)); if v & (1 << 5) != 0 { if self.defer { self.deferred = true; } else { self.run(None); } } }   // CTR.TRANS_START (Jumperly patch J6)
             0x18 => { if v & (1 << 13) != 0 { self.tx.clear(); } if v & (1 << 12) != 0 { self.rx.clear(); } self.regs.write(off, v & !(3 << 12)); }
             0x1c => { if self.tx.len() < 32 { self.tx.push_back(v as u8); } }
             0x24 => self.int_raw &= !v,
@@ -99,7 +112,26 @@ impl I2c {
         }
     }
 
-    fn run(&mut self) {
+    /// Jumperly patch J6: turn deferral on or off. Turning it off runs a transaction still deferred
+    /// without a host (unknown addresses NACK), so it never stays pending; true if one ran.
+    pub fn set_defer(&mut self, on: bool) -> bool {
+        self.defer = on;
+        if on || !self.deferred { return false; }
+        self.deferred = false;
+        self.run(None);
+        true
+    }
+
+    /// Jumperly patch J6: run a transaction deferred at TRANS_START, with `host` for unknown addresses.
+    pub fn service(&mut self, host: &mut dyn I2cHost) -> bool {
+        if !self.deferred { return false; }
+        self.deferred = false;
+        self.run(Some(host));
+        true
+    }
+
+    /// Jumperly patch J6: `host` answers addresses no attached device has; `None` is the upstream path.
+    fn run(&mut self, mut host: Option<&mut dyn I2cHost>) {
         self.nack = false;
         self.transactions += 1;
         for i in 0..8 {
@@ -116,29 +148,30 @@ impl I2c {
                             self.expect_addr = false;
                             let addr = b >> 1; let rd = b & 1 != 0;
                             self.cur = self.devices.iter().position(|(a, d)| *a == addr && (d.pins().is_none() || d.pins() == self.pins));
+                            self.host_cur = self.cur.is_none() && host.is_some();
                             if self.log { eprintln!("[i2c] start addr {:#04x} {}{}", addr, if rd { "R" } else { "W" }, if self.cur.is_none() { " (no device)" } else { "" }); }
-                            match self.cur { Some(k) => self.devices[k].1.start(rd), None => false }
+                            match (self.cur, host.as_deref_mut()) { (Some(k), _) => self.devices[k].1.start(rd), (None, Some(h)) => h.start(addr, rd), (None, None) => false }
                         } else {
                             if self.log { eprintln!("[i2c]   write {:#04x}", b); }
-                            match self.cur { Some(k) => self.devices[k].1.write(b), None => false }
+                            match (self.cur, host.as_deref_mut()) { (Some(k), _) => self.devices[k].1.write(b), (None, Some(h)) if self.host_cur => h.write(b), _ => false }
                         };
                         if !ack && ack_check {
                             self.nack = true; self.int_raw |= INT_NACK; self.cmd[i] |= 1 << 31;
-                            self.cur = None;
+                            self.cur = None; self.host_cur = false;
                             return;
                         }
                     }
                 }
                 3 => {                                                                   // READ n bytes
                     for _ in 0..n {
-                        let b = match self.cur { Some(k) => self.devices[k].1.read(), None => 0xff };
+                        let b = match (self.cur, host.as_deref_mut()) { (Some(k), _) => self.devices[k].1.read(), (None, Some(h)) if self.host_cur => h.read(), _ => 0xff };
                         if self.log { eprintln!("[i2c]   read  {:#04x}", b); }
                         if self.rx.len() < 32 { self.rx.push_back(b); }
                     }
                 }
                 2 => {                                                                   // STOP
-                    if let Some(k) = self.cur { self.devices[k].1.stop(); }
-                    self.cur = None; self.cmd[i] |= 1 << 31; self.int_raw |= INT_TRANS_COMPLETE;
+                    match (self.cur, host.as_deref_mut()) { (Some(k), _) => self.devices[k].1.stop(), (None, Some(h)) if self.host_cur => h.stop(), _ => {} }
+                    self.cur = None; self.host_cur = false; self.cmd[i] |= 1 << 31; self.int_raw |= INT_TRANS_COMPLETE;
                     return;
                 }
                 4 => { self.cmd[i] |= 1 << 31; self.int_raw |= INT_END_DETECT; return; } // END: driver continues later
@@ -171,4 +204,115 @@ impl Device for I2c {
     fn write(&mut self, off: u32, v: u32) -> WriteEffect { I2c::write(self, off, v); WriteEffect::NONE }
     fn irq_sources(&self) -> u64 { self.irq() as u64 }
     fn debug(&mut self, on: bool) { self.log = on; }
+}
+
+#[cfg(test)]
+mod host_tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct Mem { log: Vec<String>, reg: u8, data: [u8; 4], first: bool }
+    impl I2cHost for Mem {
+        fn start(&mut self, addr: u8, read: bool) -> bool { self.log.push(format!("S{addr:02x}{}", if read { 'R' } else { 'W' })); self.first = !read; addr == 0x50 }
+        fn write(&mut self, b: u8) -> bool { if self.first { self.reg = b; self.first = false; } else { self.data[self.reg as usize & 3] = b; self.reg += 1; } true }
+        fn read(&mut self) -> u8 { let b = self.data[self.reg as usize & 3]; self.reg += 1; b }
+        fn stop(&mut self) { self.log.push("P".into()); }
+    }
+    const RSTART: u32 = 6 << 11; const WRITE: u32 = 1 << 11; const READ: u32 = 3 << 11; const STOP: u32 = 2 << 11; const ACK_CHECK: u32 = 1 << 8;
+
+    fn program(i: &mut I2c, cmds: &[u32], tx: &[u8]) {
+        for (k, c) in cmds.iter().enumerate() { i.write(0x58 + 4 * k as u32, *c); }
+        for b in tx { i.write(0x1c, u32::from(*b)); }
+        i.write(0x04, 1 << 5);                                           // TRANS_START
+    }
+
+    #[test]
+    fn deferred_transaction_runs_against_the_host_on_service() {
+        let mut i = I2c::new();
+        i.defer = true;
+        program(&mut i, &[RSTART, WRITE | ACK_CHECK | 3, STOP], &[0x50 << 1, 0x01, 0x42]);
+        assert!(i.deferred);
+        assert_eq!(i.int_raw & INT_TRANS_COMPLETE, 0);                   // not run yet
+        let mut m = Mem::default();
+        assert!(i.service(&mut m));
+        assert!(!i.deferred);
+        assert_eq!(i.int_raw & INT_TRANS_COMPLETE, INT_TRANS_COMPLETE);
+        assert_eq!(m.data[1], 0x42);
+        assert_eq!(m.log, ["S50W", "P"]);
+        // register 1 again, repeated START, read one byte back
+        program(&mut i, &[RSTART, WRITE | ACK_CHECK | 2, RSTART, WRITE | ACK_CHECK | 1, READ | 1, STOP], &[0x50 << 1, 0x01, (0x50 << 1) | 1]);
+        assert!(i.service(&mut m));
+        assert_eq!(i.read(0x1c), 0x42);
+        assert_eq!(m.log, ["S50W", "P", "S50W", "S50R", "P"]);
+        assert!(!i.service(&mut m));                                     // nothing pending
+    }
+
+    #[test]
+    fn a_host_nack_aborts_with_int_nack() {
+        let mut i = I2c::new();
+        i.defer = true;
+        program(&mut i, &[RSTART, WRITE | ACK_CHECK | 1, STOP], &[0x3c << 1]);
+        let mut m = Mem::default();
+        i.service(&mut m);
+        assert_ne!(i.int_raw & INT_NACK, 0);
+        assert_eq!(m.log, ["S3cW"]);
+    }
+
+    /// Records every host call: start, written bytes, stop.
+    #[derive(Default)]
+    struct Recorder { log: Vec<String> }
+    impl I2cHost for Recorder {
+        fn start(&mut self, addr: u8, read: bool) -> bool { self.log.push(format!("S{addr:02x}{}", if read { 'R' } else { 'W' })); true }
+        fn write(&mut self, b: u8) -> bool { self.log.push(format!("W{b:02x}")); true }
+        fn read(&mut self) -> u8 { 0xff }
+        fn stop(&mut self) { self.log.push("P".into()); }
+    }
+    const END: u32 = 4 << 11;
+
+    #[test]
+    fn an_end_split_write_stays_one_host_transaction() {
+        // > 32-byte writes (Adafruit_SSD1306 display()): chunk 1 ends with END, chunk 2 continues and STOPs
+        let (n, m) = (31usize, 20usize);
+        let mut i = I2c::new();
+        i.defer = true;
+        let mut h = Recorder::default();
+        let first: Vec<u8> = std::iter::once(0x3c << 1).chain(1..n as u8).collect();
+        program(&mut i, &[RSTART, WRITE | ACK_CHECK | n as u32, END], &first);
+        assert!(i.service(&mut h));
+        assert_eq!(i.int_raw & INT_END_DETECT, INT_END_DETECT);
+        assert_eq!(i.int_raw & INT_TRANS_COMPLETE, 0);
+        assert!(!h.log.iter().any(|e| e == "P"));                        // no stop between the chunks
+        i.write(0x24, INT_END_DETECT);                                   // INT_CLR, as the driver does
+        let second: Vec<u8> = (0..m as u8).map(|k| 0x80 + k).collect();
+        program(&mut i, &[WRITE | ACK_CHECK | m as u32, STOP], &second);
+        assert!(i.service(&mut h));
+        assert_eq!(i.int_raw & INT_TRANS_COMPLETE, INT_TRANS_COMPLETE);
+        assert_eq!(i.int_raw & INT_NACK, 0);
+        let mut expected = vec!["S3cW".to_string()];
+        expected.extend(first[1..].iter().chain(&second).map(|b| format!("W{b:02x}")));
+        expected.push("P".into());
+        assert_eq!(expected.len(), 1 + (n - 1) + m + 1);
+        assert_eq!(h.log, expected);
+    }
+
+    #[test]
+    fn turning_defer_off_runs_a_deferred_transaction_without_a_host() {
+        let mut i = I2c::new();
+        i.set_defer(true);
+        program(&mut i, &[RSTART, WRITE | ACK_CHECK | 1, STOP], &[0x50 << 1]);
+        assert!(i.deferred);
+        assert!(i.set_defer(false));                                     // it ran
+        assert!(!i.defer && !i.deferred);
+        assert_ne!(i.int_raw & INT_NACK, 0);                             // no device, no host: NACK
+        assert!(!i.set_defer(false));                                    // nothing left to run
+        assert!(!i.service(&mut Mem::default()));
+    }
+
+    #[test]
+    fn without_defer_the_upstream_path_is_unchanged() {
+        let mut i = I2c::new();
+        program(&mut i, &[RSTART, WRITE | ACK_CHECK | 1, STOP], &[0x50 << 1]);
+        assert!(!i.deferred);
+        assert_ne!(i.int_raw & INT_NACK, 0);                             // no attached device, no host: NACK at once
+    }
 }

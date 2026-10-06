@@ -143,15 +143,20 @@ impl esp_soc::SocBus for SocBus {
         self.cancel_spi2_timing();
         let cause = self.periph.rtc.reset_cause;
         let old = std::mem::replace(&mut self.periph, periph::Peripherals::new(mac));
+        // Jumperly patch J4: a reset clears LEDC / MCPWM; tell the host which outputs were running, at the reset cycle.
+        if let Some(tap) = &mut self.pwm_tap { if tap.reset(self.cycles) { self.slice_yield = true; } }
         let p = &mut self.periph;
         // The host AP and network survive a guest reboot; only the MAC and relay queues reset.
         p.wifi.link = old.wifi.link.surviving_reboot(); p.wifi.log = old.wifi.log;
         p.efuse = old.efuse;
         p.rtc.analog = old.rtc.analog;
+        p.rtc.adc_linear = old.rtc.adc_linear;   // Jumperly patch J5
         p.gpio.strap = old.gpio.strap;
+        if self.pin_watch.is_some() { p.gpio.input = old.gpio.input; }   // Jumperly patch J2: the outside circuit is not reset with the chip
         p.misc.log_unknown = old.misc.log_unknown; p.spi1.log = old.spi1.log;
         p.spi0.jedec = old.spi0.jedec; p.spi1.jedec = old.spi1.jedec;   // the flash chip is not reset: its ID keeps the --flash-mb capacity
         p.rtc.ram = old.rtc.ram; p.rtc.slow_ticks = old.rtc.slow_ticks;
+        for c in &mut p.i2c { c.defer = self.i2c_host; }   // Jumperly patch J6: the bridge survives a chip reset
         p.rtc.ram.write(0x38, cause | (cause << 6));
         p.rtc.ram.write(0x98, 0);                       // watchdog disarmed by the reset; the ROM re-arms it
         p.i2s0.pcm = old.i2s0.pcm; p.i2s0.frames_out = old.i2s0.frames_out; p.i2s1.pcm = old.i2s1.pcm; p.i2s1.frames_out = old.i2s1.frames_out;   // keep the captured audio continuous
@@ -161,6 +166,7 @@ impl esp_soc::SocBus for SocBus {
         self.attach_board_devices();
         self.refresh_tick_budget();
         self.irq_dirty = true;
+        self.note_pin_write();   // Jumperly patch J2: the reset released every pin; report it
         cause
     }
     fn sw_reset(&self) -> bool { self.periph.rtc.sw_reset }
@@ -220,6 +226,7 @@ impl esp_soc::SocBus for SocBus {
         for area in f.iter() { esp_periph::Dispatch::debug(&mut self.periph, area, true); }
         self.periph.misc.log_all = f.has("mmio");
     }
+    fn take_slice_yield(&mut self) -> bool { std::mem::take(&mut self.slice_yield) }   // Jumperly patch J1/J2
     fn observe_gpio(&mut self, on: bool) { self.gpio_events = if on { Some(Vec::new()) } else { None }; }
     fn take_gpio_events(&mut self) -> Vec<(u64, u8, bool)> { self.gpio_events.as_mut().map(std::mem::take).unwrap_or_default() }
     fn gpio_input(&self) -> u64 { self.periph.gpio.input }

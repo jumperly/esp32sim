@@ -14,11 +14,13 @@ mod network;
 mod ethernet;
 pub use ethernet::*;
 mod s3;
+mod jumperly;
 #[cfg(target_arch = "wasm32")]
 mod browser_jit;
 use machine::MachineKind;
 pub use network::*;
 pub use s3::*;
+pub use jumperly::*;
 #[cfg(target_arch = "wasm32")]
 pub use browser_jit::*;
 #[cfg(target_arch = "wasm32")]
@@ -45,6 +47,8 @@ pub struct Emu {
     out: Vec<(u8, Vec<u8>)>,
     ethernet_out: Vec<Vec<u8>>,
     booted: bool,
+    /// Jumperly patch J3: the result of the last `esp32sim_*_take` call
+    buf: Vec<u8>,
     #[cfg(target_arch = "wasm32")]
     jit: BrowserJit,
 }
@@ -149,6 +153,7 @@ pub unsafe extern "C" fn esp32sim_new(board: *const u8, board_len: usize, flash_
         m,
         out: Vec::new(), ethernet_out: Vec::new(),
         booted: false,
+        buf: Vec::new(),
         #[cfg(target_arch = "wasm32")]
         jit: BrowserJit::default(),
     }))

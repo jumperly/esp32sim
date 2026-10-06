@@ -51,6 +51,16 @@ impl Mcpwm {
         let route = *gpio.func_out_sel.get(pin as usize)?;
         if gpio.enable & (1u64 << pin) == 0 { return None; }
         let channel = (route & ((1 << self.matrix_bits) - 1)).checked_sub(self.signal_base)? as usize;
+        let (hz, high, period) = self.channel_state(channel, route & (1 << self.matrix_bits) != 0, false)?;
+        Some((hz, ((high * 65535 + period / 2) / period) as u32))
+    }
+    /// Jumperly patch J4: frequency and exact duty fraction (0..1) of generator `channel` (operator * 2
+    /// + A/B), before any matrix inversion; `None` while it is not a plain PWM. A compare value written
+    /// but not yet latched at a timer event counts at once, as for `Ledc::channel_output`.
+    pub fn channel_output(&self, channel: usize) -> Option<(f64, f64)> {
+        self.channel_state(channel, false, true).map(|(hz, high, period)| (hz, high as f64 / period as f64))
+    }
+    fn channel_state(&self, channel: usize, invert: bool, queued: bool) -> Option<(f64, u64, u64)> {
         if channel >= 6 { return None; }
         let operator = channel / 2;
         let generator = channel % 2;
@@ -72,7 +82,7 @@ impl Mcpwm {
                     let compare_action = (action >> (4 + cmp * 2)) & 3;
                     if compare_action == 0 { continue; }
                     if selected.is_some() { return None; }
-                    let tick = self.compare[operator][cmp] as u64;
+                    let tick = if queued && self.pending[operator][cmp] { u64::from(self.regs.read(base + 4 + cmp as u32 * 4) & 65535) } else { self.compare[operator][cmp] as u64 };
                     if tick > period { return None; }
                     selected = Some(match (empty, compare_action) {
                         (2, 1) => tick,
@@ -83,9 +93,11 @@ impl Mcpwm {
                 selected?
             }
         };
-        if route & (1 << self.matrix_bits) != 0 { high = period - high; }
-        Some((self.source_hz as f64 / divider as f64 / period as f64, ((high * 65535 + period / 2) / period) as u32))
+        if invert { high = period - high; }
+        Some((self.source_hz as f64 / divider as f64 / period as f64, high, period))
     }
+    /// Jumperly patch J4: the GPIO matrix signal of generator 0 (PWM0_OUT0A = 160, PWM1_OUT0A = 166).
+    pub fn signal_base(&self) -> u32 { self.signal_base }
 }
 impl Device for Mcpwm {
     fn read(&mut self, off: u32) -> u32 {

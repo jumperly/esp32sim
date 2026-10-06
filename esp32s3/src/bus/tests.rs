@@ -1291,3 +1291,52 @@ fn stable_pages_move_their_epoch() {
     assert_eq!(bus.stable_pages().1, first - 1, "the last flash page is left to per-page compares");
     assert_eq!(bus.page_versions()[first as usize - 1], before[first as usize - 1] + 3);
 }
+
+#[test]
+fn reboot_reports_running_pwm_outputs_as_disabled() {
+    use esp_periph::Device;
+    let mut bus = SocBus::new(1024, 1024, [0; 6]);
+    bus.pwm_tap = Some(Default::default());
+    bus.periph.ledc.write(0xd0, 3);
+    bus.periph.ledc.write(0xa0, (40000 << 4) | 8 | (1 << 25));
+    bus.periph.ledc.write(0x08, 64 << 4);
+    bus.periph.ledc.write(0x0c, 1 << 31);
+    bus.periph.ledc.write(0x00, (1 << 2) | (1 << 4));
+    bus.note_pwm();   // the duty counts as soon as PARA_UP queued it
+    assert!(bus.pwm_tap.as_mut().unwrap().events.drain(..).any(|(_, o)| o.signal == 73 && o.enabled));
+    bus.cycles = 1234;
+    bus.slice_yield = false;
+    esp_soc::SocBus::reboot(&mut bus, [0; 6]);
+    let tap = bus.pwm_tap.as_ref().unwrap();
+    assert_eq!(tap.events.len(), 1);
+    assert_eq!((tap.events[0].0, tap.events[0].1.signal, tap.events[0].1.enabled), (1234, 73, false));
+    assert!(bus.slice_yield);
+}
+
+#[test]
+fn reboot_keeps_the_linear_adc_and_the_bus_bridges() {
+    let mut bus = SocBus::new(1024, 1024, [0; 6]);
+    bus.periph.rtc.adc_linear = true;
+    bus.periph.rtc.analog.set(1, esp_periph::AnalogSource::Const(1.5));
+    bus.i2c_host = true;
+    for c in &mut bus.periph.i2c { c.defer = true; }
+    bus.spi_host = true;
+    esp_soc::SocBus::reboot(&mut bus, [0; 6]);
+    assert!(bus.periph.rtc.adc_linear);
+    assert_eq!(bus.periph.rtc.analog.volts(1, 0), 1.5);
+    assert!(bus.periph.i2c.iter().all(|c| c.defer));
+    assert!(bus.i2c_host && bus.spi_host);
+}
+
+#[test]
+fn only_committing_pwm_writes_are_shown_to_the_host() {
+    let ledc = 0x6001_9000;
+    assert!(pwm_commit(ledc, 1 << 4));                  // CH0_CONF0 with PARA_UP
+    assert!(pwm_commit(ledc + 0x14, 1 << 4));           // CH1_CONF0
+    assert!(!pwm_commit(ledc, 1 << 2));                 // CH0_CONF0 without PARA_UP
+    assert!(!pwm_commit(ledc + 0x08, 1 << 4));          // CH0_DUTY: not a CONF0 register
+    assert!(pwm_commit(ledc + 0xa0, 1 << 25));          // TIMER0_CONF with PARA_UP
+    assert!(!pwm_commit(ledc + 0xa0, 1 << 23));         // TIMER0_CONF reset / pause on the way
+    assert!(pwm_commit(0x6001_e000 + 0x50, 0));         // MCPWM0
+    assert!(!pwm_commit(0x6000_4000, 1 << 4));          // GPIO
+}

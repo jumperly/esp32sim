@@ -458,6 +458,21 @@ fn console_capture_and_backlog() {
     assert!(m.bus.periph.usb.tx_out.is_empty());
 }
 
+/// Jumperly patch J3: in Jumperly mode (`console.raw`) the bytes go to the per-port raw streams only;
+/// nothing drains the aggregate or the backlogs there, so they must stay empty.
+#[test]
+fn jumperly_raw_console_skips_the_aggregate_and_the_backlogs() {
+    let mut m = machine();
+    m.console.raw = Some(Default::default());
+    m.bus.periph.usb.tx_out = b"usb\n".to_vec();
+    m.bus.periph.uart[0].tx_out = b"uart0\n".to_vec();
+    m.bus.periph.uart[2].tx_out = b"uart2\n".to_vec();
+    m.drain_console();
+    assert!(m.console.all.is_empty() && m.console.usb.is_empty() && m.console.uart0.is_empty());
+    let raw = m.console.raw.as_ref().unwrap();
+    assert_eq!([&raw[0][..], &raw[1][..], &raw[2][..], &raw[3][..]], [&b"usb\n"[..], b"uart0\n", b"", b"uart2\n"]);
+}
+
 /// With an observer that wants every instruction the machine single-steps; the block observer
 /// runs on the fast path and sees the same instruction total.
 #[test]
