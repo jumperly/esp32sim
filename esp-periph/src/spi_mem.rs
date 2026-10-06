@@ -65,6 +65,35 @@ impl SpiMem {
             let has_miso = user & (1 << 28) != 0; let has_mosi = user & (1 << 27) != 0;
             if self.log { eprintln!("[spi1] psram cmd {:#06x} addr {:#x} miso {} mosi {}", c16, addr, if has_miso { miso_bytes } else { 0 }, if has_mosi { mosi_bytes } else { 0 }); }
             let psize = psram.len();
+            // Jumperly patch J10. Quad SPI PSRAM (ESP-IDF esp32s3/esp_psram_impl_quad.c): an
+            // 8-bit command. The ID check wants KGD 0x5d in the second byte; density is EID[47:45].
+            if c16 > 0 && c16 <= 0xff {
+                match c16 as u8 {
+                    // 24-bit ID, little-endian into the word IDF checks: byte 1 is KGD 0x5d,
+                    // byte 2 is EID[47:40] and bits [47:45] are the size (000/001/010 = 2/4/8 MB).
+                    0x9f => {
+                        let eid = match psize {
+                            0x20_0000 => 0x00u8,
+                            0x40_0000 => 0x20,
+                            0x80_0000 => 0x40,
+                            _ => 0xe0,
+                        };
+                        self.set_w_bytes(&[0x00, 0x5d, eid]);
+                    }
+                    0x03 | 0x0b | 0xeb => {
+                        let d: Vec<u8> = (0..miso_bytes).map(|k| { let x = addr as usize + k; if x < psize { psram[x] } else { 0 } }).collect();
+                        self.set_w_bytes(&d);
+                    }
+                    0x02 | 0x38 => {
+                        let d = self.w_bytes(mosi_bytes);
+                        self.dirty.push((DirtyMem::Psram, addr as usize, d.len()));
+                        for (k, b) in d.iter().enumerate() { let x = addr as usize + k; if x < psize { psram[x] = *b; } }
+                    }
+                    0x35 | 0xf5 | 0x66 | 0x99 | 0xc0 => {}
+                    _ => { if has_miso { self.set_w_bytes(&vec![0u8; miso_bytes]); } }
+                }
+                return;
+            }
             match c16 {
                 0x4040 => { let i = (addr & 0xf) as usize; let d: Vec<u8> = (0..miso_bytes).map(|k| *self.psram_mr.get(i + k).unwrap_or(&0)).collect(); self.set_w_bytes(&d); }   // mode register read
                 0xC0C0 => { let d = self.w_bytes(mosi_bytes); let i = (addr & 0xf) as usize; for (k, b) in d.iter().enumerate() { if i + k == 0 || i + k == 8 { self.psram_mr[i + k] = *b; } } }   // mode register write (MR0/MR8 writable)
@@ -114,6 +143,79 @@ impl SpiMem {
         if cmd & (1 << 24) != 0 { let a = (addr as usize) & !0xfff; for b in flash.iter_mut().take((a + 0x1000).min(fsize)).skip(a) { *b = 0xff; } self.dirty.push((DirtyMem::Flash, a, 0x1000)); self.status &= !0x02; }      // SE
         if cmd & (1 << 23) != 0 { let a = (addr as usize) & !0xffff; for b in flash.iter_mut().take((a + 0x10000).min(fsize)).skip(a) { *b = 0xff; } self.dirty.push((DirtyMem::Flash, a, 0x10000)); }    // BE
         if cmd & (1 << 22) != 0 { for b in flash.iter_mut() { *b = 0xff; } self.dirty.push((DirtyMem::Flash, 0, fsize)); }                          // CE
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SpiMem;
+
+    /// CS1 user command the way ESP-IDF programs SPI1: 8- or 16-bit command, 24-bit address,
+    /// CS0 disabled and CS1 enabled (`misc` bit 0 set, bit 1 clear).
+    fn issue(s: &mut SpiMem, cmd: u16, addr: u32, miso_bits: u32, mosi_bits: u32) {
+        s.write(0x0, 1 << 18);
+        let mut user = (1 << 31) | (1 << 30);
+        if miso_bits > 0 { user |= 1 << 28; }
+        if mosi_bits > 0 { user |= 1 << 27; }
+        s.regs.write(0x18, user);
+        s.regs.write(0x1c, 23 << 26);
+        s.regs.write(0x20, cmd as u32);
+        s.regs.write(0x4, addr);
+        s.regs.write(0x28, miso_bits.saturating_sub(1));
+        s.regs.write(0x24, mosi_bits.saturating_sub(1));
+        s.regs.write(0x34, 1);
+    }
+
+    #[test]
+    fn quad_id_matches_the_idf_check_for_the_buffer_size() {
+        for (size, eid) in [(0x20_0000, 0x00u8), (0x40_0000, 0x20), (0x80_0000, 0x40)] {
+            let mut s = SpiMem::new(true);
+            let mut flash = [0xffu8; 4];
+            let mut psram = vec![0u8; size];
+            issue(&mut s, 0x9f, 0, 24, 0);
+            s.execute(&mut flash, &mut psram);
+            let id = s.w[0];
+            assert_eq!((id >> 8) & 0xff, 0x5d, "KGD");
+            assert_eq!(((id >> 16) & 0xff) >> 5, u32::from(eid >> 5), "density for {size}");
+        }
+    }
+
+    #[test]
+    fn quad_write_then_read_uses_the_psram_buffer() {
+        let mut s = SpiMem::new(true);
+        let mut flash = [0xffu8; 4];
+        let mut psram = vec![0u8; 0x20_0000];
+        issue(&mut s, 0x02, 4, 0, 8);
+        s.w[0] = 0xa5;
+        s.execute(&mut flash, &mut psram);
+        assert_eq!(psram[4], 0xa5);
+        issue(&mut s, 0xeb, 4, 8, 0);
+        s.execute(&mut flash, &mut psram);
+        assert_eq!(s.w[0] & 0xff, 0xa5);
+    }
+
+    #[test]
+    fn octal_mode_register_read_is_unchanged() {
+        let mut s = SpiMem::new(true);
+        let mut flash = [0xffu8; 4];
+        let mut psram = vec![0u8; 8];
+        issue(&mut s, 0x4040, 0, 8, 0);
+        s.execute(&mut flash, &mut psram);
+        assert_eq!(s.w[0] & 0xff, 0x09);
+    }
+
+    #[test]
+    fn flash_jedec_read_stays_on_cs0() {
+        let mut s = SpiMem::new(true);
+        s.write(0x0, 1 << 18);
+        s.regs.write(0x18, (1 << 31) | (1 << 28));
+        s.regs.write(0x20, 0x9f);
+        s.regs.write(0x28, 23);
+        s.regs.write(0x34, 0);
+        let mut flash = [0xffu8; 4];
+        let mut psram = vec![0u8; 0x20_0000];
+        s.execute(&mut flash, &mut psram);
+        assert_eq!(s.w[0] & 0xff_ffff, 0x174020);
     }
 }
 
