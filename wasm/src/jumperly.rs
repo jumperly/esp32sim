@@ -1,6 +1,6 @@
 //! Jumperly patch J3: the ABI `@jumperly/mcu-esp32` drives — pin states with cycles, GPIO inputs,
-//! raw console bytes per port, RMT frames. ESP32-S3 and (patch J9) ESP32-C3; the PWM, ADC and bus
-//! calls are S3 only. Variable-size results go to `Emu::buf`, read through `esp32sim_buf_ptr` until
+//! raw console bytes per port, RMT frames. ESP32-S3 and (patch J9) ESP32-C3; PWM and the bus
+//! bridges are S3 only, the ADC is both. Variable-size results go to `Emu::buf`, read through `esp32sim_buf_ptr` until
 //! the next `*_take` call.
 use super::{bytes, log, Emu};
 use esp_soc::SocBus;
@@ -15,7 +15,7 @@ const C3_ALL_PINS: u64 = (1u64 << esp32c3::jumperly::PINS) - 1;
 
 /// Switch an S3 emulator to Jumperly mode before boot: no JSON outbox, raw console bytes, every pin
 /// watched, RMT frames recorded. Returns 1 for other chips or after boot. (J9: the C3 gets the same
-/// minus PWM/ADC.)
+/// minus PWM, plus the linear ADC.)
 ///
 /// # Safety
 /// `e` must point to a live emulator to which the caller has exclusive access.
@@ -29,6 +29,7 @@ pub unsafe extern "C" fn esp32sim_jumperly_mode(e: *mut Emu) -> u32 {
         m.console.raw = Some(Default::default());
         m.bus.pin_watch = Some(esp32c3::jumperly::PinWatch::new(&m.bus.periph, C3_ALL_PINS));
         m.bus.rmt_tap = Some(Vec::new());
+        m.bus.periph.adc.adc_linear = true;   // Jumperly patch J5
         return 0;
     }
     let Some(m) = e.m.s3_mut() else { log("[emu] jumperly mode: ESP32-S3 and ESP32-C3 only"); return 1; };
@@ -41,8 +42,9 @@ pub unsafe extern "C" fn esp32sim_jumperly_mode(e: *mut Emu) -> u32 {
     0
 }
 
-/// Set the voltage (millivolts) the circuit puts on an ADC pad: GPIO1..10 = ADC1 CH0..9,
-/// GPIO11..20 = ADC2 CH0..9. Returns 1 for other pins or outside Jumperly mode.
+/// Set the voltage (millivolts) the circuit puts on an ADC pad. On the S3, GPIO1..10 = ADC1
+/// CH0..9 and GPIO11..20 = ADC2 CH0..9. On the C3, GPIO0..4 = ADC1 CH0..4 and GPIO5 = ADC2 CH0.
+/// Returns 1 for other pins or outside Jumperly mode.
 ///
 /// # Safety
 /// `e` must point to a live emulator to which the caller has exclusive access.
@@ -50,6 +52,12 @@ pub unsafe extern "C" fn esp32sim_jumperly_mode(e: *mut Emu) -> u32 {
 pub unsafe extern "C" fn esp32sim_adc_set(e: *mut Emu, gpio: u32, mv: u32) -> u32 {
     // SAFETY: the caller provides exclusive access to a live emulator.
     let e = unsafe { &mut *e };
+    if let Some(m) = e.m.c3_mut() {
+        if !(0..=5).contains(&gpio) { return 1; }
+        if m.bus.pin_watch.is_none() { return 1; }
+        m.bus.periph.adc.analog.set(gpio as u8, esp_periph::AnalogSource::Const(mv as f32 / 1000.0));
+        return 0;
+    }
     if !(1..=20).contains(&gpio) { return 1; }
     let Some(m) = e.m.s3_mut() else { return 1 };
     if m.bus.pin_watch.is_none() { return 1; }

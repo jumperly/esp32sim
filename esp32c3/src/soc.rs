@@ -117,6 +117,7 @@ impl esp_soc::SocBus for SocBus {
         p.refresh_work();
         p.efuse = old.efuse;
         p.adc.analog = old.adc.analog;
+        p.adc.adc_linear = old.adc.adc_linear;   // Jumperly patch J5: the straight-line ADC survives a reset
         p.misc.log_unknown = old.misc.log_unknown;
         p.usb.connected = old.usb.connected;
         p.rtc.reset_cause = cause;
