@@ -289,6 +289,7 @@ Records, little-endian, each padded to a multiple of 4 bytes:
 | 6 | UDP_DATA | one datagram |
 | 7 | UDP_CLOSE | |
 | 8 | RESOLVE | `id` = query, `port` = qtype (1 A, 28 AAAA), data = the name (UTF-8) |
+| 9 | INCOMING_RESULT | J15: `id` = the host's incoming flow, flags bit 0 = the guest accepted it |
 
 | kind | Event | `arg` / data |
 | --- | --- | --- |
@@ -301,6 +302,7 @@ Records, little-endian, each padded to a multiple of 4 bytes:
 | 7 | UDP_DATA | one datagram; 16 wait per flow |
 | 8 | RESOLVED | `id` = query, `arg` = TTL, data = n × IPv4[4] (none: an empty answer) |
 | 9 | UNRESOLVED | `arg` = rcode 2 SERVFAIL or 3 NXDOMAIN |
+| 10 | INCOMING | J15: the host opens flow `id` to the guest's port `arg`; data = the peer's IPv4[4] + port u16 LE |
 
 Limits per board: 16 TCP flows (the 17th SYN is dropped and retried by the guest), 64 KiB waiting
 for the guest per TCP flow, 256 KiB of data in untaken records (`tcp_write` blocks, a datagram is
@@ -329,6 +331,30 @@ for (;;) {
 `wasm/tests/jumperly.rs` (`wifi_net_reaches_a_scripted_internet_through_the_host`) runs the
 `wifi-net` fixture against a scripted host: `dns: example.com -> 93.184.215.14`, SNTP time,
 `http GET http://example.com/ -> 200`, then TCP_SHUTDOWN and TCP_CLOSE.
+
+### Connections to the guest
+
+Jumperly patch J15. The host can also open a TCP connection to a server on the board (a page
+served by `WebServer`, a local helper polling the device): `INCOMING` with an id of the host's
+own, the guest's port in `arg` and the real peer (IPv4[4] + port u16 little-endian) as data. The
+id must be nonzero and not a live flow's; the guest's ids grow from 1, so the host takes high
+ones (bit 31 set). The NAT sends the station a SYN from the gateway, `10.0.2.2:<port>` (49152 and
+up, the peer's address appears only in the log), once it has heard the station; then exactly one
+`INCOMING_RESULT` comes:
+
+- accepted (flags bit 0, the guest's SYN-ACK): the flow runs like an outbound one — the host's
+  `TCP_DATA` / `TCP_EOF` / `TCP_RESET`, the guest's `TCP_DATA` / `TCP_SHUTDOWN` / `TCP_CLOSE`. The
+  guest's side sends up to 64 KiB before the host's first `TX_CREDIT` (there is no `CONNECTED`);
+- refused (the guest's RST: nobody listens; no answer within 5 s of device time; the station not
+  heard yet; no free flow): the flow is gone, no `TCP_CLOSE` follows.
+
+The host may send `TCP_DATA`, `TCP_EOF` and `TX_CREDIT` right after `INCOMING`; the bytes wait for
+the handshake. `TCP_RESET` or `FAILED` before the answer gives the flow up: the guest is reset and
+no record follows. `INCOMING` returns 0 for a taken id, port 0, short data, or when 16 TCP flows
+(both directions) are open. `wasm/tests/jumperly.rs`
+(`the_host_connects_to_a_guest_server_and_a_closed_port_refuses`) connects to `lan-server`'s port
+7000 (`ping` → `pong`, the guest prints `lan: client 10.0.2.2`), then TCP_EOF, the guest's
+TCP_SHUTDOWN and TCP_CLOSE; port 81 is refused.
 
 ## LAN between boards
 

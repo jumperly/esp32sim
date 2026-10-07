@@ -5,6 +5,10 @@
 //!
 //! Records (little-endian, each padded to a multiple of 4 bytes):
 //! `[u8 op][u8 flags][u16 port][u32 id][u32 len][len bytes]` — see `op` for the kinds.
+//!
+//! Jumperly patch J15: the host may also open a TCP flow to the guest (`HostEvent::Incoming`, with
+//! an id of its own). The NAT sends the guest a SYN; `INCOMING_RESULT` tells the host whether the
+//! guest accepted it, after which the flow runs like one the guest opened.
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, ErrorKind};
@@ -22,6 +26,9 @@ pub const TCP_RX_MAX: usize = 64 * 1024;
 pub const OUT_MAX: usize = 256 * 1024;
 /// Datagrams waiting for the guest, per UDP flow; more are dropped.
 pub const UDP_RX_MAX: usize = 16;
+/// Jumperly patch J15: bytes of the guest's the host takes on an incoming flow before its first
+/// `TxCredit` (an outbound flow's `Connected` carries its own).
+pub const INCOMING_WINDOW: u64 = 64 * 1024;
 /// Name lookups waiting for the host; a new one forgets the oldest.
 const PENDING_MAX: usize = 64;
 /// Size of a record's header.
@@ -46,7 +53,7 @@ pub mod op {
     pub const UDP_CLOSE: u8 = 7;
     /// Look a name up: `id` = query id, `port` = qtype (1 A, 28 AAAA), data = the name in UTF-8.
     pub const RESOLVE: u8 = 8;
-    /// J15 (reserved): the guest accepted (flags bit 0) or refused an incoming flow.
+    /// J15: the guest accepted (flags bit 0) or refused an incoming flow (`id` = the host's id).
     pub const INCOMING_RESULT: u8 = 9;
 }
 
@@ -90,7 +97,8 @@ pub enum HostEvent<'a> {
     Resolved { qid: u32, ttl: u32, addrs: &'a [u8] },
     /// The lookup `qid` failed: DNS rcode 2 SERVFAIL or 3 NXDOMAIN.
     Unresolved { qid: u32, rcode: u32 },
-    /// J15 (reserved): a host-initiated flow to the guest's `port` from `from`.
+    /// J15: the host opens a TCP flow `id` (its own choice: nonzero, not a live flow's) to the
+    /// guest's `port`; `from` is the real peer, for the log (the guest sees the gateway).
     Incoming { id: FlowId, port: u16, from: SocketAddrV4 },
 }
 
@@ -110,15 +118,17 @@ impl<'a> HostEvent<'a> {
             ev::INCOMING => {
                 let from: &[u8; 6] = data.get(..6)?.try_into().ok()?;
                 let ip = std::net::Ipv4Addr::new(from[0], from[1], from[2], from[3]);
-                HostEvent::Incoming { id, port: u16::try_from(arg).ok()?, from: SocketAddrV4::new(ip, u16::from_le_bytes([from[4], from[5]])) }
+                let port = u16::try_from(arg).ok().filter(|&p| p != 0)?;
+                HostEvent::Incoming { id, port, from: SocketAddrV4::new(ip, u16::from_le_bytes([from[4], from[5]])) }
             }
             _ => return None,
         })
     }
 }
 
+/// `Accepting` (J15): a host-initiated flow the guest has not answered yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TcpState { Connecting, Open, Failed(ErrorKind), Reset }
+enum TcpState { Connecting, Accepting, Open, Failed(ErrorKind), Reset }
 
 struct TcpFlow {
     state: TcpState,
@@ -158,6 +168,8 @@ pub struct HostQueue {
     udp: HashMap<FlowId, UdpFlow>,
     pending: VecDeque<u32>,
     resolved: VecDeque<(u32, Resolve)>,
+    /// J15: host-initiated flows the NAT has not taken yet
+    incoming: VecDeque<(FlowId, u16, SocketAddrV4)>,
     next_id: FlowId,
     next_qid: u32,
     /// the host resolves names (`RESOLVE`); otherwise DNS datagrams go to it as UDP
@@ -168,7 +180,7 @@ pub struct HostQueue {
 impl HostQueue {
     fn new(resolve_names: bool) -> Self {
         HostQueue { ops: Vec::new(), count: 0, out_bytes: 0, tcp: HashMap::new(), udp: HashMap::new(),
-            pending: VecDeque::new(), resolved: VecDeque::new(), next_id: 0, next_qid: 0, resolve_names, stats: QueueStats::default() }
+            pending: VecDeque::new(), resolved: VecDeque::new(), incoming: VecDeque::new(), next_id: 0, next_qid: 0, resolve_names, stats: QueueStats::default() }
     }
 
     fn push(&mut self, op: u8, flags: u8, port: u16, id: u32, data: &[u8]) {
@@ -211,10 +223,12 @@ impl HostQueue {
                     1
                 }
                 Some(f) if f.state == TcpState::Open => { f.state = TcpState::Reset; 1 }
+                // J15: the host gave up on an incoming flow before the guest answered
+                Some(f) if f.state == TcpState::Accepting => { f.state = TcpState::Failed(ErrorKind::ConnectionReset); 1 }
                 _ => 0,
             },
             HostEvent::TcpData { id, data } => match self.tcp.get_mut(&id) {
-                Some(f) if matches!(f.state, TcpState::Connecting | TcpState::Open) && !f.eof => {
+                Some(f) if matches!(f.state, TcpState::Connecting | TcpState::Accepting | TcpState::Open) && !f.eof => {
                     let n = data.len().min(TCP_RX_MAX - f.rx.len());
                     f.rx.extend(&data[..n]);
                     self.stats.bytes_to_guest += n as u64;
@@ -224,16 +238,17 @@ impl HostQueue {
                 _ => data.len() as u32,
             },
             HostEvent::TcpEof { id } => match self.tcp.get_mut(&id) {
-                Some(f) if matches!(f.state, TcpState::Connecting | TcpState::Open) => { f.eof = true; 1 }
+                Some(f) if matches!(f.state, TcpState::Connecting | TcpState::Accepting | TcpState::Open) => { f.eof = true; 1 }
                 _ => 0,
             },
             HostEvent::TcpReset { id } => match self.tcp.get_mut(&id) {
                 Some(f) if f.state == TcpState::Connecting => { f.state = TcpState::Failed(ErrorKind::ConnectionReset); self.stats.tcp_failed += 1; 1 }
+                Some(f) if f.state == TcpState::Accepting => { f.state = TcpState::Failed(ErrorKind::ConnectionReset); 1 }
                 Some(f) if f.state == TcpState::Open => { f.state = TcpState::Reset; 1 }
                 _ => 0,
             },
             HostEvent::TxCredit { id, bytes } => match self.tcp.get_mut(&id) {
-                Some(f) if f.state == TcpState::Open => { f.credit = f.credit.saturating_add(u64::from(bytes)); 1 }
+                Some(f) if matches!(f.state, TcpState::Accepting | TcpState::Open) => { f.credit = f.credit.saturating_add(u64::from(bytes)); 1 }
                 _ => 0,
             },
             HostEvent::UdpData { id, data } => match self.udp.get_mut(&id) {
@@ -257,7 +272,12 @@ impl HostQueue {
                 self.stats.dns_answers += 1;
                 1
             }
-            HostEvent::Incoming { .. } => 0,
+            HostEvent::Incoming { id, port, from } => {
+                if id == 0 || self.tcp.contains_key(&id) || self.udp.contains_key(&id) || self.tcp_live() >= MAX_TCP_FLOWS { return 0; }
+                self.tcp.insert(id, TcpFlow { state: TcpState::Accepting, rx: VecDeque::new(), credit: INCOMING_WINDOW, eof: false });
+                self.incoming.push_back((id, port, from));
+                1
+            }
         }
     }
 
@@ -268,7 +288,7 @@ impl HostQueue {
     }
 
     fn tcp_live(&self) -> usize {
-        self.tcp.values().filter(|f| matches!(f.state, TcpState::Connecting | TcpState::Open)).count()
+        self.tcp.values().filter(|f| matches!(f.state, TcpState::Connecting | TcpState::Accepting | TcpState::Open)).count()
     }
 }
 
@@ -327,7 +347,7 @@ impl NatTransport for QueueTransport {
 
     fn tcp_state(&mut self, id: FlowId) -> Connect {
         match self.q().tcp.get(&id).map(|f| f.state) {
-            Some(TcpState::Connecting) => Connect::Pending,
+            Some(TcpState::Connecting | TcpState::Accepting) => Connect::Pending,
             Some(TcpState::Open) | Some(TcpState::Reset) => Connect::Open,
             Some(TcpState::Failed(kind)) => Connect::Failed(kind),
             None => Connect::Failed(ErrorKind::NotConnected),
@@ -359,7 +379,7 @@ impl NatTransport for QueueTransport {
             TcpState::Reset if !f.rx.is_empty() => return Err(ErrorKind::WouldBlock.into()),
             TcpState::Reset => return Err(ErrorKind::ConnectionReset.into()),
             TcpState::Failed(kind) => return Err(kind.into()),
-            TcpState::Connecting => return Err(ErrorKind::WouldBlock.into()),
+            TcpState::Connecting | TcpState::Accepting => return Err(ErrorKind::WouldBlock.into()),
             TcpState::Open => {}
         }
         let n = data.len().min(room).min(usize::try_from(f.credit).unwrap_or(usize::MAX));
@@ -379,8 +399,8 @@ impl NatTransport for QueueTransport {
     fn tcp_close(&mut self, id: FlowId, abort: bool) {
         let mut q = self.q();
         let Some(f) = q.tcp.remove(&id) else { return };
-        // a flow the host failed or reset is already gone on its side
-        if matches!(f.state, TcpState::Connecting | TcpState::Open) { q.push(op::TCP_CLOSE, u8::from(abort), 0, id, &[]); }
+        // a flow the host failed or reset, or the guest refused, is already gone on its side
+        if matches!(f.state, TcpState::Connecting | TcpState::Accepting | TcpState::Open) { q.push(op::TCP_CLOSE, u8::from(abort), 0, id, &[]); }
     }
 
     fn udp_open(&mut self, dst: SocketAddrV4) -> io::Result<FlowId> {
@@ -441,6 +461,17 @@ impl NatTransport for QueueTransport {
     }
 
     fn resolved(&mut self) -> Option<(u32, Resolve)> { self.q().resolved.pop_front() }
+
+    fn incoming(&mut self) -> Option<(FlowId, u16, SocketAddrV4)> { self.q().incoming.pop_front() }
+
+    /// One `INCOMING_RESULT` per incoming flow the host still waits on; a refused one is gone on
+    /// both sides (no `TCP_CLOSE` follows), one the host reset meanwhile gets no record at all.
+    fn incoming_result(&mut self, id: FlowId, accepted: bool) {
+        let mut q = self.q();
+        let Some(f) = q.tcp.get_mut(&id).filter(|f| f.state == TcpState::Accepting) else { return };
+        f.state = if accepted { TcpState::Open } else { TcpState::Failed(ErrorKind::ConnectionRefused) };
+        q.push(op::INCOMING_RESULT, u8::from(accepted), 0, id, &[]);
+    }
 }
 
 #[cfg(test)]
@@ -646,8 +677,78 @@ mod tests {
         assert_eq!(HostEvent::from_abi(ev::INCOMING, 1, 80, &[10, 0, 2, 2, 0x39, 0x30]),
             Some(HostEvent::Incoming { id: 1, port: 80, from: SocketAddrV4::new(Ipv4Addr::new(10, 0, 2, 2), 12345) }));
         assert_eq!(HostEvent::from_abi(ev::INCOMING, 1, 80, &[10, 0, 2, 2]), None);
+        assert_eq!(HostEvent::from_abi(ev::INCOMING, 1, 0, &[10, 0, 2, 2, 0, 0]), None, "port 0");
+        assert_eq!(HostEvent::from_abi(ev::INCOMING, 1, 65536, &[10, 0, 2, 2, 0, 0]), None, "beyond u16");
         assert_eq!(HostEvent::from_abi(0, 1, 0, &[]), None);
         assert_eq!(HostEvent::from_abi(11, 1, 0, &[]), None);
+    }
+
+    const PEER: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 9), 50000);
+    const HOST_ID: FlowId = 0x8000_0001;
+
+    #[test]
+    fn an_accepted_incoming_flow_reports_once_then_runs_like_an_outbound_one() {
+        let (mut t, h) = QueueTransport::new();
+        assert_eq!(h.event(HostEvent::Incoming { id: HOST_ID, port: 7000, from: PEER }), 1);
+        assert_eq!(h.event(HostEvent::Incoming { id: HOST_ID, port: 7000, from: PEER }), 0, "the id is taken");
+        assert_eq!(h.event(HostEvent::Incoming { id: 0, port: 7000, from: PEER }), 0, "id 0");
+        assert_eq!(h.tcp_open(), 1, "a flow waiting for the guest counts");
+        // The host may send before the guest answers; the bytes wait.
+        assert_eq!(h.event(HostEvent::TcpData { id: HOST_ID, data: b"ping\n" }), 5);
+        assert_eq!(h.event(HostEvent::TxCredit { id: HOST_ID, bytes: 10 }), 1);
+        assert_eq!(h.event(HostEvent::Connected { id: HOST_ID, window: 1 }), 0, "not an outbound flow");
+        assert_eq!(t.incoming(), Some((HOST_ID, 7000, PEER)));
+        assert_eq!(t.incoming(), None);
+        assert_eq!(t.tcp_state(HOST_ID), Connect::Pending);
+        assert_eq!(t.tcp_write(HOST_ID, b"x").unwrap_err().kind(), ErrorKind::WouldBlock);
+        assert!(records(&h).is_empty());
+        t.incoming_result(HOST_ID, true);
+        t.incoming_result(HOST_ID, true);
+        assert_eq!(records(&h), vec![(op::INCOMING_RESULT, 1, 0, HOST_ID, vec![])], "one result");
+        assert_eq!(t.tcp_state(HOST_ID), Connect::Open);
+        let mut buf = [0u8; 8];
+        assert_eq!(t.tcp_read(HOST_ID, &mut buf).unwrap(), 5);
+        let big = vec![1u8; INCOMING_WINDOW as usize + 20];
+        assert_eq!(t.tcp_write(HOST_ID, &big).unwrap(), INCOMING_WINDOW as usize + 10, "the default window and the credit");
+        t.tcp_shutdown(HOST_ID);
+        t.tcp_close(HOST_ID, false);
+        let ops: Vec<_> = records(&h).into_iter().map(|r| (r.0, r.1, r.3)).collect();
+        assert_eq!(ops, vec![(op::TCP_DATA, 0, HOST_ID), (op::TCP_SHUTDOWN, 0, HOST_ID), (op::TCP_CLOSE, 0, HOST_ID)]);
+        // Ids the guest's side picks skip the host's while they live.
+        assert_eq!(h.event(HostEvent::Incoming { id: 2, port: 80, from: PEER }), 1);
+        let ids: Vec<_> = (0..3).map(|_| t.tcp_connect(dst(80)).unwrap()).collect();
+        assert_eq!(ids, vec![1, 3, 4]);
+    }
+
+    #[test]
+    fn a_refused_incoming_flow_needs_no_close_and_a_reset_one_no_result() {
+        let (mut t, h) = QueueTransport::new();
+        h.event(HostEvent::Incoming { id: HOST_ID, port: 81, from: PEER });
+        t.incoming();
+        t.incoming_result(HOST_ID, false);
+        assert_eq!(t.tcp_state(HOST_ID), Connect::Failed(ErrorKind::ConnectionRefused));
+        t.tcp_close(HOST_ID, true);
+        assert_eq!(records(&h), vec![(op::INCOMING_RESULT, 0, 0, HOST_ID, vec![])]);
+        assert_eq!(h.tcp_open(), 0);
+        assert_eq!(h.event(HostEvent::TcpData { id: HOST_ID, data: b"late" }), 4, "taken and dropped");
+        // The host gives up before the guest answers: the NAT resets the guest, the host hears nothing.
+        let id = HOST_ID + 1;
+        assert_eq!(h.event(HostEvent::Incoming { id, port: 7000, from: PEER }), 1);
+        assert_eq!(h.event(HostEvent::TcpReset { id }), 1);
+        assert_eq!(t.tcp_state(id), Connect::Failed(ErrorKind::ConnectionReset));
+        t.incoming_result(id, false);
+        t.tcp_close(id, true);
+        assert!(records(&h).is_empty());
+        assert_eq!(h.stats().tcp_failed, 0, "not a flow the host failed to open");
+    }
+
+    #[test]
+    fn incoming_flows_share_the_sixteen_tcp_flows() {
+        let (mut t, h) = QueueTransport::new();
+        for _ in 0..MAX_TCP_FLOWS - 1 { t.tcp_connect(dst(80)).unwrap(); }
+        assert_eq!(h.event(HostEvent::Incoming { id: HOST_ID, port: 80, from: PEER }), 1);
+        assert_eq!(h.event(HostEvent::Incoming { id: HOST_ID + 1, port: 80, from: PEER }), 0, "no room");
+        assert_eq!(t.tcp_connect(dst(80)), None);
     }
 
     /// The NAT over the queue: a guest SYN becomes a record, the host's events a SYN-ACK and data.
@@ -671,5 +772,35 @@ mod tests {
         assert_eq!(out[0][47], 0x12, "SYN-ACK");
         nat.abort_all();
         assert_eq!(records(&h), vec![(op::TCP_CLOSE, 1, 0, r[0].3, vec![])]);
+    }
+
+    /// J15 over the queue: the host's INCOMING becomes a SYN from the gateway, the guest's SYN-ACK
+    /// an INCOMING_RESULT, and the host's data reaches the guest.
+    #[test]
+    fn a_nat_over_the_queue_opens_a_host_flow_to_the_guest() {
+        let (t, h) = QueueTransport::new();
+        let mut nat = super::super::Nat::with_transport(false, Box::new(t));
+        nat.set_station(Some(([2; 6], [10, 0, 2, 15])), [10, 0, 2, 2]);
+        h.event(HostEvent::Incoming { id: HOST_ID, port: 7000, from: PEER });
+        h.event(HostEvent::TcpData { id: HOST_ID, data: b"ping\n" });
+        let syn = nat.poll(0);
+        assert_eq!(syn.len(), 1);
+        assert_eq!((&syn[0][26..30], &syn[0][30..34], syn[0][47]), (&[10, 0, 2, 2][..], &[10, 0, 2, 15][..], 0x02));
+        assert_eq!(u16::from_be_bytes([syn[0][36], syn[0][37]]), 7000);
+        let mut syn_ack = vec![0u8; 20];
+        syn_ack[..2].copy_from_slice(&7000u16.to_be_bytes());
+        syn_ack[2..4].copy_from_slice(&syn[0][34..36]);
+        syn_ack[4..8].copy_from_slice(&500u32.to_be_bytes());
+        let isn = u32::from_be_bytes(syn[0][38..42].try_into().unwrap());
+        syn_ack[8..12].copy_from_slice(&isn.wrapping_add(1).to_be_bytes());
+        syn_ack[12] = 0x50; syn_ack[13] = 0x12;
+        syn_ack[14..16].copy_from_slice(&5840u16.to_be_bytes());
+        let ack = nat.tcp_in(&[2; 6], &[10, 0, 2, 15], &[10, 0, 2, 2], &syn_ack, 1);
+        assert_eq!(ack[0][47], 0x10);
+        assert_eq!(records(&h), vec![(op::INCOMING_RESULT, 1, 0, HOST_ID, vec![])]);
+        let data = nat.poll(2);
+        assert_eq!(&data[0][54..], b"ping\n");
+        nat.abort_all();
+        assert_eq!(records(&h), vec![(op::TCP_CLOSE, 1, 0, HOST_ID, vec![])]);
     }
 }

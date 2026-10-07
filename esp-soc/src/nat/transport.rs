@@ -25,8 +25,12 @@ pub enum Resolve {
 /// browser) queues the operations for its own network (`QueueTransport`). Reads and writes follow
 /// non-blocking std::io rules: `WouldBlock` = try at the next poll, `tcp_read` `Ok(0)` = peer EOF.
 ///
-/// The NAT calls `tcp_close` exactly once for every flow `tcp_connect` returned, and `udp_close`
-/// once for every flow `udp_open` returned, when it forgets the flow.
+/// The NAT calls `tcp_close` exactly once for every flow `tcp_connect` or `incoming` returned, and
+/// `udp_close` once for every flow `udp_open` returned, when it forgets the flow. For an incoming
+/// flow it calls `incoming_result` first, once: `true` when the guest's SYN-ACK came (the flow then
+/// runs like an outbound one), `false` when the guest reset it, did not answer in time, or the NAT
+/// had no station or no free flow for it. `tcp_state` reporting `Failed` before that means the host
+/// gave the flow up; the guest is reset.
 pub trait NatTransport {
     /// Begin a TCP connection; None when no more may be opened now (the guest's SYN is dropped
     /// and its retransmission tries again).
@@ -48,7 +52,8 @@ pub trait NatTransport {
     fn resolve(&mut self, _name: &str, _qtype: u16) -> Option<u32> { None }
     /// A finished lookup started by `resolve`.
     fn resolved(&mut self) -> Option<(u32, Resolve)> { None }
-    /// J15: a host-initiated TCP connection to the guest's `port` from `from`.
+    /// J15: a host-initiated TCP connection to the guest's `port` from `from` (the real peer; the
+    /// guest sees it come from the gateway's address and a port the NAT picks).
     fn incoming(&mut self) -> Option<(FlowId, u16, SocketAddrV4)> { None }
     /// J15: the guest accepted (SYN-ACK seen) or refused (RST) an incoming flow.
     fn incoming_result(&mut self, _id: FlowId, _accepted: bool) {}

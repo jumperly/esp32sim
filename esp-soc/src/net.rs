@@ -249,10 +249,15 @@ impl VirtualNet {
         Ok(self.frame(&mac, 0x0800, &packet[..total]))
     }
 
-    /// Pump the NAT's host sockets; returns frames for the guest.
+    /// Pump the NAT's host sockets; returns frames for the guest. Jumperly patch J15: flows the host
+    /// opens to the station come from the gateway, once the station's MAC is known.
     pub fn poll(&mut self, now_us: u64) -> Vec<Vec<u8>> {
         self.now_us = now_us;
-        match &mut self.nat { Some(n) => n.poll(now_us), None => Vec::new() }
+        let station = self.sta_mac.map(|mac| (mac, self.sta_ip));
+        match &mut self.nat {
+            Some(n) => { n.set_station(station, self.gw_ip); n.poll(now_us) }
+            None => Vec::new(),
+        }
     }
 
     /// Answer A queries with the local resolver address, so name lookups resolve to something that

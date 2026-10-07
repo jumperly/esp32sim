@@ -54,7 +54,8 @@ pub unsafe extern "C" fn esp32sim_net_host(e: *mut Emu, flags: u32) -> u32 {
 /// multiple of 4 bytes: `u8 op, u8 flags, u16 port, u32 id, u32 len, len bytes`. op 1 TCP_CONNECT
 /// (port, data = IPv4[4]), 2 TCP_DATA, 3 TCP_SHUTDOWN, 4 TCP_CLOSE (flags bit 0 abort), 5 UDP_OPEN
 /// (port, IPv4[4]), 6 UDP_DATA, 7 UDP_CLOSE, 8 RESOLVE (id = query id, port = qtype 1 A / 28 AAAA,
-/// data = the name in UTF-8). 0 without `esp32sim_net_host`.
+/// data = the name in UTF-8), 9 INCOMING_RESULT (Jumperly patch J15: id = the host's incoming
+/// flow, flags bit 0 = the guest accepted it; port 0, no data). 0 without `esp32sim_net_host`.
 ///
 /// # Safety
 /// `e` must point to a live emulator to which the caller has exclusive access.
@@ -74,8 +75,16 @@ pub unsafe extern "C" fn esp32sim_net_take(e: *mut Emu) -> u32 {
 /// again later; all of them for a flow the guest has forgotten), 4 TCP_EOF, 5 TCP_RESET (after the
 /// bytes already taken), 6 TX_CREDIT (`arg` bytes), 7 UDP_DATA → 1 taken, 0 dropped (16 waiting per
 /// flow), 8 RESOLVED (`id` = query id, `arg` = TTL, data = n × IPv4[4], none for an empty answer),
-/// 9 UNRESOLVED (`arg` = rcode 2 SERVFAIL or 3 NXDOMAIN). The others return 1 when applied, 0 for a
-/// flow or query that is not waiting for it. No TCP_CLOSE follows FAILED or TCP_RESET.
+/// 9 UNRESOLVED (`arg` = rcode 2 SERVFAIL or 3 NXDOMAIN), 10 INCOMING (Jumperly patch J15: the host
+/// opens TCP flow `id` to the guest's port `arg`; data = the real peer's IPv4[4] + port u16
+/// little-endian, for the log: the guest sees 10.0.2.2 and a port of the NAT's; `id` is the host's
+/// choice, nonzero and not a live flow's (high ids, e.g. bit 31 set, never meet the guest's, which
+/// grow from 1); 0 when the id is taken, the port is 0, the data is short or 16 TCP flows are open.
+/// The host may send TCP_DATA, TCP_EOF and TX_CREDIT at once; the guest's side sends it up to
+/// 64 KiB before its first TX_CREDIT. One INCOMING_RESULT record answers it: accepted, the flow
+/// runs like an outbound one; refused, it is gone (no TCP_CLOSE). TCP_RESET or FAILED before the
+/// answer gives it up: the guest is reset, no record follows.) The others return 1 when applied,
+/// 0 for a flow or query that is not waiting for it. No TCP_CLOSE follows FAILED or TCP_RESET.
 ///
 /// # Safety
 /// `e` must point to a live emulator to which the caller has exclusive access. For nonzero `len`,

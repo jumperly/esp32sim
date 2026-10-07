@@ -30,6 +30,10 @@ const UDP_BATCH: usize = 16;
 const MAX_DNS_PENDING: usize = 32;
 /// A lookup the transport has not finished by then is forgotten (the guest has long retried).
 const DNS_PENDING_US: u64 = 30_000_000;
+/// Jumperly patch J15: an incoming flow the guest has not answered by then is refused.
+const INCOMING_TIMEOUT_US: u64 = 5_000_000;
+/// Jumperly patch J15: the gateway's source ports for incoming flows.
+const EPHEMERAL_FIRST: u16 = 49152;
 const FIN: u8 = 0x01;
 const SYN: u8 = 0x02;
 const RST: u8 = 0x04;
@@ -38,12 +42,13 @@ const PSH: u8 = 0x08;
 
 fn ip(a: &[u8; 4]) -> Ipv4Addr { Ipv4Addr::from(*a) }
 
-/// A guest TCP flow and its transport flow, while there is one.
+/// A guest TCP flow and its transport flow, while there is one. `Accepting` (Jumperly patch J15):
+/// a host-initiated flow whose SYN the guest has not answered yet.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum FlowState { Connecting(FlowId), Connected(FlowId), TimeWait, Closed }
+enum FlowState { Connecting(FlowId), Accepting(FlowId), Connected(FlowId), TimeWait, Closed }
 impl FlowState {
     fn id(self) -> Option<FlowId> {
-        match self { FlowState::Connecting(id) | FlowState::Connected(id) => Some(id), _ => None }
+        match self { FlowState::Connecting(id) | FlowState::Accepting(id) | FlowState::Connected(id) => Some(id), _ => None }
     }
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -141,9 +146,16 @@ impl Tcp {
 
     /// Forget the transport flow, if there is one, and move to `next` (TimeWait or Closed).
     fn release(&mut self, transport: &mut dyn NatTransport, next: FlowState, abort: bool) {
-        if let Some(id) = self.state.id() { transport.tcp_close(id, abort); }
+        forget(transport, self.state, abort);
         self.state = next;
     }
+}
+
+/// Close the transport flow of `state`, if there is one. Jumperly patch J15: an incoming flow
+/// still waiting for the guest's answer is reported refused first.
+fn forget(transport: &mut dyn NatTransport, state: FlowState, abort: bool) {
+    if let FlowState::Accepting(id) = state { transport.incoming_result(id, false); }
+    if let Some(id) = state.id() { transport.tcp_close(id, abort); }
 }
 
 /// Preserve every unwritten byte across short writes and WouldBlock. Returns bytes actually sent.
@@ -201,6 +213,14 @@ pub struct Nat {
     pub bytes_to_host: u64, pub bytes_to_guest: u64,
     /// answers to DNS queries the transport resolved itself
     pub dns_answers: u64,
+    /// Jumperly patch J15: host-initiated flows the guest accepted, and those refused (the guest's
+    /// RST, no answer in time, no station yet, no free flow)
+    pub incoming_accepted: u64, pub incoming_refused: u64,
+    /// Jumperly patch J15: where host-initiated flows go (the station's MAC and address; None
+    /// refuses them) and the gateway address they come from
+    station: Option<([u8; 6], [u8; 4])>,
+    gateway: [u8; 4],
+    next_port: u16,
 }
 
 impl Nat {
@@ -211,7 +231,49 @@ impl Nat {
     pub fn with_transport(log: bool, transport: Box<dyn NatTransport>) -> Self {
         Self { tcp: Vec::new(), udp: Vec::new(), dns: VecDeque::new(), resolver: transport.resolver(), transport, isn: 0x1000, log,
             tcp_opened: 0, tcp_refused: 0, udp_flows: 0, udp_evicted: 0, udp_send_errors: 0, bytes_to_host: 0, bytes_to_guest: 0,
-            dns_answers: 0 }
+            dns_answers: 0, incoming_accepted: 0, incoming_refused: 0, station: None, gateway: [10, 0, 2, 2], next_port: EPHEMERAL_FIRST }
+    }
+
+    /// Jumperly patch J15: the station host-initiated flows go to (its MAC and address; None
+    /// while it is unknown refuses them) and the gateway address they come from.
+    pub fn set_station(&mut self, station: Option<([u8; 6], [u8; 4])>, gateway: [u8; 4]) {
+        self.station = station;
+        self.gateway = gateway;
+    }
+
+    /// Jumperly patch J15: a gateway port no flow to the guest's `port` uses.
+    fn ephemeral_port(&mut self, guest_ip: &[u8; 4], port: u16) -> u16 {
+        loop {
+            let p = self.next_port;
+            self.next_port = if p == u16::MAX { EPHEMERAL_FIRST } else { p + 1 };
+            if !self.tcp.iter().any(|c| c.guest_ip == *guest_ip && c.guest_port == port && c.dst_ip == self.gateway && c.dst_port == p) { return p; }
+        }
+    }
+
+    /// Jumperly patch J15: start the flows the host opens to the guest, each with a SYN to the
+    /// guest's port from the gateway's address and a port of its own. Without a station or a free
+    /// flow the host's flow is refused at once.
+    fn take_incoming(&mut self, now_us: u64, out: &mut Vec<Vec<u8>>) {
+        while let Some((id, port, from)) = self.transport.incoming() {
+            let slot = if self.tcp.len() < MAX_FLOWS { Some(None) }
+                else { self.tcp.iter().position(|c| matches!(c.state, FlowState::TimeWait | FlowState::Closed)).map(Some) };
+            let (Some((mac, gip)), Some(evict)) = (self.station, slot) else {
+                if self.log { eprintln!("[nat] TCP incoming {} -> port {} refused: {}", from, port, if self.station.is_none() { "no station yet" } else { "no free flow" }); }
+                self.incoming_refused += 1;
+                forget(&mut *self.transport, FlowState::Accepting(id), true);
+                continue;
+            };
+            if let Some(i) = evict { self.tcp.remove(i); }
+            let sport = self.ephemeral_port(&gip, port);
+            self.isn = self.isn.wrapping_add(0x10000);
+            let mut c = Tcp { guest_mac: mac, guest_ip: gip, guest_port: port, dst_ip: self.gateway, dst_port: sport,
+                state: FlowState::Accepting(id), guest_write: GuestWrite::Open, host_closed: false,
+                our_seq: self.isn, guest_seq: 0, guest_window: WINDOW,
+                to_host: VecDeque::new(), unacked: VecDeque::new(), last_activity_us: now_us };
+            if self.log { eprintln!("[nat] TCP incoming {} -> {}:{} (as {}:{})", from, ip(&gip), port, ip(&self.gateway), sport); }
+            out.push(c.send(SYN, Vec::new(), now_us));
+            self.tcp.push(c);
+        }
     }
 
     /// Jumperly patch J12: drop every flow at once, resetting the transport's (the guest rebooted;
@@ -302,12 +364,33 @@ impl Nat {
         let Some(i) = idx else { return Vec::new() };
         let c = &mut self.tcp[i];
         c.last_activity_us = now_us;
-        if flags & RST != 0 { c.release(&mut *self.transport, FlowState::Closed, true); return Vec::new(); }
+        if flags & RST != 0 {
+            if matches!(c.state, FlowState::Accepting(_)) {
+                self.incoming_refused += 1;
+                if self.log { eprintln!("[nat] TCP incoming -> {}:{} refused by the guest", ip(&c.guest_ip), c.guest_port); }
+            }
+            c.release(&mut *self.transport, FlowState::Closed, true);
+            return Vec::new();
+        }
         if c.state == FlowState::TimeWait {
             return if flags & FIN != 0 { vec![c.segment(ACK, &[], c.our_seq)] } else { Vec::new() };
         }
+        // Jumperly patch J15: the guest's SYN-ACK accepts a host-initiated flow
+        if let FlowState::Accepting(id) = c.state {
+            if flags & (SYN | ACK) != SYN | ACK || ack != c.our_seq { return Vec::new(); }
+            c.guest_seq = seq.wrapping_add(1);
+            c.acknowledge(ack);
+            c.guest_window = window;
+            c.state = FlowState::Connected(id);
+            self.transport.incoming_result(id, true);
+            self.incoming_accepted += 1;
+            if self.log { eprintln!("[nat] TCP incoming -> {}:{} accepted", ip(&c.guest_ip), c.guest_port); }
+            return vec![c.segment(ACK, &[], c.our_seq)];
+        }
         if flags & SYN != 0 {
-            return if c.handshake_pending() { vec![c.segment(SYN | ACK, &[], c.unacked[0].seq)] } else { Vec::new() };
+            if c.handshake_pending() { return vec![c.segment(SYN | ACK, &[], c.unacked[0].seq)]; }
+            // J15: the guest repeats its SYN-ACK when our ACK of an incoming flow was lost
+            return if flags & ACK != 0 { vec![c.segment(ACK, &[], c.our_seq)] } else { Vec::new() };
         }
         if !matches!(c.state, FlowState::Connected(_)) { return Vec::new(); }
         if flags & ACK != 0 { c.acknowledge(ack); c.guest_window = window; }
@@ -322,6 +405,7 @@ impl Nat {
     /// Pump a bounded amount of host traffic, then retransmit and expire flows.
     pub fn poll(&mut self, now_us: u64) -> Vec<Vec<u8>> {
         let mut out = Vec::new();
+        self.take_incoming(now_us, &mut out);
         let transport = &mut *self.transport;
         for c in &mut self.tcp {
             if c.closed() { continue; }
@@ -346,6 +430,17 @@ impl Nat {
                         c.release(transport, FlowState::Closed, true);
                     }
                     Connect::Pending => {}
+                }
+            }
+            // Jumperly patch J15: an incoming flow the host gave up on, or the guest left unanswered
+            if let FlowState::Accepting(id) = c.state {
+                let host_gone = matches!(transport.tcp_state(id), Connect::Failed(_));
+                if host_gone || now_us.wrapping_sub(c.last_activity_us) >= INCOMING_TIMEOUT_US {
+                    if !host_gone { self.incoming_refused += 1; }
+                    if self.log { eprintln!("[nat] TCP incoming -> {}:{} {}", ip(&c.guest_ip), c.guest_port, if host_gone { "reset by the host" } else { "not answered" }); }
+                    out.push(c.segment(RST, &[], c.our_seq));
+                    c.release(transport, FlowState::Closed, true);
+                    continue;
                 }
             }
             if let FlowState::Connected(id) = c.state {
@@ -411,7 +506,7 @@ impl Nat {
         self.tcp.retain(|c| {
             let timeout = if c.state == FlowState::TimeWait { TIME_WAIT_US } else { IDLE_CLOSE_US };
             let keep = !c.closed() && now_us.wrapping_sub(c.last_activity_us) < timeout;
-            if !keep { if let Some(id) = c.state.id() { transport.tcp_close(id, false); } }
+            if !keep { forget(transport, c.state, false); }
             keep
         });
         self.udp.retain(|f| {

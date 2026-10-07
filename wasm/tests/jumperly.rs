@@ -732,3 +732,52 @@ fn the_station_mac_reaches_the_firmware_and_is_fixed_at_boot() {
     assert_eq!(unsafe { esp32sim_lan_receive(fresh, [0u8; 20].as_ptr(), 20) }, 1);
     unsafe { esp32sim_delete(fresh) };
 }
+
+// ------------------------------------------------------------------ Jumperly patch J15: the host connects to the guest
+
+#[test]
+fn the_host_connects_to_a_guest_server_and_a_closed_port_refuses() {
+    let mut e = Emu::boot_with("lan-server", |e| {
+        assert_eq!(wifi_ap(e, "Jumperly", "", 6), 0);
+        assert_eq!(unsafe { esp32sim_net_host(e, 0b111) }, 0);
+    });
+    let (mut text, _) = run_until(&mut e, "server ip=", 10_000_000);
+    assert!(text.contains("server ip=10.0.2.15 port=7000"), "{text}");
+    const REFUSED: u32 = 0x8000_0001;
+    const ID: u32 = 0x8000_0002;
+    let from = [203, 0, 113, 9, 0x50, 0xc3]; // 203.0.113.9:50000, port little-endian
+    assert_eq!(net_event(&mut e, 10, REFUSED, 81, &from), 1, "nobody listens on 81");
+    assert_eq!(net_event(&mut e, 10, ID, 7000, &from), 1);
+    assert_eq!(net_event(&mut e, 10, ID, 7000, &from), 0, "the id is taken");
+    assert_eq!(net_event(&mut e, 10, ID + 1, 7000, &from[..4]), 0, "short data");
+    let mut ops: Vec<NetOp> = Vec::new();
+    let step = |e: &mut Emu, ops: &mut Vec<NetOp>, text: &mut String| {
+        let (_, t) = e.run_for(10_000 * MHZ);
+        *text += &t;
+        ops.extend(net_take(e));
+    };
+    for _ in 0..200 {
+        if ops.iter().filter(|o| o.0 == 9).count() == 2 { break; }
+        step(&mut e, &mut ops, &mut text);
+    }
+    assert!(ops.contains(&(9, 0, 0, REFUSED, vec![])), "{ops:?}");
+    assert!(ops.contains(&(9, 1, 0, ID, vec![])), "{ops:?}");
+    assert_eq!(unsafe { esp32sim_wifi_stat(e.0, 2) }, 1.0, "one flow open");
+    assert_eq!(net_event(&mut e, 3, ID, 0, b"ping\n"), 5);
+    for _ in 0..300 {
+        if ops.iter().any(|o| o.0 == 2 && o.3 == ID) { break; }
+        step(&mut e, &mut ops, &mut text);
+    }
+    assert_eq!(net_event(&mut e, 4, ID, 0, &[]), 1, "the host is done");
+    for _ in 0..300 {
+        if ops.iter().any(|o| o.0 == 4 && o.3 == ID) { break; }
+        step(&mut e, &mut ops, &mut text);
+    }
+    let flow: Vec<_> = ops.iter().filter(|o| o.3 == ID).map(|o| (o.0, o.1, o.4.clone())).collect();
+    assert_eq!(flow, vec![(9, 1, vec![]), (2, 0, b"pong\n".to_vec()), (3, 0, vec![]), (4, 0, vec![])], "accepted, the answer, shutdown, close");
+    assert!(!ops.iter().any(|o| o.3 == REFUSED && o.0 != 9), "nothing follows a refusal: {ops:?}");
+    assert!(text.contains("lan: client 10.0.2.2"), "the guest sees the gateway: {text}");
+    assert!(text.contains("lan: ping from 10.0.2.2"), "{text}");
+    let stat = |which| unsafe { esp32sim_wifi_stat(e.0, which) };
+    assert_eq!((stat(2), stat(3), stat(4)), (0.0, 5.0, 5.0));
+}
