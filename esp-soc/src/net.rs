@@ -22,6 +22,10 @@ pub struct VirtualNet {
     pub nat: Option<crate::nat::Nat>,
     /// Jumperly patch J12: answer SNTP here even with a NAT (the host's clock), instead of relaying it
     pub local_ntp: bool,
+    /// Jumperly patch J14: the other boards of the same network, reached at the IP level
+    pub lan: Option<Lan>,
+    /// Jumperly patch J14: the station's MAC, learned from what it sends (None before its first frame)
+    pub sta_mac: Option<[u8; 6]>,
     pub dhcp_acks: u64,
     pub dns_answers: u64,
     pub ntp_answers: u64,
@@ -30,6 +34,30 @@ pub struct VirtualNet {
     pub pings: u64,
     pub unhandled: u64,
     now_us: u64,
+}
+
+/// Jumperly patch J14: IPv4 packets between the boards of one network. A packet for a peer, and a
+/// UDP broadcast or multicast (not DHCP), leave as they are with the device time they were sent;
+/// the host delivers them to the peers (`VirtualNet::receive_lan`). The station resolves every
+/// address to the gateway's MAC (proxy ARP), so the router needs no ARP of its own.
+pub struct Lan {
+    /// the other boards' addresses
+    pub peers: Vec<[u8; 4]>,
+    /// (device time in µs, IPv4 packet) for the host, oldest first; at most `LAN_OUT_MAX`
+    pub out: Vec<(u64, Vec<u8>)>,
+    /// packets sent and received; packets dropped because the host did not take `out`
+    pub sent: u64,
+    pub received: u64,
+    pub dropped: u64,
+}
+
+/// Packets `Lan::out` holds before the host takes them; more are dropped.
+pub const LAN_OUT_MAX: usize = 256;
+/// The longest IPv4 packet a peer may deliver: the Wi-Fi MTU.
+const LAN_MTU: usize = 1500;
+
+impl Lan {
+    pub fn new(peers: Vec<[u8; 4]>) -> Self { Lan { peers, out: Vec::new(), sent: 0, received: 0, dropped: 0 } }
 }
 
 fn be16(b: &[u8]) -> u16 { u16::from_be_bytes([b[0], b[1]]) }
@@ -41,7 +69,7 @@ impl VirtualNet {
     pub fn new(log: bool) -> Self {
         VirtualNet { gw_mac: GATEWAY_MAC, gw_ip: [10, 0, 2, 2], dns_ip: [10, 0, 2, 3],
                      sta_ip: [10, 0, 2, 15], mask: [255, 255, 255, 0],
-                     log, nat: None, local_ntp: false, dhcp_acks: 0, dns_answers: 0, ntp_answers: 0, tcp_rejects: 0, arp_replies: 0, pings: 0, unhandled: 0, now_us: 0 }
+                     log, nat: None, local_ntp: false, lan: None, sta_mac: None, dhcp_acks: 0, dns_answers: 0, ntp_answers: 0, tcp_rejects: 0, arp_replies: 0, pings: 0, unhandled: 0, now_us: 0 }
     }
 
     /// Handle one Ethernet frame from the station; returns frames to send back to it.
@@ -49,6 +77,7 @@ impl VirtualNet {
         if eth.len() < 14 { return Vec::new(); }
         self.now_us = now_us;
         let mut src = [0u8; 6]; src.copy_from_slice(&eth[6..12]);
+        self.sta_mac = Some(src);
         match be16(&eth[12..14]) {
             0x0806 => self.arp(&eth[14..], &src),
             0x0800 => self.ipv4(&eth[14..], &src),
@@ -95,6 +124,8 @@ impl VirtualNet {
         }
         let mut sip = [0u8; 4]; sip.copy_from_slice(&p[12..16]);
         let mut dip = [0u8; 4]; dip.copy_from_slice(&p[16..20]);
+        // Jumperly patch J14: another board's packet leaves before the gateway's services and the NAT see it
+        if self.lan_out(proto, body, &dip, &p[..total]) { return Vec::new(); }
         match proto {
             17 if body.len() >= 8 && be16(&body[2..4]) == 67 => self.dhcp(&body[8..], src),
             17 if body.len() >= 8 && self.local_ntp && be16(&body[2..4]) == 123 => self.ntp(&body[8..], src, &sip, &dip, be16(&body[0..2])),
@@ -180,6 +211,44 @@ impl VirtualNet {
 }
 
 impl VirtualNet {
+    /// Jumperly patch J14: a broadcast or multicast address of the station's subnet.
+    fn is_group(&self, ip: &[u8; 4]) -> bool {
+        let bcast: Vec<u8> = self.sta_ip.iter().zip(&self.mask).map(|(a, m)| a | !m).collect();
+        *ip == [255; 4] || ip[..] == bcast[..] || ip[0] & 0xf0 == 224
+    }
+
+    /// Jumperly patch J14: queue `packet` for the peers when it is theirs (to a peer, or UDP to a
+    /// broadcast or multicast address other than DHCP's). False leaves it to the gateway.
+    fn lan_out(&mut self, proto: u8, body: &[u8], dip: &[u8; 4], packet: &[u8]) -> bool {
+        let Some(lan) = &self.lan else { return false };
+        let to_peer = *dip != self.sta_ip && lan.peers.contains(dip);
+        let group = proto == 17 && body.len() >= 8 && !matches!(be16(&body[2..4]), 67 | 68) && self.is_group(dip);
+        if !to_peer && !group { return false; }
+        let now_us = self.now_us;
+        let lan = self.lan.as_mut().unwrap();
+        if lan.out.len() >= LAN_OUT_MAX { lan.dropped += 1; return true; }
+        lan.out.push((now_us, packet.to_vec()));
+        lan.sent += 1;
+        if self.log { eprintln!("[net] LAN {} bytes -> {}.{}.{}.{} at {} us", packet.len(), dip[0], dip[1], dip[2], dip[3], now_us); }
+        true
+    }
+
+    /// Jumperly patch J14: an IPv4 packet from a peer, as the Ethernet frame for the station (from
+    /// the gateway's MAC; a broadcast or multicast one is unicast to the station). Refused without
+    /// a LAN, before the station has sent anything (its MAC is unknown), and for a malformed or
+    /// oversized packet or one for another address.
+    pub fn receive_lan(&mut self, packet: &[u8]) -> Result<Vec<u8>, String> {
+        let Some(mac) = self.sta_mac else { return Err("the station has not sent anything yet".into()) };
+        if self.lan.is_none() { return Err("no LAN (esp32sim_lan_peers)".into()); }
+        if packet.len() < 20 || packet[0] >> 4 != 4 || ((packet[0] & 0xf) as usize) * 4 < 20 { return Err("not an IPv4 packet".into()); }
+        let total = be16(&packet[2..4]) as usize;
+        if total < ((packet[0] & 0xf) as usize) * 4 || total > packet.len() || total > LAN_MTU { return Err(format!("bad IPv4 length {total}")); }
+        let mut dip = [0u8; 4]; dip.copy_from_slice(&packet[16..20]);
+        if dip != self.sta_ip && !self.is_group(&dip) { return Err(format!("{}.{}.{}.{} is not this station", dip[0], dip[1], dip[2], dip[3])); }
+        self.lan.as_mut().unwrap().received += 1;
+        Ok(self.frame(&mac, 0x0800, &packet[..total]))
+    }
+
     /// Pump the NAT's host sockets; returns frames for the guest.
     pub fn poll(&mut self, now_us: u64) -> Vec<Vec<u8>> {
         self.now_us = now_us;
@@ -242,6 +311,112 @@ impl VirtualNet {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const STA_MAC: [u8; 6] = [0x44, 0x1b, 0xf6, 0x75, 0xdc, 0xe0];
+    const PEER: [u8; 4] = [10, 0, 2, 16];
+
+    /// A station at .15 with one peer at .16, its MAC learned from an ARP request it sent.
+    fn lan_net() -> VirtualNet {
+        let mut net = VirtualNet::new(false);
+        net.lan = Some(Lan::new(vec![PEER]));
+        let mut arp = vec![0, 1, 8, 0, 6, 4, 0, 1];
+        arp.extend_from_slice(&STA_MAC); arp.extend_from_slice(&net.sta_ip);
+        arp.extend_from_slice(&[0; 6]); arp.extend_from_slice(&PEER);
+        let reply = net.handle(&ethernet(&[0xff; 6], &STA_MAC, 0x0806, &arp), 0);
+        assert_eq!(&reply[0][14 + 8..14 + 14], &GATEWAY_MAC, "a peer's address is the gateway's MAC");
+        net
+    }
+
+    fn syn_to(dst: &[u8; 4]) -> Vec<u8> {
+        let mut t = vec![0u8; 20];
+        t[0..2].copy_from_slice(&40000u16.to_be_bytes()); t[2..4].copy_from_slice(&7000u16.to_be_bytes());
+        t[12] = 0x50; t[13] = 0x02;
+        ip_packet(6, &[10, 0, 2, 15], dst, &t)
+    }
+
+    fn udp_to(dst: &[u8; 4], port: u16) -> Vec<u8> {
+        ip_packet(17, &[10, 0, 2, 15], dst, &udp_packet(&[10, 0, 2, 15], dst, 7001, port, b"hello"))
+    }
+
+    #[test]
+    fn a_syn_to_a_peer_leaves_on_the_lan_not_through_the_nat() {
+        for nat in [false, true] {
+            let mut net = lan_net();
+            let handle = nat.then(|| {
+                let (t, h) = crate::nat::QueueTransport::new();
+                net.nat = Some(crate::nat::Nat::with_transport(false, Box::new(t)));
+                h
+            });
+            let packet = syn_to(&PEER);
+            assert!(net.handle(&ethernet(&GATEWAY_MAC, &STA_MAC, 0x0800, &packet), 1234).is_empty());
+            let lan = net.lan.as_ref().unwrap();
+            assert_eq!(lan.out, vec![(1234, packet)]);
+            assert_eq!(lan.sent, 1);
+            assert_eq!(net.tcp_rejects, 0);
+            if let Some(h) = handle { assert_eq!(h.take_ops(&mut Vec::new()), 0, "nothing for the host"); }
+        }
+    }
+
+    #[test]
+    fn a_non_peer_without_a_nat_is_still_refused() {
+        let mut net = lan_net();
+        let reply = net.handle(&ethernet(&GATEWAY_MAC, &STA_MAC, 0x0800, &syn_to(&[10, 0, 2, 20])), 5);
+        assert_eq!(reply.len(), 1);
+        assert_eq!(reply[0][14 + 20 + 13], 0x14, "RST|ACK");
+        assert!(net.lan.as_ref().unwrap().out.is_empty());
+    }
+
+    #[test]
+    fn udp_broadcast_and_multicast_go_to_the_peers_but_dhcp_stays() {
+        let mut net = lan_net();
+        for (dst, port) in [([10, 0, 2, 255], 7001), ([255, 255, 255, 255], 7001), ([224, 0, 0, 251], 5353)] {
+            assert!(net.handle(&ethernet(&[0xff; 6], &STA_MAC, 0x0800, &udp_to(&dst, port)), 7).is_empty());
+        }
+        let out: Vec<[u8; 4]> = net.lan.as_ref().unwrap().out.iter().map(|(_, p)| p[16..20].try_into().unwrap()).collect();
+        assert_eq!(out, vec![[10, 0, 2, 255], [255, 255, 255, 255], [224, 0, 0, 251]]);
+        // a DHCP DISCOVER is a broadcast too, but the gateway answers it
+        let mut dhcp = vec![0u8; 240];
+        dhcp[0] = 1; dhcp[236..240].copy_from_slice(&[0x63, 0x82, 0x53, 0x63]);
+        dhcp.extend_from_slice(&[53, 1, 1, 255]);
+        let discover = ip_packet(17, &[0; 4], &[255; 4], &udp_packet(&[0; 4], &[255; 4], 68, 67, &dhcp));
+        assert_eq!(net.handle(&ethernet(&[0xff; 6], &STA_MAC, 0x0800, &discover), 8).len(), 1, "an OFFER");
+        assert_eq!(net.lan.as_ref().unwrap().out.len(), 3);
+        // TCP to a broadcast address is not the LAN's
+        assert!(!net.lan_out(6, &[0; 20], &[10, 0, 2, 255], &[]));
+    }
+
+    #[test]
+    fn a_peer_packet_reaches_the_station_from_the_gateway_mac() {
+        let mut net = lan_net();
+        let packet = syn_to(&net.sta_ip.clone());
+        let frame = net.receive_lan(&packet).unwrap();
+        assert_eq!(&frame[..6], &STA_MAC);
+        assert_eq!(&frame[6..12], &GATEWAY_MAC);
+        assert_eq!(&frame[12..14], &[8, 0]);
+        assert_eq!(&frame[14..], &packet[..]);
+        let mut padded = udp_to(&[10, 0, 2, 255], 7001);
+        let len = padded.len();
+        padded.extend_from_slice(&[0; 6]);
+        assert_eq!(net.receive_lan(&padded).unwrap().len(), 14 + len, "a broadcast, trimmed to its length");
+        assert_eq!(&net.receive_lan(&udp_to(&[224, 0, 0, 251], 5353)).unwrap()[..6], &STA_MAC, "multicast as L2 unicast");
+        assert_eq!(net.lan.as_ref().unwrap().received, 3);
+        assert!(net.receive_lan(&syn_to(&[10, 0, 2, 17])).is_err(), "another station's");
+        assert!(net.receive_lan(&packet[..19]).is_err());
+        assert!(net.receive_lan(&packet[..30]).is_err(), "shorter than its total length");
+        let mut fresh = VirtualNet::new(false);
+        fresh.lan = Some(Lan::new(vec![PEER]));
+        assert!(fresh.receive_lan(&packet).is_err(), "the station's MAC is not known yet");
+        net.lan = None;
+        assert!(net.receive_lan(&packet).is_err(), "no LAN");
+    }
+
+    #[test]
+    fn the_lan_holds_a_bounded_number_of_untaken_packets() {
+        let mut net = lan_net();
+        for _ in 0..LAN_OUT_MAX + 3 { net.handle(&ethernet(&GATEWAY_MAC, &STA_MAC, 0x0800, &syn_to(&PEER)), 1); }
+        let lan = net.lan.as_ref().unwrap();
+        assert_eq!((lan.out.len(), lan.sent, lan.dropped), (LAN_OUT_MAX, LAN_OUT_MAX as u64, 3));
+    }
 
     #[test]
     fn ntp_fraction_converts_nanoseconds() {

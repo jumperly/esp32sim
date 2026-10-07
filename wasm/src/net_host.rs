@@ -115,6 +115,121 @@ pub unsafe extern "C" fn esp32sim_wifi_stat(e: *mut Emu, which: u32) -> f64 {
         4 => stats.bytes_to_guest as f64,
         5 => stats.tcp_failed as f64,
         6 => stats.dns_answers as f64,
+        7 => net.and_then(|n| n.lan.as_ref()).map_or(0.0, |l| l.sent as f64),
+        8 => net.and_then(|n| n.lan.as_ref()).map_or(0.0, |l| l.received as f64),
         _ => 0.0,
     }
+}
+
+// ------------------------------------------------------------------ Jumperly patch J14: the station and the LAN
+
+/// Jumperly patch J14: the station's MAC (efuse BLK1 and the machine's), so boards of one network
+/// differ. Before boot only; S3 and C3. Returns 1 otherwise.
+///
+/// # Safety
+/// `e` must point to a live emulator to which the caller has exclusive access; `mac` must be
+/// readable for 6 bytes throughout this call.
+#[no_mangle]
+pub unsafe extern "C" fn esp32sim_set_mac(e: *mut Emu, mac: *const u8) -> u32 {
+    // SAFETY: the caller provides exclusive access to a live emulator.
+    let e = unsafe { &mut *e };
+    if e.booted || mac.is_null() { return 1; }
+    // SAFETY: the caller provides six readable bytes.
+    let mac: [u8; 6] = unsafe { bytes(mac, 6) }.try_into().unwrap();
+    let (efuse, machine_mac) = match &mut e.m {
+        MachineKind::S3(m) => (&mut m.bus.periph.efuse, &mut m.mac),
+        MachineKind::C3(m) => (&mut m.bus.periph.efuse, &mut m.mac),
+        MachineKind::C6(_) => { log("[emu] set mac: ESP32-S3 and ESP32-C3 only"); return 1; }
+    };
+    *machine_mac = mac;
+    // BLK1 words 0 and 1, as `Efuse::new` lays them out; the rest of word 1 is the chip's
+    efuse.write(0x44, u32::from_be_bytes([mac[2], mac[3], mac[4], mac[5]]));
+    let high = efuse.read(0x48) & !0xffff;
+    efuse.write(0x48, high | (u32::from(mac[0]) << 8) | u32::from(mac[1]));
+    0
+}
+
+/// Jumperly patch J14: the IPv4 address DHCP gives the station (default 10.0.2.15), so boards of
+/// one network differ. After `esp32sim_wifi_ap`, before boot. Returns 1 otherwise.
+///
+/// # Safety
+/// `e` must point to a live emulator to which the caller has exclusive access; `ip` must be
+/// readable for 4 bytes throughout this call.
+#[no_mangle]
+pub unsafe extern "C" fn esp32sim_net_station(e: *mut Emu, ip: *const u8) -> u32 {
+    // SAFETY: the caller provides exclusive access to a live emulator.
+    let e = unsafe { &mut *e };
+    if e.booted || ip.is_null() { return 1; }
+    // SAFETY: the caller provides four readable bytes.
+    let ip: [u8; 4] = unsafe { bytes(ip, 4) }.try_into().unwrap();
+    let Some(net) = link(e).and_then(StationLink::net_mut) else { log("[emu] net station: attach the access point first"); return 1 };
+    net.sta_ip = ip;
+    0
+}
+
+/// Jumperly patch J14: the other boards of the station's network (`count` × IPv4[4]). Packets for
+/// them, and UDP broadcasts and multicasts other than DHCP, leave through `esp32sim_lan_take`
+/// instead of the gateway. `count` 0 turns the LAN off. After `esp32sim_wifi_ap` (a new access
+/// point drops it), before or after boot. Returns 1 without an access point.
+///
+/// # Safety
+/// `e` must point to a live emulator to which the caller has exclusive access. For nonzero
+/// `count`, `ptr` must be readable for `count * 4` bytes throughout this call.
+#[no_mangle]
+pub unsafe extern "C" fn esp32sim_lan_peers(e: *mut Emu, ptr: *const u8, count: u32) -> u32 {
+    // SAFETY: the caller provides exclusive access to a live emulator.
+    let e = unsafe { &mut *e };
+    // SAFETY: the caller provides `count * 4` readable bytes.
+    let data = unsafe { bytes(ptr, count as usize * 4) };
+    let Some(net) = link(e).and_then(StationLink::net_mut) else { log("[emu] lan peers: attach the access point first"); return 1 };
+    let peers: Vec<[u8; 4]> = data.chunks_exact(4).map(|a| [a[0], a[1], a[2], a[3]]).collect();
+    match (&mut net.lan, peers.is_empty()) {
+        (_, true) => net.lan = None,
+        (Some(lan), false) => lan.peers = peers,
+        (None, false) => net.lan = Some(esp_soc::net::Lan::new(peers)),
+    }
+    0
+}
+
+/// Jumperly patch J14: take the packets the station sent to other boards since the last call:
+/// their count; the buffer holds, per packet, `f64` device time in µs (the emulated cycles over
+/// the CPU clock in MHz, as the station sent it), `u32` length, then the IPv4 packet padded to a
+/// multiple of 4 bytes. At most 256 wait; more are dropped.
+///
+/// # Safety
+/// `e` must point to a live emulator to which the caller has exclusive access.
+#[no_mangle]
+pub unsafe extern "C" fn esp32sim_lan_take(e: *mut Emu) -> u32 {
+    // SAFETY: the caller provides exclusive access to a live emulator.
+    let e = unsafe { &mut *e };
+    let packets = match link(e).and_then(StationLink::net_mut).and_then(|n| n.lan.as_mut()) {
+        Some(lan) => std::mem::take(&mut lan.out),
+        None => Vec::new(),
+    };
+    e.buf.clear();
+    for (t_us, packet) in &packets {
+        e.buf.extend_from_slice(&(*t_us as f64).to_le_bytes());
+        e.buf.extend_from_slice(&(packet.len() as u32).to_le_bytes());
+        e.buf.extend_from_slice(packet);
+        e.buf.resize(e.buf.len().next_multiple_of(4), 0);
+    }
+    packets.len() as u32
+}
+
+/// Jumperly patch J14: an IPv4 packet from another board for the station, delivered at once (the
+/// host calls it when the packet is due by the station's device time). Returns 0 when accepted;
+/// 1 without a LAN, before the station sent its first frame, or for a packet that is malformed,
+/// longer than 1500 bytes, or not for the station's address, a broadcast or a multicast.
+///
+/// # Safety
+/// `e` must point to a live emulator to which the caller has exclusive access. For nonzero `len`,
+/// `ptr` must be non-null and readable for `len` bytes throughout this call.
+#[no_mangle]
+pub unsafe extern "C" fn esp32sim_lan_receive(e: *mut Emu, ptr: *const u8, len: usize) -> u32 {
+    // SAFETY: the caller provides exclusive access to a live emulator.
+    let e = unsafe { &mut *e };
+    // SAFETY: the caller provides a readable buffer for this call.
+    let packet = unsafe { bytes(ptr, len) };
+    let Some(link) = link(e) else { return 1 };
+    u32::from(link.receive_lan_packet(packet).is_err())
 }

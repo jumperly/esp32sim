@@ -509,7 +509,8 @@ fn net_event(e: &mut Emu, kind: u32, id: u32, arg: u32, data: &[u8]) -> u32 {
     unsafe { esp32sim_net_event(e.0, kind, id, arg, data.as_ptr(), data.len()) }
 }
 
-/// A scripted internet: names resolve (example.com to 93.184.215.14, AAAA to nothing), every TCP
+/// A scripted internet: names resolve (example.com to 93.184.215.14, mcu1.jumperly.internal to the
+/// first board, AAAA to nothing), every TCP
 /// connection opens, and a request is answered `HTTP/1.0 200 OK` with `hi`, then EOF.
 #[derive(Default)]
 struct ScriptedHost { ops: Vec<NetOp>, requests: std::collections::HashMap<u32, Vec<u8>> }
@@ -532,7 +533,7 @@ impl ScriptedHost {
                 }
                 8 => {
                     let name = String::from_utf8(data).unwrap();
-                    let addrs: &[u8] = match (name.as_str(), port) { (_, 28) => &[], ("example.com", _) => &[93, 184, 215, 14], _ => &[203, 0, 113, 7] };
+                    let addrs: &[u8] = match (name.as_str(), port) { (_, 28) => &[], ("example.com", _) => &[93, 184, 215, 14], ("mcu1.jumperly.internal", _) => &[10, 0, 2, 15], _ => &[203, 0, 113, 7] };
                     assert_eq!(net_event(e, 8, id, 60, addrs), 1);
                 }
                 _ => {}
@@ -599,4 +600,135 @@ fn wifi_net_reaches_a_scripted_internet_through_the_host() {
     let closes: Vec<_> = host.ops.iter().filter(|o| o.3 == connect.3 && matches!(o.0, 3 | 4)).map(|o| (o.0, o.1)).collect();
     assert_eq!(closes, vec![(3, 0), (4, 0)], "shutdown, then a graceful close");
     assert_eq!(stat(2), 0.0);
+}
+
+// ------------------------------------------------------------------ Jumperly patch J14: the LAN between boards
+
+const LAN_LATENCY_US: u64 = 500;
+
+fn set_mac(e: *mut esp32sim_wasm::Emu, mac: [u8; 6]) -> u32 { unsafe { esp32sim_set_mac(e, mac.as_ptr()) } }
+
+/// The packets of `esp32sim_lan_take`: (device µs, IPv4 packet).
+fn lan_take(e: &mut Emu) -> Vec<(f64, Vec<u8>)> {
+    let n = unsafe { esp32sim_lan_take(e.0) } as usize;
+    let b = e.buf(unsafe { esp32sim_buf_len(e.0) });
+    let (mut out, mut at) = (Vec::new(), 0);
+    for _ in 0..n {
+        let t = f64::from_le_bytes(b[at..at + 8].try_into().unwrap());
+        let len = u32::from_le_bytes(b[at + 8..at + 12].try_into().unwrap()) as usize;
+        out.push((t, b[at + 12..at + 12 + len].to_vec()));
+        at += (12 + len).next_multiple_of(4);
+    }
+    assert_eq!(at, b.len());
+    out
+}
+
+/// A board of the test network and the packets due to it: (device µs, packet).
+struct Board { e: Emu, ip: [u8; 4], inbox: Vec<(u64, Vec<u8>)>, text: String, host: Option<ScriptedHost> }
+impl Board {
+    fn now_us(&self) -> u64 { self.e.cycles() / MHZ }
+}
+
+fn group(ip: &[u8]) -> bool { ip == [10, 0, 2, 255] || ip == [255; 4] || ip[0] & 0xf0 == 224 }
+
+/// Run every board to `until_us` in lockstep slices of `slice_us`, a packet reaching its peers
+/// `LAN_LATENCY_US` after it was sent, by their own clocks, until `done` holds.
+fn run_lan(boards: &mut [Board], slice_us: u64, until_us: u64, done: impl Fn(&[Board]) -> bool) {
+    let mut t = boards.iter().map(Board::now_us).max().unwrap();
+    while t < until_us && !done(boards) {
+        t += slice_us;
+        for i in 0..boards.len() {
+            loop {
+                let b = &mut boards[i];
+                let target = b.inbox.iter().map(|p| p.0).min().map_or(t, |due| due.min(t));
+                let start = b.now_us();
+                if start < target {
+                    let left = (target * MHZ).saturating_sub(b.e.cycles()).min(u32::MAX as u64) as u32;
+                    assert_eq!(b.e.run(left.max(1)), 0);
+                    b.text += &b.e.uart(0);
+                    b.e.pin_events();
+                    if let Some(h) = &mut b.host { h.serve(&mut b.e); }
+                }
+                let now = b.e.cycles() as f64 / MHZ as f64;
+                let sent = lan_take(&mut boards[i].e);
+                for (stamp, packet) in sent {
+                    assert!(stamp >= start as f64 - 1.0 && stamp <= now + 1.0, "stamp {stamp} outside {start}..{now}");
+                    for (j, peer) in boards.iter_mut().enumerate() {
+                        if j == i || !(packet[16..20] == peer.ip || group(&packet[16..20])) { continue; }
+                        let due = stamp as u64 + LAN_LATENCY_US;
+                        assert!(due >= peer.now_us(), "a packet due at {due} reaches a board already at {}", peer.now_us());
+                        peer.inbox.push((due, packet.clone()));
+                    }
+                }
+                let b = &mut boards[i];
+                let now = b.now_us();
+                let (due, later): (Vec<_>, Vec<_>) = std::mem::take(&mut b.inbox).into_iter().partition(|p| p.0 <= now);
+                b.inbox = later;
+                for (_, packet) in due {
+                    assert_eq!(unsafe { esp32sim_lan_receive(b.e.0, packet.as_ptr(), packet.len()) }, 0);
+                }
+                if now >= t { break; }
+            }
+        }
+    }
+}
+
+fn lan_board(app: &str, ip: [u8; 4], mac_last: u8, peers: &[[u8; 4]], host: bool, cpi: u32) -> Board {
+    let e = Emu::boot_with(app, |e| {
+        if cpi > 1 { assert_eq!(unsafe { esp32sim_set_approximate_jit_timing(e, cpi, 256 / cpi) }, 0); }
+        assert_eq!(set_mac(e, [0x44, 0x1b, 0xf6, 0x75, 0xdc, mac_last]), 0);
+        assert_eq!(wifi_ap(e, "Jumperly", "", 6), 0);
+        assert_eq!(unsafe { esp32sim_net_station(e, ip.as_ptr()) }, 0);
+        let flat: Vec<u8> = peers.concat();
+        assert_eq!(unsafe { esp32sim_lan_peers(e, flat.as_ptr(), peers.len() as u32) }, 0);
+        if host { assert_eq!(unsafe { esp32sim_net_host(e, 0b111) }, 0); }
+    });
+    Board { e, ip, inbox: Vec::new(), text: String::new(), host: host.then(ScriptedHost::default) }
+}
+
+#[test]
+fn two_boards_talk_tcp_and_udp_over_the_lan() {
+    let (server_ip, client_ip) = ([10, 0, 2, 15], [10, 0, 2, 16]);
+    let mut boards = [
+        lan_board("lan-server", server_ip, 0xe0, &[client_ip], false, 1),
+        // the client resolves names through the host and runs at a 80 MHz CPU limit (CPI 3)
+        lan_board("lan-client", client_ip, 0xe4, &[server_ip], true, 3),
+    ];
+    run_lan(&mut boards, 250, 20_000_000, |b| b[1].text.contains("done") && b[0].text.contains("udp: hello"));
+    let (server, client) = (&boards[0], &boards[1]);
+    assert!(server.text.contains("server ip=10.0.2.15 port=7000"), "{}", server.text);
+    assert!(client.text.contains("wifi: connected to Jumperly ip=10.0.2.16"), "{}", client.text);
+    assert_eq!(client.text.matches("lan: pong from 10.0.2.15").count(), 2, "by name and by address: {}", client.text);
+    assert_eq!(server.text.matches("lan: ping from 10.0.2.16").count(), 2, "{}", server.text);
+    assert!(client.text.contains("udp: hello to 10.0.2.255:7001 sent"), "{}", client.text);
+    assert!(server.text.contains("udp: hello from 10.0.2.16"), "the broadcast reached the server: {}", server.text);
+    // the name went to the host, the connections did not: the LAN comes before the NAT
+    let ops = &client.host.as_ref().unwrap().ops;
+    assert!(ops.iter().any(|o| o.0 == 8 && o.4 == b"mcu1.jumperly.internal"), "no RESOLVE");
+    assert!(!ops.iter().any(|o| o.0 == 1), "a TCP_CONNECT reached the host");
+    for b in &boards {
+        let stat = |which| unsafe { esp32sim_wifi_stat(b.e.0, which) };
+        assert!(stat(7) > 0.0 && stat(8) > 0.0, "LAN packets out {} in {}", stat(7), stat(8));
+    }
+}
+
+#[test]
+fn the_station_mac_reaches_the_firmware_and_is_fixed_at_boot() {
+    let mut e = Emu::boot_with("net-mqtt", |e| {
+        assert_eq!(set_mac(e, [0x44, 0x1b, 0xf6, 0x75, 0xdc, 0xe8]), 0);
+        assert_eq!(wifi_ap(e, "Jumperly", "", 6), 0);
+        assert_eq!(unsafe { esp32sim_net_station(e, [10, 0, 2, 17].as_ptr()) }, 0);
+    });
+    let (text, _) = run_until(&mut e, "mqtt: connecting", 8_000_000);
+    assert!(text.contains("ip=10.0.2.17"), "{text}");
+    assert!(text.contains("as jumperly-75dce8"), "{text}");
+    assert_eq!(set_mac(e.0, [2; 6]), 1, "after boot");
+    assert_eq!(unsafe { esp32sim_net_station(e.0, [10, 0, 2, 18].as_ptr()) }, 1, "after boot");
+    let board = "none";
+    let fresh = unsafe { esp32sim_new(board.as_ptr(), board.len(), 4, 0) };
+    assert_eq!(unsafe { esp32sim_net_station(fresh, [10, 0, 2, 18].as_ptr()) }, 1, "no access point");
+    assert_eq!(unsafe { esp32sim_lan_peers(fresh, [10, 0, 2, 18].as_ptr(), 1) }, 1, "no access point");
+    assert_eq!(unsafe { esp32sim_lan_take(fresh) }, 0);
+    assert_eq!(unsafe { esp32sim_lan_receive(fresh, [0u8; 20].as_ptr(), 20) }, 1);
+    unsafe { esp32sim_delete(fresh) };
 }

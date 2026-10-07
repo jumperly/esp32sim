@@ -545,6 +545,16 @@ impl StationLink {
         self.eth_rx.extend(net.poll(now_us));
     }
 
+    /// Jumperly patch J14: an IPv4 packet from another board of the network, for the station: it is
+    /// delivered like the network's own frames (`VirtualNet::receive_lan`). Not in relay mode.
+    pub fn receive_lan_packet(&mut self, packet: &[u8]) -> Result<(), String> {
+        if self.relay || self.ap.is_none() { return Err("a LAN packet needs the virtual network behind the access point".into()); }
+        let Some(net) = self.net.as_mut() else { return Err("no network behind the access point".into()) };
+        let frame = net.receive_lan(packet)?;
+        self.eth_rx.push(frame);
+        Ok(())
+    }
+
     /// Switch the host's Ethernet relay on or off; a change empties both queues.
     pub fn set_relay(&mut self, enabled: bool) {
         if self.relay != enabled { self.eth_tx.clear(); self.eth_rx.clear(); self.relay = enabled; }

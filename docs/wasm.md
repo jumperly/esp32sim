@@ -329,3 +329,30 @@ for (;;) {
 `wasm/tests/jumperly.rs` (`wifi_net_reaches_a_scripted_internet_through_the_host`) runs the
 `wifi-net` fixture against a scripted host: `dns: example.com -> 93.184.215.14`, SNTP time,
 `http GET http://example.com/ -> 200`, then TCP_SHUTDOWN and TCP_CLOSE.
+
+## LAN between boards
+
+Jumperly patch J14. Boards of one Wi-Fi network (one emulator each) reach each other at the IP
+level: a packet for a peer's address, and a UDP broadcast or multicast other than DHCP
+(`10.0.2.255`, `255.255.255.255`, `224.0.0.0/4`), leaves the station's virtual network before the
+gateway's services and the NAT see it. The page stamps it with the sender's device time and
+hands it to each peer when that peer's clock reaches the stamp plus its latency (Jumperly: 500 µs,
+longer than a multi-board slice, so delivery is exact however the run is sliced). Every address
+of the subnet resolves to the gateway's MAC (proxy ARP), so the router needs no ARP of its own;
+a delivered packet comes from the gateway's MAC to the station's MAC, also a broadcast or
+multicast one. Both ends run real lwIP: `WiFiServer` on one board accepts `WiFiClient` of
+another. mDNS works over it ([evidence](evidence/mdns-lan-2026-10-07/README.md)).
+
+| Export | Contract |
+| --- | --- |
+| `esp32sim_set_mac(e, ptr6)` | The station's MAC (efuse BLK1 and the machine's), S3 and C3, before boot; 1 otherwise. |
+| `esp32sim_net_station(e, ptr4)` | The address DHCP gives the station (default 10.0.2.15). After `esp32sim_wifi_ap`, before boot; 1 otherwise. |
+| `esp32sim_lan_peers(e, ptr, count)` | The other boards' addresses (`count` × IPv4[4]); 0 turns the LAN off. After `esp32sim_wifi_ap` (a new access point drops it); 1 without one. |
+| `esp32sim_lan_take(e)` | The packets sent to peers since the last call: their count; per packet `f64` device µs (cycles over the CPU MHz), `u32` length, the IPv4 packet padded to 4 bytes. At most 256 wait; more are dropped. |
+| `esp32sim_lan_receive(e, ptr, len)` | An IPv4 packet for the station, queued for its receive ring at once: 0 accepted; 1 without a LAN, before the station's first frame, or for a malformed packet, one over 1500 bytes or one for another address. |
+
+A packet for a subnet address that is neither a peer nor a service goes on as before: refused
+with RST without the host transport, to the host with it. `wasm/tests/jumperly.rs`
+(`two_boards_talk_tcp_and_udp_over_the_lan`) runs `lan-server` (10.0.2.15) and `lan-client`
+(10.0.2.16, its names through a scripted host, CPI 3) in lockstep: `lan: pong from 10.0.2.15` by
+name and by address, `udp: hello from 10.0.2.16` on the server.
