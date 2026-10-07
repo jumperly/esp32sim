@@ -21,7 +21,9 @@ fn merged(app: &str) -> Vec<u8> {
 
 struct Emu(*mut esp32sim_wasm::Emu);
 impl Emu {
-    fn boot(app: &str) -> Emu {
+    fn boot(app: &str) -> Emu { Emu::boot_with(app, |_| {}) }
+    /// Boot `app`, calling `setup` on the emulator after the images are loaded and before boot.
+    fn boot_with(app: &str, setup: impl FnOnce(*mut esp32sim_wasm::Emu)) -> Emu {
         let board = "none";
         // SAFETY: the board name is readable for the call; the pointer is checked for null.
         let e = unsafe { esp32sim_new(board.as_ptr(), board.len(), 4, 0) };
@@ -33,8 +35,10 @@ impl Emu {
             assert_eq!(esp32sim_jumperly_mode(e), 0);
             assert_eq!(esp32sim_load(e, 0, rom.as_ptr(), rom.len()), 0);
             assert_eq!(esp32sim_load(e, 5, flash.as_ptr(), flash.len()), 0);
-            assert_eq!(esp32sim_boot(e, 0), 0);
         }
+        setup(e);
+        // SAFETY: as above.
+        unsafe { assert_eq!(esp32sim_boot(e, 0), 0) };
         emu
     }
     fn run(&mut self, cycles: u32) -> u32 { unsafe { esp32sim_run(self.0, cycles, 0.0) } }
@@ -427,4 +431,56 @@ fn c3_a_host_reset_reboots_the_chip_and_keeps_the_clock() {
     let (_, _, text) = e.run_c3(600_000);
     assert_eq!(text.matches("Ready").count(), 1, "{text}");
     assert!(e.cycles() >= before + 600_000 * C3_MHZ);
+}
+
+// ------------------------------------------------------------------ Jumperly patch J11: Wi-Fi
+
+/// Attach the virtual AP from fields (`esp32sim_wifi_ap`); returns its result code.
+fn wifi_ap(e: *mut esp32sim_wasm::Emu, ssid: &str, psk: &str, channel: u32) -> u32 {
+    // SAFETY: `e` is live and exclusively ours; the strings are readable for the call.
+    unsafe { esp32sim_wifi_ap(e, ssid.as_ptr(), ssid.len(), psk.as_ptr(), psk.len(), channel) }
+}
+
+/// The SSID `esp32sim_wifi_probe_take` hands over, if any.
+fn probed(e: &mut Emu) -> Option<String> {
+    let n = unsafe { esp32sim_wifi_probe_take(e.0) } as usize;
+    (n > 0).then(|| String::from_utf8_lossy(&e.buf(n)).into_owned())
+}
+
+/// Run until UART0 shows `text`, at most `max_us` of device time; the probed SSIDs on the way.
+fn run_until(e: &mut Emu, text: &str, max_us: u64) -> (String, Vec<String>) {
+    let (mut out, mut ssids) = (String::new(), Vec::new());
+    let end = e.cycles() + max_us * MHZ;
+    while e.cycles() < end && !out.contains(text) {
+        let (_, t) = e.run_for(10_000 * MHZ);
+        out += &t;
+        ssids.extend(probed(e));
+    }
+    (out, ssids)
+}
+
+#[test]
+fn wifi_ap_rejects_bad_fields_before_anything_is_attached() {
+    let board = "none";
+    let e = unsafe { esp32sim_new(board.as_ptr(), board.len(), 4, 0) };
+    assert!(!e.is_null());
+    assert_eq!(wifi_ap(e, "", "", 6), 1);
+    assert_eq!(wifi_ap(e, "Jumperly", "short", 6), 1);
+    assert_eq!(wifi_ap(e, "Jumperly", "", 15), 1);
+    assert_eq!(wifi_ap(e, "a,b=c", "pass,word=1", 1), 0);
+    assert_eq!(unsafe { esp32sim_wifi_probe_take(e) }, 0, "nothing probed yet");
+    unsafe { esp32sim_delete(e) };
+}
+
+#[test]
+fn a_sketch_joining_another_network_shows_its_ssid_and_joins_once_the_ap_matches() {
+    let mut e = Emu::boot_with("wifi-home", |e| assert_eq!(wifi_ap(e, "Jumperly", "", 6), 0));
+    let (_, ssids) = run_until(&mut e, "connected", 4_000_000);
+    assert!(ssids.iter().any(|s| s == "Home"), "probed {ssids:?}");
+    assert!(ssids.iter().all(|s| s == "Home"), "probed {ssids:?}");
+    drop(e);
+    let mut e = Emu::boot_with("wifi-home", |e| assert_eq!(wifi_ap(e, "Home", "home-pass-123", 6), 0));
+    let (text, ssids) = run_until(&mut e, "connected ip=10.0.2.15", 8_000_000);
+    assert!(text.contains("connected ip=10.0.2.15"), "{text}");
+    assert!(ssids.is_empty(), "probed {ssids:?}");
 }

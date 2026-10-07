@@ -73,6 +73,22 @@ impl ApConfig {
         }
         Ok(cfg)
     }
+
+    /// Jumperly patch J11: the access point from separate fields, so an SSID or a passphrase may
+    /// hold `,` and `=`. The SSID takes 1..=32 bytes; the passphrase is absent (an open network)
+    /// or 8..=63 bytes, as WPA2-PSK requires; the channel is 1..=14. The BSSID is the default.
+    pub fn from_fields(ssid: &str, psk: Option<&str>, channel: u8) -> Result<Self, String> {
+        if !(1..=32).contains(&ssid.len()) { return Err(format!("invalid WiFi SSID: {} bytes, expected 1 through 32", ssid.len())); }
+        if let Some(psk) = psk {
+            if !(8..=63).contains(&psk.len()) { return Err(format!("invalid WiFi passphrase: {} bytes, expected 8 through 63", psk.len())); }
+        }
+        if !(1..=14).contains(&channel) { return Err(format!("invalid WiFi channel '{channel}': expected 1 through 14")); }
+        let mut cfg = Self::parse("")?;
+        cfg.ssid = ssid.to_string();
+        cfg.psk = psk.map(str::to_string);
+        cfg.channel = channel;
+        Ok(cfg)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -113,6 +129,9 @@ pub struct VirtualAp {
     pub log: bool,
     pub stats: (u64, u64, u64),   // beacons, probe responses, data frames from the station
     pub pn: u64,                  // CCMP packet number for frames we send
+    /// Jumperly patch J11: the SSID of the last directed probe request for another network, until
+    /// the host takes it (`take_probed`). A station that joins a network sends one with that SSID.
+    pub probed: Option<Vec<u8>>,
 }
 
 impl VirtualAp {
@@ -126,8 +145,11 @@ impl VirtualAp {
             for i in 0..16 { wpa.gtk[i] = seed[(i + 3) % 20] ^ 0x5a; }
         }
         VirtualAp { cfg, wpa, state: StaState::Idle, sta: [0; 6], aid: 1, next_beacon_us: 100_000, beacon_interval_us: 102_400, seq: 0,
-                    queue: Vec::new(), pn: 0, log, stats: (0, 0, 0) }
+                    queue: Vec::new(), pn: 0, log, stats: (0, 0, 0), probed: None }
     }
+    /// Jumperly patch J11: the SSID of the last directed probe request that named another network
+    /// since the last call. A wildcard probe (a scan) and a probe for this AP's SSID leave it.
+    pub fn take_probed(&mut self) -> Option<Vec<u8>> { self.probed.take() }
     fn hdr(&mut self, fc: u16, a1: &[u8; 6], a3: &[u8; 6]) -> Vec<u8> {
         let mut f = Vec::with_capacity(128);
         f.extend_from_slice(&fc.to_le_bytes()); f.extend_from_slice(&[0, 0]);   // fc, duration
@@ -185,7 +207,12 @@ impl VirtualAp {
         match (ty, st) {
             (0, 4) => {                                                                      // probe request: for us or wildcard?
                 let ssid_ok = ies(f, 24).iter().any(|(id, d)| *id == 0 && (d.is_empty() || *d == self.cfg.ssid.as_bytes()));
+                // Jumperly patch J11: remember a directed probe for another SSID (the network the firmware looks for)
+                let other = if to_us(&f[4..10]) {
+                    ies(f, 24).into_iter().find(|(id, d)| *id == 0 && !d.is_empty() && *d != self.cfg.ssid.as_bytes()).map(|(_, d)| d.to_vec())
+                } else { None };
                 if ssid_ok && to_us(&f[4..10]) { let r = self.beacon_like(5, &a2, now_us); self.stats.1 += 1; self.send(now_us + 1500, r); }
+                if other.is_some() { self.probed = other; }
             }
             (0, 11) if f.len() >= 30 && to_us(&f[4..10]) => {                                // authentication (open system)
                 let (alg, seq) = (u16::from_le_bytes([f[24], f[25]]), u16::from_le_bytes([f[26], f[27]]));
@@ -443,6 +470,8 @@ impl StationLink {
     pub fn rx_frames(&self) -> u64 { self.rx_frames }
     pub fn rx_dropped(&self) -> u64 { self.rx_dropped }
     pub fn tx_dropped(&self) -> u64 { self.tx_dropped }
+    /// Jumperly patch J11: `VirtualAp::take_probed` of the access point, None without one.
+    pub fn take_probed_ssid(&mut self) -> Option<Vec<u8>> { self.ap.as_mut()?.take_probed() }
 
     /// The station sent `frame` at `now_us`: the access point hears it, and what it passes on as
     /// data goes to the network or the relay.

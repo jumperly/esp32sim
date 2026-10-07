@@ -416,6 +416,59 @@ pub unsafe extern "C" fn esp32sim_gpio_in_pin(e: *mut Emu, signal: u32) -> u32 {
     match sel { Some(sel) if sel & 0x80 != 0 => sel & 0x3f, _ => 255 }
 }
 
+// ------------------------------------------------------------------ Jumperly patch J11: Wi-Fi
+
+/// Jumperly patch J11: attach the virtual access point and its subnet like `esp32sim_wifi`, from
+/// separate fields instead of a `key=value,...` spec, so the SSID and the passphrase may hold any
+/// UTF-8 (`,` and `=` included). `psk_len` 0 is an open network; otherwise WPA2-PSK with 8..=63
+/// bytes. The SSID takes 1..=32 bytes, the channel 1..=14. Returns 1 with the reason logged.
+///
+/// # Safety
+/// `e` must point to a live emulator to which the caller has exclusive access. For each nonzero
+/// length, its pointer must be non-null and readable for that many bytes throughout this call.
+#[no_mangle]
+pub unsafe extern "C" fn esp32sim_wifi_ap(e: *mut Emu, ssid: *const u8, ssid_len: usize, psk: *const u8, psk_len: usize, channel: u32) -> u32 {
+    // SAFETY: the caller provides exclusive access to a live emulator.
+    let e = unsafe { &mut *e };
+    // SAFETY: the caller provides readable buffers for this call.
+    let (ssid, psk) = unsafe { (bytes(ssid, ssid_len), bytes(psk, psk_len)) };
+    let (Ok(ssid), Ok(psk)) = (std::str::from_utf8(ssid), std::str::from_utf8(psk)) else {
+        log("[emu] wifi: the SSID or the passphrase is not UTF-8");
+        return 1;
+    };
+    let channel = u8::try_from(channel).unwrap_or(0);
+    let cfg = match esp_soc::wifi::ApConfig::from_fields(ssid, (!psk.is_empty()).then_some(psk), channel) {
+        Ok(cfg) => cfg,
+        Err(reason) => { log(&format!("[emu] wifi: {reason}")); return 1; }
+    };
+    log(&format!("[emu] virtual AP '{}' ({}, channel {}), subnet 10.0.2.0/24, no NAT in the browser", cfg.ssid, if cfg.psk.is_some() { "WPA2-PSK" } else { "open" }, cfg.channel));
+    if let Err(reason) = e.m.bus().attach_wifi(cfg, None) { log(&format!("[emu] wifi: {reason}")); return 1; }
+    0
+}
+
+/// Jumperly patch J11: the SSID of the last directed probe request for a network other than the
+/// virtual access point's since the last call (the network the firmware looks for): its length,
+/// 0 for none; the bytes are in the buffer (`esp32sim_buf_ptr`).
+///
+/// # Safety
+/// `e` must point to a live emulator to which the caller has exclusive access.
+#[no_mangle]
+pub unsafe extern "C" fn esp32sim_wifi_probe_take(e: *mut Emu) -> u32 {
+    // SAFETY: the caller provides exclusive access to a live emulator.
+    let e = unsafe { &mut *e };
+    e.buf.clear();
+    let ssid = if let Some(m) = e.m.c3_mut() {
+        m.bus.periph.wifi.link.take_probed_ssid()
+    } else if let Some(m) = e.m.s3_mut() {
+        m.bus.periph.wifi.link.take_probed_ssid()
+    } else {
+        None
+    };
+    let Some(ssid) = ssid else { return 0 };
+    e.buf.extend_from_slice(&ssid);
+    ssid.len() as u32
+}
+
 #[cfg(test)]
 mod bus_host_tests {
     use super::*;
