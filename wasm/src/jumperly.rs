@@ -284,6 +284,16 @@ pub unsafe extern "C" fn esp32sim_buf_ptr(e: *mut Emu) -> *const u8 {
     unsafe { &*e }.buf.as_ptr()
 }
 
+/// Jumperly patch J13: the length of the result buffer of the last `*_take` call.
+///
+/// # Safety
+/// `e` must point to a live emulator, and no mutable access may overlap this call.
+#[no_mangle]
+pub unsafe extern "C" fn esp32sim_buf_len(e: *mut Emu) -> usize {
+    // SAFETY: the caller provides shared access to a live emulator.
+    unsafe { &*e }.buf.len()
+}
+
 // ------------------------------------------------------------------ Jumperly patch J6/J7: bus bridges
 
 #[cfg(target_arch = "wasm32")]
@@ -443,6 +453,7 @@ pub unsafe extern "C" fn esp32sim_wifi_ap(e: *mut Emu, ssid: *const u8, ssid_len
     };
     log(&format!("[emu] virtual AP '{}' ({}, channel {}), subnet 10.0.2.0/24, no NAT in the browser", cfg.ssid, if cfg.psk.is_some() { "WPA2-PSK" } else { "open" }, cfg.channel));
     if let Err(reason) = e.m.bus().attach_wifi(cfg, None) { log(&format!("[emu] wifi: {reason}")); return 1; }
+    e.net = None;   // Jumperly patch J13: a new network has no host transport until esp32sim_net_host
     0
 }
 

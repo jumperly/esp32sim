@@ -179,10 +179,10 @@ Normal builds contain neither the sampling code nor the clock import.
 
 ## Limits
 
-- **No NAT.** The browser has no sockets. With a `wifi=` spec the firmware still associates,
+- **No sockets.** The browser has none. With a `wifi=` spec the firmware still associates,
   gets a DHCP lease, resolves names and syncs time against the emulated subnet, but connections
-  past the gateway are refused (the `--net none` behaviour). A WebSocket relay to a small host
-  helper is the planned way out (`wasm-plan.md`).
+  past the gateway are refused (the `--net none` behaviour) — unless the page carries them itself
+  over the [host network](#host-network).
 - **No file outputs**: `--wav`, `--tft-png`, register traces — the page is the output.
 - **Emulator log lines** (`[emu] …`) that the native build prints to stderr do not exist here,
   except the ones the wasm glue forwards (stubs, resets, load errors) to the console tab and the
@@ -259,3 +259,73 @@ batch remains readable until the next `ethernet_take` or emulator deletion.
 
 The [Arduino relay check](evidence/ethernet-c3-2026-10-02/relay.mjs) shows the ABI
 with a host DHCP responder.
+
+## Host network
+
+Jumperly patch J13. The page can carry the station's traffic itself: the user-mode NAT runs in
+the module as natively, but over a `QueueTransport` (`esp-soc/src/nat/queue.rs`) instead of
+sockets. The guest's socket operations queue up as records the page takes after every run, and
+the page answers with events before the next one — the deferred-bridge pattern of the I2C / SPI
+bridges, without threads.
+
+| Export | Contract |
+| --- | --- |
+| `esp32sim_net_host(e, flags)` | bit 0 host transport, bit 1 the host resolves A / AAAA (`RESOLVE`), bit 2 SNTP answered locally. After `esp32sim_wifi_ap` (a new access point drops it), before or after boot; survives a chip reset. Flags without bit 0 restore the stage-1 subnet. 1 without an access point. |
+| `esp32sim_net_take(e)` | The records queued since the last call: their count; bytes in the buffer (`esp32sim_buf_ptr`, `esp32sim_buf_len`). |
+| `esp32sim_buf_len(e)` | Length of the buffer of the last `*_take` call. |
+| `esp32sim_net_event(e, kind, id, arg, ptr, len)` | One event (below). `TCP_DATA` returns the bytes taken, `UDP_DATA` 1 taken / 0 dropped, the rest 1 applied / 0 not waited for. |
+| `esp32sim_wifi_stat(e, which)` | 0 associated (keys installed), 1 DHCP lease given, 2 TCP flows open through the host, 3 bytes to the host, 4 bytes from the host, 5 TCP flows the host could not open, 6 DNS answers from the host, 7 / 8 LAN packets out / in. |
+
+Records, little-endian, each padded to a multiple of 4 bytes:
+`u8 op, u8 flags, u16 port, u32 id, u32 len, len bytes`.
+
+| op | Record | Fields |
+| --- | --- | --- |
+| 1 | TCP_CONNECT | `id` = flow, `port`, data = IPv4[4] |
+| 2 | TCP_DATA | the guest's bytes, never more than the host's credit |
+| 3 | TCP_SHUTDOWN | the guest finished sending (FIN, every byte before it written) |
+| 4 | TCP_CLOSE | the NAT forgot the flow; flags bit 0 = abort (guest RST, reboot) |
+| 5 | UDP_OPEN | `port`, data = IPv4[4] |
+| 6 | UDP_DATA | one datagram |
+| 7 | UDP_CLOSE | |
+| 8 | RESOLVE | `id` = query, `port` = qtype (1 A, 28 AAAA), data = the name (UTF-8) |
+
+| kind | Event | `arg` / data |
+| --- | --- | --- |
+| 1 | CONNECTED | `arg` = bytes the host takes before its first credit |
+| 2 | FAILED | `arg` 1 refused, 2 unreachable / timed out, 3 policy, 4 offline; the guest gets RST\|ACK. On an open flow it is a reset |
+| 3 | TCP_DATA | the host's bytes; at most 64 KiB wait per flow, the rest is offered again later |
+| 4 | TCP_EOF | the remote side finished sending |
+| 5 | TCP_RESET | after the bytes already taken |
+| 6 | TX_CREDIT | `arg` more bytes |
+| 7 | UDP_DATA | one datagram; 16 wait per flow |
+| 8 | RESOLVED | `id` = query, `arg` = TTL, data = n × IPv4[4] (none: an empty answer) |
+| 9 | UNRESOLVED | `arg` = rcode 2 SERVFAIL or 3 NXDOMAIN |
+
+Limits per board: 16 TCP flows (the 17th SYN is dropped and retried by the guest), 64 KiB waiting
+for the guest per TCP flow, 256 KiB of data in untaken records (`tcp_write` blocks, a datagram is
+dropped), 16 datagrams per UDP flow. Flow ids grow and are not reused while a flow lives. No
+TCP_CLOSE follows FAILED or TCP_RESET: the host has forgotten the flow already. Data for a flow
+the guest has forgotten is taken and dropped. With bit 1 the host sees no DNS datagrams: A and AAAA
+go as `RESOLVE`, any other query is answered here, empty (NOERROR). With bit 2 SNTP is answered
+from `esp32sim_run`'s `unix_ms`; without it the guest's NTP goes to the host as UDP. ICMP echo
+is answered locally for any address.
+
+A host loop:
+
+```js
+for (;;) {
+  for (const ev of dueEvents()) {                                  // in arrival order
+    const taken = deliver(ev);                                     // esp32sim_net_event
+    if (ev.kind === 3 && taken < ev.bytes.length) keep(ev, taken); // offer the rest next time
+  }
+  exports.esp32sim_run(e, cycles, Date.now());
+  const n = exports.esp32sim_net_take(e);
+  const records = new DataView(memory.buffer, exports.esp32sim_buf_ptr(e), exports.esp32sim_buf_len(e));
+  forward(records, n);                                             // to the gateway
+}
+```
+
+`wasm/tests/jumperly.rs` (`wifi_net_reaches_a_scripted_internet_through_the_host`) runs the
+`wifi-net` fixture against a scripted host: `dns: example.com -> 93.184.215.14`, SNTP time,
+`http GET http://example.com/ -> 200`, then TCP_SHUTDOWN and TCP_CLOSE.

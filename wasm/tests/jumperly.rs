@@ -484,3 +484,119 @@ fn a_sketch_joining_another_network_shows_its_ssid_and_joins_once_the_ap_matches
     assert!(text.contains("connected ip=10.0.2.15"), "{text}");
     assert!(ssids.is_empty(), "probed {ssids:?}");
 }
+
+// ------------------------------------------------------------------ Jumperly patch J13: the host's network
+
+/// One record of `esp32sim_net_take`: (op, flags, port, id, data).
+type NetOp = (u8, u8, u16, u32, Vec<u8>);
+
+fn net_take(e: &mut Emu) -> Vec<NetOp> {
+    let n = unsafe { esp32sim_net_take(e.0) } as usize;
+    let b = e.buf(unsafe { esp32sim_buf_len(e.0) });
+    let (mut out, mut at) = (Vec::new(), 0);
+    for _ in 0..n {
+        let r = &b[at..];
+        let len = u32::from_le_bytes(r[8..12].try_into().unwrap()) as usize;
+        out.push((r[0], r[1], u16::from_le_bytes([r[2], r[3]]), u32::from_le_bytes(r[4..8].try_into().unwrap()), r[12..12 + len].to_vec()));
+        at += (12 + len).next_multiple_of(4);
+    }
+    assert_eq!(at, b.len());
+    out
+}
+
+fn net_event(e: &mut Emu, kind: u32, id: u32, arg: u32, data: &[u8]) -> u32 {
+    // SAFETY: `e` is live and exclusively ours; `data` is readable for the call.
+    unsafe { esp32sim_net_event(e.0, kind, id, arg, data.as_ptr(), data.len()) }
+}
+
+/// A scripted internet: names resolve (example.com to 93.184.215.14, AAAA to nothing), every TCP
+/// connection opens, and a request is answered `HTTP/1.0 200 OK` with `hi`, then EOF.
+#[derive(Default)]
+struct ScriptedHost { ops: Vec<NetOp>, requests: std::collections::HashMap<u32, Vec<u8>> }
+const HTTP_REPLY: &[u8] = b"HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\nhi";
+
+impl ScriptedHost {
+    fn serve(&mut self, e: &mut Emu) {
+        for op in net_take(e) {
+            let (kind, _, port, id, data) = op.clone();
+            match kind {
+                1 => assert_eq!(net_event(e, 1, id, 65536, &[]), 1),
+                2 => {
+                    let req = self.requests.entry(id).or_default();
+                    let complete = req.windows(4).any(|w| w == b"\r\n\r\n");
+                    req.extend_from_slice(&data);
+                    if !complete && req.windows(4).any(|w| w == b"\r\n\r\n") {
+                        assert_eq!(net_event(e, 3, id, 0, HTTP_REPLY), HTTP_REPLY.len() as u32);
+                        assert_eq!(net_event(e, 4, id, 0, &[]), 1);
+                    }
+                }
+                8 => {
+                    let name = String::from_utf8(data).unwrap();
+                    let addrs: &[u8] = match (name.as_str(), port) { (_, 28) => &[], ("example.com", _) => &[93, 184, 215, 14], _ => &[203, 0, 113, 7] };
+                    assert_eq!(net_event(e, 8, id, 60, addrs), 1);
+                }
+                _ => {}
+            }
+            self.ops.push(op);
+        }
+    }
+}
+
+#[test]
+fn net_host_needs_an_access_point_and_without_it_nothing_is_queued() {
+    let board = "none";
+    let e = unsafe { esp32sim_new(board.as_ptr(), board.len(), 4, 0) };
+    assert!(!e.is_null());
+    assert_eq!(unsafe { esp32sim_net_host(e, 0b111) }, 1);
+    assert_eq!(unsafe { esp32sim_net_take(e) }, 0);
+    assert_eq!(unsafe { esp32sim_net_event(e, 1, 1, 0, std::ptr::null(), 0) }, 0);
+    assert_eq!(wifi_ap(e, "Jumperly", "", 6), 0);
+    assert_eq!(unsafe { esp32sim_net_host(e, 0b111) }, 0);
+    assert_eq!(unsafe { esp32sim_wifi_stat(e, 0) }, 0.0);
+    assert_eq!(unsafe { esp32sim_net_event(e, 99, 1, 0, std::ptr::null(), 0) }, 0, "unknown kind");
+    assert_eq!(wifi_ap(e, "Jumperly", "", 6), 0);
+    assert_eq!(unsafe { esp32sim_net_event(e, 9, 1, 3, std::ptr::null(), 0) }, 0, "a new access point drops the host transport");
+    unsafe { esp32sim_delete(e) };
+}
+
+#[test]
+fn wifi_net_reaches_a_scripted_internet_through_the_host() {
+    let mut e = Emu::boot_with("wifi-net", |e| {
+        assert_eq!(wifi_ap(e, "Jumperly", "", 6), 0);
+        assert_eq!(unsafe { esp32sim_net_host(e, 0b111) }, 0);
+    });
+    let mut host = ScriptedHost::default();
+    let mut text = String::new();
+    let end = e.cycles() + 30_000_000 * MHZ;
+    while e.cycles() < end && !text.contains("http GET") {
+        let (_, t) = e.run_for(10_000 * MHZ);
+        text += &t;
+        host.serve(&mut e);
+    }
+    assert!(text.contains("ip=10.0.2.15 gw=10.0.2.2 dns=10.0.2.3"), "{text}");
+    assert!(text.contains("dns: example.com -> 93.184.215.14"), "{text}");
+    assert!(text.contains("time: 20"), "SNTP answered locally: {text}");
+    assert!(text.contains("http GET http://example.com/ -> 200"), "{text}");
+    let kinds: Vec<u8> = host.ops.iter().map(|o| o.0).collect();
+    assert!(!kinds.contains(&5), "no UDP through the host (DNS by RESOLVE, SNTP local): {kinds:?}");
+    let connect = host.ops.iter().find(|o| o.0 == 1).expect("no TCP_CONNECT").clone();
+    assert_eq!((connect.2, connect.4.as_slice()), (80, &[93, 184, 215, 14][..]));
+    let request = String::from_utf8_lossy(&host.requests[&connect.3]).into_owned();
+    assert!(request.starts_with("GET / HTTP/1.1\r\n") && request.contains("Host: example.com"), "{request}");
+    let raw = e.0;
+    let stat = |which| unsafe { esp32sim_wifi_stat(raw, which) };
+    assert_eq!((stat(0), stat(1)), (1.0, 1.0), "joined, leased");
+    assert_eq!(stat(3), request.len() as f64);
+    assert_eq!(stat(4), HTTP_REPLY.len() as f64);
+    assert!(stat(6) >= 2.0, "example.com and pool.ntp.org");
+    assert_eq!(stat(5), 0.0);
+    // http.end() closes the flow: the guest's FIN, then the NAT forgets it.
+    for _ in 0..100 {
+        if host.ops.iter().any(|o| o.0 == 4 && o.3 == connect.3) { break; }
+        e.run_for(10_000 * MHZ);
+        host.serve(&mut e);
+    }
+    let closes: Vec<_> = host.ops.iter().filter(|o| o.3 == connect.3 && matches!(o.0, 3 | 4)).map(|o| (o.0, o.1)).collect();
+    assert_eq!(closes, vec![(3, 0), (4, 0)], "shutdown, then a graceful close");
+    assert_eq!(stat(2), 0.0);
+}

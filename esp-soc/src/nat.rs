@@ -15,6 +15,9 @@ mod std_transport;
 mod transport;
 pub use std_transport::StdTransport;
 pub use transport::{Connect, FlowId, NatTransport, Resolve};
+// Jumperly patch J13: the transport of a host without sockets, driven through a queue.
+pub mod queue;
+pub use queue::{HostEvent, QueueHandle, QueueTransport};
 
 const MSS: usize = 1400;
 const WINDOW: u16 = 5840;
