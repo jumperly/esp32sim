@@ -781,3 +781,76 @@ fn the_host_connects_to_a_guest_server_and_a_closed_port_refuses() {
     let stat = |which| unsafe { esp32sim_wifi_stat(e.0, which) };
     assert_eq!((stat(2), stat(3), stat(4)), (0.0, 5.0, 5.0));
 }
+
+// ------------------------------------------------------------------ Jumperly patch J13: bulk TCP through the host
+
+/// What `bulk_transfer` measured: bytes per device second and per wall second, each way.
+#[derive(Debug)]
+struct Bulk { down_dev: f64, down_wall: f64, up_dev: f64, up_wall: f64 }
+
+/// `net-bulk` against a host that streams `down` bytes (i % 251) to port 9001 as fast as the
+/// emulator takes them, then EOF, and takes everything uploaded to port 9002 at once (credit back
+/// for every byte). The download's device time is the sketch's own `millis()` until it read the
+/// last byte; the upload's runs from the connect to the host's last byte.
+fn bulk_transfer(down: u32, cpi: u32) -> Bulk {
+    let mut e = Emu::boot_with("net-bulk", |e| {
+        if cpi > 1 { assert_eq!(unsafe { esp32sim_set_approximate_jit_timing(e, cpi, 256 / cpi) }, 0); }
+        assert_eq!(wifi_ap(e, "Jumperly", "", 6), 0);
+        assert_eq!(unsafe { esp32sim_net_host(e, 0b111) }, 0);
+    });
+    let (mut text, _) = run_until(&mut e, "wifi: connected", 20_000_000);
+    let (mut down_id, mut up_id, mut sent, mut eof, mut got) = (None, None, 0u32, false, 0u32);
+    let (mut down_wall, mut up_wall) = (None::<std::time::Instant>, None::<std::time::Instant>);
+    let (mut down_secs, mut up_secs, mut up_from, mut up_us) = (0.0, 0.0, 0u64, 0u64);
+    let chunk: Vec<u8> = (0..16384u32).map(|i| (i % 251) as u8).collect();
+    let end = e.cycles() + 600_000_000 * MHZ;
+    while e.cycles() < end && !(text.contains("done") && got >= 262_144) {
+        let (_, t) = e.run_for(1_000 * MHZ);
+        text += &t;
+        if text.contains("down: ") && down_secs == 0.0 { down_secs = down_wall.map_or(0.0, |w| w.elapsed().as_secs_f64()); }
+        for (kind, _, port, id, data) in net_take(&mut e) {
+            match (kind, port) {
+                (1, 9001) => { down_id = Some(id); down_wall = Some(std::time::Instant::now()); assert_eq!(net_event(&mut e, 1, id, 65536, &[]), 1); }
+                (1, 9002) => { up_id = Some(id); up_from = e.cycles(); up_wall = Some(std::time::Instant::now()); assert_eq!(net_event(&mut e, 1, id, 65536, &[]), 1); }
+                (2, _) if Some(id) == up_id => {
+                    for (i, b) in data.iter().enumerate() { assert_eq!(*b, ((got as usize + i) % 251) as u8, "upload byte {}", got as usize + i); }
+                    got += data.len() as u32;
+                    if got == 262_144 { up_us = (e.cycles() - up_from) / MHZ; up_secs = up_wall.unwrap().elapsed().as_secs_f64(); }
+                    assert_eq!(net_event(&mut e, 6, id, data.len() as u32, &[]), 1);
+                }
+                _ => {}
+            }
+        }
+        if let Some(id) = down_id {
+            while sent < down {
+                let at = (sent % 251) as usize;
+                let n = (down - sent).min(16384 - 251) as usize;
+                let taken = net_event(&mut e, 3, id, 0, &chunk[at..at + n]);
+                sent += taken;
+                if (taken as usize) < n { break; }
+            }
+            if sent == down && !eof { eof = true; assert_eq!(net_event(&mut e, 4, id, 0, &[]), 1); }
+        }
+    }
+    let line = |prefix: &str| text.lines().find(|l| l.starts_with(prefix)).unwrap_or_else(|| panic!("no `{prefix}` in {text}")).to_string();
+    let field = |l: &str, after: &str| -> f64 { l.split(after).nth(1).unwrap().split_whitespace().next().unwrap().parse().unwrap() };
+    let (d, u) = (line("down: "), line("up: "));
+    assert_eq!(d, format!("down: {down} bytes in {} ms bad=0", field(&d, " in ")), "{text}");
+    assert_eq!((field(&u, "up: ") as u32, got), (262_144, 262_144), "{text}");
+    Bulk {
+        down_dev: f64::from(down) / (field(&d, " in ") / 1e3), down_wall: f64::from(down) / down_secs,
+        up_dev: f64::from(got) / (up_us as f64 / 1e6), up_wall: f64::from(got) / up_secs,
+    }
+}
+
+/// The NAT and the queue are not what limits a sketch's throughput: measured 2026-10-07 (release)
+/// 2.5 MB/s down and 0.68 MB/s up at 240 MHz, 0.8 and 0.33 MB/s at 40 MHz (CPI 6).
+#[test]
+fn bulk_tcp_through_the_host_both_ways() {
+    for cpi in [1, 6] {
+        let b = bulk_transfer(262_144, cpi);
+        assert!(b.down_dev > 100e3 && b.up_dev > 100e3, "{b:?}");
+        eprintln!("net-bulk at {} MHz: down {:.0} KB/s device, {:.0} KB/s wall; up {:.0} KB/s device, {:.0} KB/s wall",
+            240 / cpi, b.down_dev / 1e3, b.down_wall / 1e3, b.up_dev / 1e3, b.up_wall / 1e3);
+    }
+}
