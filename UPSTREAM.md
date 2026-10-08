@@ -1,11 +1,11 @@
 # esp32sim (Jumperly fork)
 
 - Upstream: https://github.com/mikroverk/esp32sim (the old `joakimeriksson/esp32sim` address opens the same repository)
-- Fork: https://github.com/jumperly/esp32sim, branch `jumperly`
+- Fork: https://github.com/jumperly/esp32sim (a private copy, not a GitHub fork: a fork of a public repository cannot be private). Branch `jumperly` is the default branch and holds our work; push there.
 - Base: `017af5241f48855c412d912ff91f0a801dd3c1bd` (2026-10-08) - "Add opt-in C3 controller-driven BLE advertising (#195)"
 - Previous base: `a3a3102c6c7e130e20a4d5d6e4eb45a68251590c` (2026-10-06); 4 upstream commits taken (C3 controller-driven BLE advertising with `esp32sim_ble_full` / `esp32sim_ble_take`, live S3 camera frames through the sensor configuration, WiFi docs for all three chips)
 - License: MIT (`LICENSE`, © 2026 Joakim Eriksson and Alice). The workspace has no third-party crates.
-- The Jumperly monorepo pins this branch as the `emulator/esp32sim` submodule. `main` on the fork stays even with upstream so GitHub's "Sync fork" only updates that mirror.
+- The Jumperly monorepo pins `jumperly` as the `emulator/esp32sim` submodule. `main` mirrors upstream's `main` and never gets our commits: `git fetch upstream`, then `git push origin upstream/main:main` (a fast-forward). The push runs upstream's own workflows on our Actions minutes (about 20 minutes), so sync when taking an update, not on every upstream commit.
 
 ## Jumperly patches
 
