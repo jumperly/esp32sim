@@ -1,8 +1,14 @@
 name: ci
 on:
+  # Other branches are checked through their pull requests, not on every push.
   push:
-    branches: ['**']
+    branches: [main, jumperly]
   pull_request:
+  workflow_dispatch:
+# A newer push to the same branch or PR supersedes the run in progress.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   test:
     runs-on: ubuntu-latest
