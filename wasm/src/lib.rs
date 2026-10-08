@@ -12,6 +12,8 @@ use esp_soc::{Machine, Soc, SocBus};
 mod machine;
 mod network;
 mod ethernet;
+mod ble;
+pub use ble::*;
 pub use ethernet::*;
 mod s3;
 mod jumperly;
@@ -48,6 +50,7 @@ pub struct Emu {
     /// the last drained outbox: (1 text | 2 binary, payload), addressed by index from JS
     out: Vec<(u8, Vec<u8>)>,
     ethernet_out: Vec<Vec<u8>>,
+    ble_out: String,
     booted: bool,
     /// Jumperly patch J3: the result of the last `esp32sim_*_take` call
     buf: Vec<u8>,
@@ -155,7 +158,7 @@ pub unsafe extern "C" fn esp32sim_new(board: *const u8, board_len: usize, flash_
     }
     Box::into_raw(Box::new(Emu {
         m,
-        out: Vec::new(), ethernet_out: Vec::new(),
+        out: Vec::new(), ethernet_out: Vec::new(), ble_out: String::new(),
         booted: false,
         buf: Vec::new(),
         net: None,
@@ -389,7 +392,10 @@ pub unsafe extern "C" fn esp32sim_in_bin(e: *mut Emu, ptr: *const u8, len: usize
     let e = unsafe { &mut *e };
     // SAFETY: The caller provides a readable input buffer for this call.
     let input = unsafe { bytes(ptr, len) };
-    if let Some(w) = e.m.web() { w.push_incoming_bin(input.to_vec()); }
+    if let Some(w) = e.m.web() {
+        if input.len() > 8 << 20 { w.send_text(r#"{"t":"camera-error","message":"input exceeds 8 MiB"}"#); }
+        else { w.push_incoming_bin(input.to_vec()); }
+    }
 }
 
 /// Enable or disable the scheduler-integrated block JIT. The interpreter remains available.

@@ -68,7 +68,7 @@ S3 sends, and `esp32sim_cpu_hz` tells the worker which clock to pace against (24
 web/run.html     the UI, unchanged; `link` is either a WebSocket or the worker
 web/emu.js       page side: firmware panel, manifest loading, window.EmuLink
 web/wasm/worker.js   owns the wasm instance, paces it to wall time, relays the UI protocol
-wasm/            the crate: a C ABI over esp32s3::Machine (esp32sim_new / load / wifi / stub /
+wasm/            the crate: a C ABI over the S3, C3 and C6 machines (esp32sim_new / load / wifi / stub /
                  boot / run / out_* / in_*); no bindgen, no dependencies
 ```
 
@@ -182,7 +182,8 @@ Normal builds contain neither the sampling code nor the clock import.
 - **No sockets.** The browser has none. With a `wifi=` spec the firmware still associates,
   gets a DHCP lease, resolves names and syncs time against the emulated subnet, but connections
   past the gateway are refused (the `--net none` behaviour) — unless the page carries them itself
-  over the [host network](#host-network).
+  over the [host network](#host-network). The [host Ethernet relay](#host-ethernet-relay) below lets a page
+  carry the guest's frames to a host helper instead.
 - **No file outputs**: `--wav`, `--tft-png`, register traces — the page is the output.
 - **Emulator log lines** (`[emu] …`) that the native build prints to stderr do not exist here,
   except the ones the wasm glue forwards (stubs, resets, load errors) to the console tab and the
@@ -259,6 +260,25 @@ batch remains readable until the next `ethernet_take` or emulator deletion.
 
 The [Arduino relay check](evidence/ethernet-c3-2026-10-02/relay.mjs) shows the ABI
 with a host DHCP responder.
+
+Camera frames use `esp32sim_in_bin` type 3: `[3, width u16le, height u16le, RGBA...]`.
+The entire message must fit 8 MiB, with nonzero dimensions and exact pixel length.
+The receiver copies the message before returning and applies it at the next run
+boundary. Sensor SCCB settings select output format and geometry. A board without
+a camera emits `{"t":"camera-error","message":"no camera on this board"}`.
+
+### C3 full BLE observation
+
+Call `esp32sim_ble_full(emu)` before boot (0 = enabled, 1 = wrong chip or already
+booted). This runs the guest link controller without HCI substitution. After each
+run slice, call `esp32sim_ble_take(emu)` until it returns zero. Each nonzero return
+is the UTF-8 byte length at `esp32sim_ble_ptr(emu)`, valid until the next take or
+emulator deletion. `[ble-air]` contains modeled half-microsecond time, channel,
+PDU type, AdvA, decoded name/service AD fields and the raw PDU. `[ble-config]`
+contains configured scan-response data, not a transmitted packet. The bounded
+1024-entry queue reports lost observations as `[ble-observer] dropped=N`.
+Queued observations and the dropped count survive guest reboot. Invalid enable
+calls log a reason through `host_log`. No RX, SCAN_REQ or connection handling is implemented.
 
 ## Host network
 

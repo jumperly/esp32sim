@@ -18,8 +18,9 @@ PSRAM and register presets.
 | `--bootloader F`, `--ptable F`, `--app F` | written to flash at 0x0 / 0x8000 / 0x10000 |
 | `--flash-image F` | whole flash dump written at 0 |
 | `--chip s3\|c3\|c6` | which chip (default s3) |
-| `--rom F` | mask ROM ELF (default: the chip's in `~/.espressif/tools/esp-rom-elfs/*/`) |
+| `--rom F` | mask ROM ELF (default: the chip's in `ESP32SIM_ROM_DIR`, then `~/.espressif/tools/esp-rom-elfs/*/`) |
 | `--mac xx:xx:xx:xx:xx:xx` | the station MAC the efuses report |
+| `--cam-stream PATH\|-`, `--cam-size WIDTHxHEIGHT` | live RGB24 camera source and its dimensions; requires `waveshare-cam` |
 | `--serial TEXT` | bytes into the USB-Serial/JTAG console before the run |
 | `--elf F` (repeatable) | symbols for logs/profiles (app ELF, bootloader ELF) |
 | `--flash-mb N`, `--psram-mb N` | flash size (JEDEC follows it) and octal PSRAM size (default 8 / 2) |
@@ -28,9 +29,11 @@ PSRAM and register presets.
 | `--no-reboot` | stop at the first chip reset instead of rebooting from ROM |
 | `--flash-at OFFSET=FILE` (repeatable) | write a file into flash at a hex offset — a data partition's contents (the panel's `demo` partition takes `energydata.json`) |
 | `--stub SYMBOL[=value]` (repeatable) | return `value` (default 0) immediately when execution reaches the function's entry; numeric function addresses require a `0x` prefix; accepts decimal, `0x` hex, `true` (1) or `false` (0); rejects invalid values |
+| `--ble full` | experimental C3 register-level BLE controller; runs legacy advertising events in modeled time; excludes `--ble` |
+| `--ble-observe` | passive full-mode PDU log: half-microsecond timestamp, channel, type, AdvA, decoded AD and raw PDU |
 | `--ble` | opt-in virtual BLE controller on S3/C3/C6; requires the matching application `--elf` |
 | `--wifi SPEC` | attach a virtual access point the WiFi blob hears, plus a virtual network (DHCP/ARP/ICMP/DNS/SNTP; station 10.0.2.15, gateway 10.0.2.2) — for example `ssid=demo,chan=6,psk=demo-password,bssid=02:00:00:00:00:01`. `password` and `pass` alias `psk`; unknown keys and invalid values are rejected. Open and WPA2-PSK networks both join end to end, on S3, C3 and C6 (docs/wifi-plan.md, docs/esp32c3.md, docs/wifi-c6-plan.md) |
-| `--net nat\|none` | what the virtual network does with traffic it is not itself answering: `nat` (default) forwards TCP and UDP to the host's own network through ordinary sockets, `none` refuses it |
+| `--net nat\|none` | what the virtual network does with traffic it is not itself answering: `nat` (default; `user` is an alias) forwards TCP and UDP to the host's own network through ordinary sockets, `none` refuses it |
 | `--trace-fn PREFIX` (repeatable) | log every call to functions whose name starts with PREFIX, with args and caller; append `$` for an exact name |
 | `--regstat FILE` | write per-register access statistics (count, pc, symbol) at exit — for reverse-engineering |
 
@@ -163,7 +166,7 @@ use seconds like the other script actions. For example:
 
 Use handles reported by discovery. `ble subscribe CCC_HANDLE` writes notification
 enable to a discovered client configuration descriptor. Commands are validated when
-the script is loaded and require `--ble`. `connect` waits for guest advertising;
+CLI arguments are parsed, before loading the ROM, and require `--ble`. `connect` waits for guest advertising;
 ATT commands wait for the connection and run in order, with one request outstanding.
 At exit, the CLI reports the number of queued or in-flight commands still pending.
 Writes are limited to 20 bytes. A scanning guest sees a virtual
@@ -175,3 +178,53 @@ registers. Unsupported HCI commands return Unknown Command. The callback task
 and its storage stay allocated until reboot. C6 initializes the guest NPL support
 and a heap-backed mbuf pool; it uses no controller BSS reservation. Cost-model execution
 does not support function substitutions; reported cycle time is not radio timing.
+
+`--ble full` selects the experimental C3 link-controller register model and excludes
+`--ble` HCI substitution. It runs the original guest controller without ELF hooks.
+It implements initialization, clock capture, timer IRQs and legacy advertising on
+channels 37–39. Completion IRQs let the guest schedule its next event. `--ble-observe`
+logs to stderr emitted ADV_IND, ADV_NONCONN_IND or ADV_SCAN_IND packets as `[ble-air]` lines;
+`hus` is modeled time in half-microseconds. `[ble-config]` reports configured
+SCAN_RSP data separately; a passive observer cannot elicit that response. The queue
+holds the latest 1024 observations and reports dropped entries when polled.
+RX, scan requests and connections are not implemented. Register meanings and the
+300 µs silent receive window remain inferred/model choices. C3 rev v0.3 checks cover
+selected readbacks, latch completion and clock rate; they do not validate over-air
+timing, channel order, END timing, descriptor semantics or the FIFO. Script `ble`
+commands require HCI `--ble` and an application ELF; `--ble full` rejects them.
+
+## Live camera input
+
+On `--board waveshare-cam`, `--cam-stream PATH --cam-size WIDTHxHEIGHT` reads
+consecutive RGB24 frames with no headers or row padding. Use `-` for stdin or a FIFO
+path for a producer in another process. Streaming enables real-time pacing, keeps only
+the latest complete input, and retains the last image at EOF. A truncated frame reports
+an error and leaves the previous image intact. This is a live source only: regular
+files are read as fast as possible, so the frames observed by firmware are not
+deterministic. Use `--cam-image` for deterministic still input. FIFO opening runs
+on the reader thread and never blocks emulator startup or shutdown. Input dimensions
+share the browser limit: an equivalent RGBA message must fit 8 MiB. This limit also applies to `--cam-image`. `--console` still selects firmware console output.
+
+For a macOS webcam, choose a video device with
+`ffmpeg -f avfoundation -list_devices true -i ''`, then replace `0` below with its index:
+
+```sh
+ffmpeg -f avfoundation -framerate 10 -video_size 640x480 -i '0:none' \
+  -an -pix_fmt rgb24 -f rawvideo - |
+  target/release/esp32sim --board waveshare-cam --boot rom \
+    --rom "$ROM" --bootloader "$BOOTLOADER" --ptable "$PTABLE" --app "$APP" \
+    --cam-stream - --cam-size 640x480 --no-dump
+```
+
+The firmware programs the OV5640 through SCCB. The model crops its sensor-array
+window, scales to its output dimensions with nearest-neighbour sampling, and emits
+RGB565 MSB first, YUYV422, or grayscale Y8. `--cam-image` still loads BMP or PPM;
+a live frame replaces that image through the same board hook. Without a host image,
+the configured sensor supplies black frames so firmware can initialize. `--cam-fps` controls
+emulated capture cadence independently of host updates. JPEG encoding and RAW Bayer
+are unsupported and produce no frame. Optical black pixels, ISP offsets, binning,
+mirror/flip, exposure and sensor clock calibration are not modeled.
+
+Camera crop/scale does not model ISP offsets (0x3810–0x3813), mirror/flip
+(0x3820/0x3821), or binning. Typical driver settings can differ from the sensor
+by about 2.5% horizontally and 1.6% vertically; mirror/flip is not applied.

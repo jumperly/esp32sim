@@ -8,6 +8,7 @@ use emu_core::{Bus, Core};
 use std::path::PathBuf;
 
 pub mod cooja;
+mod camera;
 
 fn usage(chip: &str) -> ! {
     eprintln!("usage: esp32sim [--chip s3|c3|c6] --boot rom|app --bootloader B.bin --ptable P.bin --app A.bin [--elf X.elf]... [options]");
@@ -69,7 +70,7 @@ pub struct Opts {
     pub rom: Option<PathBuf>, pub bootloader: Option<String>, pub ptable: Option<String>, pub app: Option<String>, pub elfs: Vec<String>,
     pub flash_image: Option<String>, pub flash_at: Vec<String>, pub boot: Option<String>, pub flash_mb: Option<usize>, pub psram_mb: Option<usize>,
     pub mac: Option<[u8; 6]>, pub strap: Option<u32>, pub reset_cause: Option<u32>, pub efuse_regs: Option<String>, pub regs_init: Option<String>,
-    pub board: String, pub wifi: Option<String>, pub ble: bool, pub net: String, pub cam_image: Option<String>, pub cam_fps: f64,
+    pub board: String, pub wifi: Option<String>, pub ble: bool, pub ble_full: bool, pub ble_observe: bool, pub net: String, pub cam_image: Option<String>, pub cam_stream: Option<String>, pub cam_size: Option<String>, pub cam_fps: f64,
     pub spi2_timing: bool, pub measured_te: bool,
     pub max_insns: u64, pub max_seconds: Option<f64>, pub script: Option<String>, pub serial: Option<String>,
     pub console: Option<String>, pub console_prefix: bool, pub realtime: bool, pub web_port: Option<u16>, pub web_dir: Option<String>, pub no_reboot: bool,
@@ -113,9 +114,15 @@ pub fn parse(args: &[String], default_chip: &str) -> Opts {
             "--spi2-timing" => o.spi2_timing = true,
             "--measured-te" => o.measured_te = true,
             "--wifi" => o.wifi = Some(next()),
-            "--ble" => o.ble = true,
+            "--ble-observe" => o.ble_observe = true,
+            "--ble" => {
+                let full = args.get(i + 1).is_some_and(|s| s == "full");
+                if full { i += 1; o.ble_full = true; } else { o.ble = true; }
+            },
             "--net" => o.net = next(),
             "--cam-image" => o.cam_image = Some(next()),
+            "--cam-stream" => o.cam_stream = Some(next()),
+            "--cam-size" => o.cam_size = Some(next()),
             "--cam-fps" => o.cam_fps = next().parse().expect("fps"),
             "--max-insns" => o.max_insns = next().replace('_', "").parse().expect("max-insns"),
             "--max-seconds" => o.max_seconds = Some(next().parse().expect("seconds")),
@@ -163,11 +170,25 @@ pub fn parse(args: &[String], default_chip: &str) -> Opts {
         }
         i += 1;
     }
+    if o.ble_observe && !o.ble_full { usage_error("--ble-observe requires --ble full"); }
+    if o.ble_full && o.ble { usage_error("--ble full and --ble are mutually exclusive"); }
+    if o.ble_full && !matches!(o.chip.as_str(), "c3" | "esp32c3") { usage_error("--ble full requires C3"); }
+    if let Some(path) = &o.script {
+        let text = std::fs::read_to_string(path).unwrap_or_else(|e| usage_error(&format!("script: {e}")));
+        for (ln, line) in text.lines().enumerate() {
+            let mut words = line.split_whitespace();
+            if words.next().is_none_or(|s| s.starts_with('#')) || words.next() != Some("ble") { continue }
+            words.collect::<Vec<_>>().join(" ").parse::<esp_soc::ble::peer::Command>()
+                .unwrap_or_else(|e| usage_error(&format!("script: line {}: {e}", ln + 1)));
+            if !o.ble { usage_error(&format!("script: line {}: BLE requires --ble and the application ELF", ln + 1)); }
+        }
+    }
     o
 }
 
-/// `~/.espressif/tools/esp-rom-elfs/*/<name>` (the newest release wins).
+/// ESP32SIM_ROM_DIR, then `~/.espressif/tools/esp-rom-elfs/*/<name>` (newest first).
 fn find_rom(name: &str) -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("ESP32SIM_ROM_DIR").map(|d| PathBuf::from(d).join(name)).filter(|p| p.is_file()) { return Some(p) }
     let home = std::env::var("HOME").ok()?;
     let mut dirs: Vec<PathBuf> = std::fs::read_dir(format!("{}/.espressif/tools/esp-rom-elfs", home)).ok()?.flatten().map(|e| e.path()).collect();
     dirs.sort();
@@ -177,6 +198,7 @@ fn find_rom(name: &str) -> Option<PathBuf> {
 pub fn run_cli(default_chip: &str) {
     let args: Vec<String> = std::env::args().collect();
     let mut o = parse(&args, default_chip);
+    if o.cam_stream.is_some() != o.cam_size.is_some() { usage_error("--cam-stream and --cam-size must be supplied together"); }
     validate_timing(&o).unwrap_or_else(|e| usage_error(&e));
     if o.approximate_cache { cache_config().unwrap_or_else(|e| usage_error(&e)); }
     if o.cooja { return run_cooja(&mut o); }
@@ -221,6 +243,13 @@ fn run_cooja(o: &mut Opts) {
 }
 
 fn setup_s3(o: &Opts) -> esp32s3::Machine {
+    let size_error = o.cam_size.as_deref().and_then(|s| camera::size(s).err());
+    for (message, invalid) in [
+        ("--cam-stream requires --board waveshare-cam", o.cam_stream.is_some() && o.board != "waveshare-cam"),
+        (size_error.as_deref().unwrap_or(""), size_error.is_some()),
+    ] {
+        if invalid { usage_error(message); }
+    }
     let mut m = esp32s3::machine(o.mac.unwrap_or([0x44, 0x1b, 0xf6, 0x75, 0xdc, 0xe0]));
     m.bus.board = esp32s3::board::make_board(&o.board).unwrap_or_else(|| { eprintln!("unknown board '{}' (atech14, waveshare-cam, waveshare-lcd4b, waveshare-amoled18-v2, none)", o.board); std::process::exit(2) });
     if o.measured_te {
@@ -234,7 +263,7 @@ fn setup_s3(o: &Opts) -> esp32s3::Machine {
         let (cfg, nat) = wifi_config(spec, o.net == "nat" || o.net == "user", m.bus.debug.has("net"));
         m.bus.attach_wifi(cfg, nat).unwrap_or_else(|e| { eprintln!("--wifi: {e}"); std::process::exit(2) });
     }
-    if let Some(p) = &o.cam_image { match esp_soc::picture::load(p) { Ok(pic) => { eprintln!("[emu] camera picture {} ({}x{})", p, pic.w, pic.h); m.bus.board.set_camera_picture(pic); } Err(e) => { eprintln!("[emu] {}", e); std::process::exit(2); } } }
+    if let Some(p) = &o.cam_image { match esp_soc::picture::load(p) { Ok(pic) => { eprintln!("[emu] camera picture {} ({}x{})", p, pic.w, pic.h); m.bus.board.set_camera_picture(pic).unwrap_or_else(|e| usage_error(e)); } Err(e) => { eprintln!("[emu] {}", e); std::process::exit(2); } } }
     m.bus.periph.lcd_cam.frame_cycles = (esp32s3::periph::CPU_HZ as f64 / o.cam_fps) as u64;
     if let Some(mb) = o.flash_mb { if mb != 8 { m.bus.set_flash_size(mb << 20); } }
     if let Some(mb) = o.psram_mb { if mb != 2 { m.bus.set_psram_size(mb << 20).unwrap(); } }
@@ -279,11 +308,12 @@ fn setup_c3(o: &Opts) -> esp32c3::Machine {
     let mut m = esp32c3::machine(o.mac.unwrap_or([0x60, 0x55, 0xf9, 0x00, 0x11, 0x22]), o.flash_mb.unwrap_or(4) << 20);
     m.bus.set_flash_size(o.flash_mb.unwrap_or(4) << 20);   // the JEDEC capacity follows the size
     if !o.debug.is_empty() { let mut f = esp_soc::DebugFlags::from_env(); for d in &o.debug { f.parse(d); } m.set_debug(&f); }
+    if o.ble_full { m.bus.enable_ble_full(o.ble_observe).unwrap_or_else(|e| usage_error(&e)); }
     if let Some(spec) = &o.wifi {
         let (cfg, nat) = wifi_config(spec, o.net == "nat" || o.net == "user", m.bus.debug.has("net"));
         m.bus.attach_wifi(cfg, nat).unwrap_or_else(|e| { eprintln!("--wifi: {e}"); std::process::exit(2) });
     }
-    for (flag, on) in [("--board", o.board != "atech14" && o.board != "none"), ("--cam-image", o.cam_image.is_some()), ("--psram-mb", o.psram_mb.is_some()), ("--efuse-regs", o.efuse_regs.is_some()), ("--regs-init", o.regs_init.is_some()), ("--regstat", o.regstat.is_some())] {
+    for (flag, on) in [("--board", o.board != "atech14" && o.board != "none"), ("--cam-image", o.cam_image.is_some()), ("--cam-stream", o.cam_stream.is_some()), ("--cam-size", o.cam_size.is_some()), ("--psram-mb", o.psram_mb.is_some()), ("--efuse-regs", o.efuse_regs.is_some()), ("--regs-init", o.regs_init.is_some()), ("--regstat", o.regstat.is_some())] {
         if on { eprintln!("{} is not available on the C3", flag); std::process::exit(2); }
     }
     m
@@ -300,7 +330,7 @@ fn setup_c6(o: &Opts) -> esp32c6::Machine {
         let (cfg, nat) = wifi_config(spec, o.net == "nat" || o.net == "user", m.bus.debug.has("net"));
         m.bus.attach_wifi(cfg, nat).unwrap_or_else(|e| { eprintln!("--wifi: {e}"); std::process::exit(2) });
     }
-    for (flag, on) in [("--cam-image", o.cam_image.is_some()), ("--psram-mb", o.psram_mb.is_some()), ("--efuse-regs", o.efuse_regs.is_some()), ("--regs-init", o.regs_init.is_some()), ("--regstat", o.regstat.is_some())] {
+    for (flag, on) in [("--cam-image", o.cam_image.is_some()), ("--cam-stream", o.cam_stream.is_some()), ("--cam-size", o.cam_size.is_some()), ("--psram-mb", o.psram_mb.is_some()), ("--efuse-regs", o.efuse_regs.is_some()), ("--regs-init", o.regs_init.is_some()), ("--regstat", o.regstat.is_some())] {
         if on { eprintln!("{} is not available on the C6", flag); std::process::exit(2); }
     }
     m
@@ -402,7 +432,7 @@ fn prepare<S: Soc>(m: &mut Machine<S>, o: &Opts) -> String {
         if o.ble { let elf = esp_soc::elf::parse(&data).expect("BLE ELF symbols"); if elf.by_name.contains_key("esp_bt_controller_init") { ble_elf = elf; } }
     }
     if o.ble { m.bus.enable_ble(&ble_elf).unwrap_or_else(|e| usage_error(&format!("--ble: {e}"))); }
-    if let Some(p) = &o.script { m.load_script(&std::fs::read_to_string(p).expect("script")).expect("script"); }
+    if let Some(p) = &o.script { m.load_script(&std::fs::read_to_string(p).unwrap_or_else(|e| usage_error(&format!("script: {e}")))).unwrap_or_else(|e| usage_error(&format!("script: {e}"))); }
     if let Some(s) = &o.serial { m.bus.serial_input(s.as_bytes()); }
     for pre in &o.trace_fns {
         let n = m.trace_fns(pre);
@@ -433,6 +463,19 @@ fn prepare<S: Soc>(m: &mut Machine<S>, o: &Opts) -> String {
         let w = esp_soc::web::WebServer::start(port, dir.clone()).expect("web server");
         eprintln!("[emu] board UI: http://127.0.0.1:{}/  (serving {})", port, dir);
         m.web = Some(w); m.rt.enabled = true;
+    }
+    if let Some(path) = &o.cam_stream {
+        let (width, height) = camera::size(o.cam_size.as_deref().unwrap()).unwrap();
+        let input = std::sync::Arc::new(std::sync::Mutex::new(None));
+        m.camera_input = Some(input.clone());
+        let path = path.clone();
+        std::thread::spawn(move || {
+            let reader: std::io::Result<Box<dyn std::io::Read>> = if path == "-" { Ok(Box::new(std::io::stdin())) }
+                else { std::fs::File::open(path).map(|file| Box::new(file) as Box<dyn std::io::Read>) };
+            let result = reader.and_then(|reader| camera::read_frames(reader, width, height, |frame| *input.lock().unwrap() = Some(frame)));
+            if let Err(e) = result { eprintln!("[emu] camera stream: {e}"); }
+        });
+        m.rt.enabled = true;
     }
     if o.realtime { m.rt.enabled = true; }
     if o.profile { m.add_observer(Box::new(PcHist::new(12))); }

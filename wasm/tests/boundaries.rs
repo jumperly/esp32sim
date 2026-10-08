@@ -33,7 +33,7 @@ fn single_and_network_loads_accept_the_same_input_kinds() {
         let cases: &[(u32, &[u8], u32)] = &[
             (6, b"0.1 gpio 2 1\n", 0),
             (6, &[0xff], 1),
-            (7, b"P6\n1 1\n255\n\xff\x00\x00", 0),
+            (7, b"P6\n1 1\n255\n\xff\x00\x00", 1),
             (7, b"bad picture", 1),
             (8, b"", 1),
         ];
@@ -128,6 +128,19 @@ fn ethernet_relay_validates_frames_on_every_chip() {
             assert_eq!(esp32sim_ethernet_receive(e, [0; 14].as_ptr(), 14), 1);
             assert_eq!(esp32sim_ethernet_relay(e, 0), 0);
             assert_eq!(esp32sim_ethernet_receive(e, [0; 14].as_ptr(), 14), 1);
+            esp32sim_delete(e);
+        }
+    }
+}
+
+#[test]
+fn full_ble_rejects_other_chips() {
+    // SAFETY: each readable name and handle is exclusively owned until deletion.
+    unsafe {
+        for chip in ["none", "esp32c6", "esp32c3"] {
+            let e = esp32sim_new(chip.as_ptr(), chip.len(), 4, 0);
+            assert!(!e.is_null());
+            assert_eq!(esp32sim_ble_full(e), u32::from(chip != "esp32c3"));
             esp32sim_delete(e);
         }
     }
