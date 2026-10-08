@@ -10,9 +10,12 @@ const PULL_UP: u32 = 4;
 
 fn emulator_dir() -> PathBuf { PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..") }
 fn read(rel: &str) -> Vec<u8> { std::fs::read(emulator_dir().join(rel)).unwrap_or_else(|e| panic!("{rel}: {e}")) }
-fn merged(app: &str) -> Vec<u8> {
-    let mut flash = vec![0xffu8; 4 << 20];
-    for (off, file) in [(0x0, "fixtures/bin/bootloader.bin".to_string()), (0x8000, "fixtures/bin/partitions.bin".to_string()), (0x10000, format!("fixtures/bin/{app}.bin"))] {
+/// A merged image of `flash_mb`; a sketch built with FQBN options may have its own bootloader and
+/// partition table (`fixtures/bin/<app>.bootloader.bin`, emulator/fixtures/build.sh).
+fn merged_sized(app: &str, flash_mb: usize) -> Vec<u8> {
+    let mut flash = vec![0xffu8; flash_mb << 20];
+    let own = |f: &str| if emulator_dir().join(format!("fixtures/bin/{app}.{f}")).exists() { format!("fixtures/bin/{app}.{f}") } else { format!("fixtures/bin/{f}") };
+    for (off, file) in [(0x0, own("bootloader.bin")), (0x8000, own("partitions.bin")), (0x10000, format!("fixtures/bin/{app}.bin"))] {
         let d = read(&file);
         flash[off..off + d.len()].copy_from_slice(&d);
     }
@@ -23,13 +26,15 @@ struct Emu(*mut esp32sim_wasm::Emu);
 impl Emu {
     fn boot(app: &str) -> Emu { Emu::boot_with(app, |_| {}) }
     /// Boot `app`, calling `setup` on the emulator after the images are loaded and before boot.
-    fn boot_with(app: &str, setup: impl FnOnce(*mut esp32sim_wasm::Emu)) -> Emu {
+    fn boot_with(app: &str, setup: impl FnOnce(*mut esp32sim_wasm::Emu)) -> Emu { Emu::boot_sized(app, 4, 0, setup) }
+    /// `boot_with` on a chip with `flash_mb` of flash (the image padded to it) and `psram_mb` of PSRAM.
+    fn boot_sized(app: &str, flash_mb: u32, psram_mb: u32, setup: impl FnOnce(*mut esp32sim_wasm::Emu)) -> Emu {
         let board = "none";
         // SAFETY: the board name is readable for the call; the pointer is checked for null.
-        let e = unsafe { esp32sim_new(board.as_ptr(), board.len(), 4, 0) };
+        let e = unsafe { esp32sim_new(board.as_ptr(), board.len(), flash_mb, psram_mb) };
         assert!(!e.is_null());
         let emu = Emu(e);
-        let (rom, flash) = (read("rom/esp32s3_rev0_rom.elf"), merged(app));
+        let (rom, flash) = (read("rom/esp32s3_rev0_rom.elf"), merged_sized(app, flash_mb as usize));
         // SAFETY: `e` is live and exclusively ours; the buffers are readable for each call.
         unsafe {
             assert_eq!(esp32sim_jumperly_mode(e), 0);
@@ -853,4 +858,47 @@ fn bulk_tcp_through_the_host_both_ways() {
         eprintln!("net-bulk at {} MHz: down {:.0} KB/s device, {:.0} KB/s wall; up {:.0} KB/s device, {:.0} KB/s wall",
             240 / cpi, b.down_dev / 1e3, b.down_wall / 1e3, b.up_dev / 1e3, b.up_wall / 1e3);
     }
+}
+
+/// Jumperly patch J16: ESP32-S3-WROOM-2 firmware (core 3.3.12, FlashMode=opi, PSRAM=opi; the
+/// octal16 / octal32 fixtures) on an octal flash. The bootloader and the app take the octal path
+/// (efuse FLASH_TYPE, Macronix ID, WRCR2 to DTR OPI) and the sketch sees the module's flash and
+/// PSRAM: the ID and sizes, a PSRAM fill-and-check of the whole heap block (16 MB with no wrap at
+/// 8 MB), erase / program / read at the chip's last sector (past 16 MB on 32 MB) and in the spiffs
+/// partition (read back through the cache too). It restarts once: the ROM resets the flash out of
+/// DTR OPI and the second boot passes the same checks.
+#[test]
+fn octal_flash_modules_run_opi_firmware() {
+    for (app, flash_mb, psram_mb, id) in [("octal16", 16, 8, "c28038"), ("octal32", 32, 16, "c28039")] {
+        let mut emu = Emu::boot_sized(app, flash_mb, psram_mb, |e| assert_eq!(unsafe { esp32sim_flash_octal(e, 1) }, 0));
+        let mut text = String::new();
+        for _ in 0..40 {
+            text += &emu.run_for(50_000 * MHZ).1;
+            if text.matches("done").count() == 2 { break; }
+        }
+        let (flash, psram) = ((flash_mb as usize) << 20, (psram_mb as usize) << 20);
+        let what = format!("{app} with {psram_mb} MB PSRAM: {text}");
+        assert_eq!(text.matches("done").count(), 2, "{what}");
+        assert!(text.contains("Octal Flash Mode Enabled"), "the ROM sees the efuse: {what}");
+        for again in [0, 1] {
+            let boot = text.split(&format!("boot again={again}")).nth(1).unwrap_or_else(|| panic!("boot {again}: {what}"));
+            let boot = boot.split("done").next().unwrap();
+            assert!(boot.contains(&format!("flash id={id} chip={flash} physical={flash}")), "{what}");
+            assert!(boot.contains(&format!("psram size={psram} heap={psram}")), "{what}");
+            assert!(boot.contains("bad=0"), "{what}");
+            for ok in ["flash end=ok", "flash spiffs=ok", "app magic=e9"] { assert!(boot.contains(ok), "{ok}: {what}"); }
+        }
+    }
+    // The same octal16 image on the quad flash model: ESP-IDF's flash mode auto-detection
+    // (CONFIG_ESPTOOLPY_FLASH_MODE_AUTO_DETECT) falls back to DIO, so it runs, as a quad module.
+    let mut emu = Emu::boot_sized("octal16", 16, 8, |_| {});
+    let text = emu.run_for(300_000 * MHZ).1;
+    assert!(text.contains("flash id=204018 chip=16777216") && text.contains("done") && !text.contains("Octal Flash Mode"), "{text}");
+}
+
+/// Jumperly patch J16: octal flash is set before boot, on the ESP32-S3 only.
+#[test]
+fn flash_octal_is_refused_after_boot() {
+    let emu = Emu::boot("blink");
+    assert_eq!(unsafe { esp32sim_flash_octal(emu.0, 1) }, 1);
 }

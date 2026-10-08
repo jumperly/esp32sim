@@ -166,8 +166,20 @@ impl SocBus {
             fetch_cache: xtensa_lx7::state::SharedFetchCache::default(),
         };
         let mut b = bus_uninit;
+        b.periph.spi0.set_psram_size(psram_size); b.periph.spi1.set_psram_size(psram_size);   // Jumperly patch J16: MR2 says how big `psram` is
         b.rebuild_page_table();
         b
+    }
+
+    /// Jumperly patch J16: an octal SPI flash (ESP32-S3-WROOM-2) instead of the quad one. The flash
+    /// answers the Macronix octal commands and its JEDEC ID is C2 80 (log2(size) + 0x20); efuse
+    /// FLASH_TYPE (EFUSE_RD_REPEAT_DATA3 bit 9) says octal, which the ROM, the bootloader
+    /// (`bootloader_flash_is_octal_mode_enabled`) and the app read. Call before boot.
+    pub fn set_flash_octal(&mut self, on: bool) {
+        let id = esp_periph::flash_jedec(on, self.flash.len());
+        for s in [&mut self.periph.spi0, &mut self.periph.spi1] { s.octal_flash = on; s.flash_cr2 = 0; s.jedec = id; }
+        let r = self.periph.efuse.ram.read(0x3c);
+        self.periph.efuse.ram.write(0x3c, if on { r | 1 << 9 } else { r & !(1 << 9) });
     }
 
     /// Rough helper-path experiment. Disables direct memory access so reads and

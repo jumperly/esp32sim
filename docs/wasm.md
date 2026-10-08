@@ -402,3 +402,21 @@ with RST without the host transport, to the host with it. `wasm/tests/jumperly.r
 (`two_boards_talk_tcp_and_udp_over_the_lan`) runs `lan-server` (10.0.2.15) and `lan-client`
 (10.0.2.16, its names through a scripted host, CPI 3) in lockstep: `lan: pong from 10.0.2.15` by
 name and by address, `udp: hello from 10.0.2.16` on the server.
+
+## Octal flash (ESP32-S3-WROOM-2)
+
+Jumperly patch J16. A module with octal SPI flash (ESP32-S3-WROOM-2: N16R8V, N32R8V, N32R16V)
+runs its firmware (core `FlashMode=opi`, `PSRAM=opi`) on the octal path of real silicon: efuse
+FLASH_TYPE says octal, so the ROM resets the flash out of OPI mode at every boot ("Octal Flash
+Mode Enabled"), the bootloader and the app find a Macronix octal chip (JEDEC C2 80, log2(size) +
+0x20) and switch it to DTR OPI with WRCR2; from then on the flash takes the 16-bit commands
+(8DTRD, PP4B, SE4B, BE4B, RDSR, RDCR2, ...). The octal PSRAM's MR2 reports the PSRAM size, so a
+16 MB module maps 16 MB (ESP-IDF sizes it from MR2 alone).
+
+| Export | Contract |
+| --- | --- |
+| `esp32sim_flash_octal(e, on)` | The flash is octal (`on` nonzero) or quad (0, the default). Before boot, ESP32-S3 only; 1 otherwise. It survives a chip reset. |
+
+The same firmware on the quad model still runs: ESP-IDF's flash mode auto-detection falls back to
+DIO when efuse FLASH_TYPE is quad. `wasm/tests/jumperly.rs` (`octal_flash_modules_run_opi_firmware`)
+runs the `octal16` / `octal32` fixtures on 16 MB flash + 8 MB PSRAM and 32 MB + 16 MB.

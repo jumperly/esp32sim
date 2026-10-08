@@ -274,6 +274,22 @@ pub unsafe extern "C" fn esp32sim_reset(e: *mut Emu) -> u32 {
     0
 }
 
+/// Jumperly patch J16: the module's flash is octal SPI (ESP32-S3-WROOM-2: Macronix octal commands,
+/// JEDEC ID C2 80 xx, efuse FLASH_TYPE octal) when `on` is nonzero, quad SPI otherwise (the
+/// default). It survives a chip reset. Before boot, ESP32-S3 only; returns 1 otherwise.
+///
+/// # Safety
+/// `e` must point to a live emulator to which the caller has exclusive access.
+#[no_mangle]
+pub unsafe extern "C" fn esp32sim_flash_octal(e: *mut Emu, on: u32) -> u32 {
+    // SAFETY: the caller provides exclusive access to a live emulator.
+    let e = unsafe { &mut *e };
+    if e.booted { return 1; }
+    let Some(m) = e.m.s3_mut() else { log("[emu] flash octal: ESP32-S3 only"); return 1 };
+    m.bus.set_flash_octal(on != 0);
+    0
+}
+
 /// Start of the result buffer of the last `*_take` call.
 ///
 /// # Safety
