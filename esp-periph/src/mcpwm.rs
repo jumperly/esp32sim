@@ -54,8 +54,8 @@ impl Mcpwm {
         let (hz, high, period) = self.channel_state(channel, route & (1 << self.matrix_bits) != 0, false)?;
         Some((hz, ((high * 65535 + period / 2) / period) as u32))
     }
-    /// Jumperly patch J4: frequency and exact duty fraction (0..1) of generator `channel` (operator * 2
-    /// + A/B), before any matrix inversion; `None` while it is not a plain PWM. A compare value written
+    /// Jumperly patch J4: frequency and exact duty fraction (0..1) of generator `channel`
+    /// (operator * 2 + A/B), before any matrix inversion; `None` while it is not a plain PWM. A compare value written
     /// but not yet latched at a timer event counts at once, as for `Ledc::channel_output`.
     pub fn channel_output(&self, channel: usize) -> Option<(f64, f64)> {
         self.channel_state(channel, false, true).map(|(hz, high, period)| (hz, high as f64 / period as f64))

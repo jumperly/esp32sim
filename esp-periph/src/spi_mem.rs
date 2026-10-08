@@ -146,6 +146,13 @@ impl SpiMem {
     }
 }
 
+impl Device for SpiMem {
+    fn read(&mut self, off: u32) -> u32 { SpiMem::read(self, off) }
+    /// Only SPI1 is the command engine; SPI0 is the cache path and its command bit is ignored.
+    fn write(&mut self, off: u32, v: u32) -> WriteEffect { if SpiMem::write(self, off, v) && self.is_spi1 { WriteEffect::SPI_EXEC } else { WriteEffect::NONE } }
+    fn debug(&mut self, on: bool) { self.log = on; }
+}
+
 #[cfg(test)]
 mod tests {
     use super::SpiMem;
@@ -217,11 +224,4 @@ mod tests {
         s.execute(&mut flash, &mut psram);
         assert_eq!(s.w[0] & 0xff_ffff, 0x174020);
     }
-}
-
-impl Device for SpiMem {
-    fn read(&mut self, off: u32) -> u32 { SpiMem::read(self, off) }
-    /// Only SPI1 is the command engine; SPI0 is the cache path and its command bit is ignored.
-    fn write(&mut self, off: u32, v: u32) -> WriteEffect { if SpiMem::write(self, off, v) && self.is_spi1 { WriteEffect::SPI_EXEC } else { WriteEffect::NONE } }
-    fn debug(&mut self, on: bool) { self.log = on; }
 }
