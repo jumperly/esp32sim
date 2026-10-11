@@ -309,6 +309,35 @@ impl SocBus {
         if !samples.is_empty() { let i2s = if which == 0 { &mut self.periph.i2s0 } else { &mut self.periph.i2s1 }; i2s.frames_out += samples.len() as u64; i2s.pcm.extend_from_slice(&samples); }
     }
 
+    /// Jumperly patch J17: I2S RX into the GDMA IN channels at the frame rate (I2S0 on trigger 3,
+    /// I2S1 on trigger 4, the same as TX). Each controller hands over the frames that fell due
+    /// (`I2s::rx_take`: silence without a host, the host's queued slot words with one); their samples
+    /// are scattered into the descriptor ring with SUC_EOF every RX_EOF_NUM bytes, the way ESP-IDF's
+    /// `i2s_dma_rx_callback` expects one per DMA buffer. Without a running IN channel the samples are
+    /// lost, as when the receive FIFO overflows. A host shortfall ends the slice once, so the host can
+    /// queue more (`esp32sim_i2s_rx_push`) before the guest runs on.
+    pub(super) fn dma_i2s_rx_step(&mut self, cycles: u64) {
+        self.dma_i2s_rx_one(cycles, 0);
+        self.dma_i2s_rx_one(cycles, 1);
+    }
+
+    fn dma_i2s_rx_one(&mut self, cycles: u64, which: usize) {
+        let host = self.i2s_host;
+        let i2s = if which == 0 { &mut self.periph.i2s0 } else { &mut self.periph.i2s1 };
+        if !i2s.rx_running() { return; }
+        let (frames, ask) = i2s.rx_take(cycles, host);
+        if ask { self.slice_yield = true; }
+        if frames.is_empty() { return; }
+        let (bytes, eof) = (i2s.rx_encode(&frames), i2s.rx_eof_bytes());
+        let Some(ch) = self.periph.gdma.in_channel_for(if which == 0 { 3 } else { 4 }) else { return };
+        if self.scatter_dma_in(ch, &bytes, eof, false).is_err() {
+            let r = &mut self.periph.gdma.inp[ch];
+            if r.desc != 0 { r.int_raw |= 1 << 3; }                              // IN_DSCR_ERR
+            r.running = false;
+        }
+        self.irq_dirty = true;
+    }
+
     /// One DMA descriptor as the engines see it, with its first word, or the fault reading it.
     fn try_dma_desc(&mut self, addr: u32) -> Result<(u32, crate::periph::DmaDesc), DmaDescriptorFault> {
         let mut word = |offset, word| self.read32_unpriced(addr.wrapping_add(offset))

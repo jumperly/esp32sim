@@ -74,6 +74,8 @@ pub struct SocBus {
     /// Jumperly patch J6/J7: I2C and SPI2 transactions wait for the host (`esp32sim_bus_service`).
     pub i2c_host: bool,
     pub spi_host: bool,
+    /// Jumperly patch J17: I2S RX samples come from the host (`I2s::rx_push`); a shortfall ends the slice.
+    pub i2s_host: bool,
     pub(crate) slice_yield: bool,
     pub debug: esp_soc::DebugFlags,
     /// Software TLB: the last resolved mapping per 64 KiB page, so loads, stores and fetches skip
@@ -157,7 +159,7 @@ impl SocBus {
             ble: Default::default(),
             sram: vec![0; SRAM_SIZE], irom: vec![0; (IROM_MASK_HIGH - IROM_MASK_LOW) as usize], drom: vec![0; (DROM_MASK_HIGH - DROM_MASK_LOW) as usize],
             rtc_fast: vec![0; 8192], rtc_slow: vec![0; 8192], flash: vec![0xff; flash_size], psram: vec![0; psram_size],
-            mmu: [MMU_INVALID; MMU_ENTRIES], periph: Peripherals::new(mac), board: Box::new(crate::board::Atech14::new()), uart_pins: false, cycles: 0, last_fault: None, spi2_dma_fault: None, irq_dirty: false, gpio_events: None, pin_watch: None, rmt_tap: None, pwm_tap: None, i2c_host: false, spi_host: false, slice_yield: false, debug: Default::default(),
+            mmu: [MMU_INVALID; MMU_ENTRIES], periph: Peripherals::new(mac), board: Box::new(crate::board::Atech14::new()), uart_pins: false, cycles: 0, last_fault: None, spi2_dma_fault: None, irq_dirty: false, gpio_events: None, pin_watch: None, rmt_tap: None, pwm_tap: None, i2c_host: false, spi_host: false, i2s_host: false, slice_yield: false, debug: Default::default(),
             spi2_timing: false, spi2_scheduled: None, spi2_pins: None,
             tlb: vec![TlbEntry::EMPTY; TLB_SIZE], page_ver: Vec::new(), ver_base: [0; 7], flash_epoch: BUS_EPOCHS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) << 32, code_blk: Vec::new(), tick_pending: 0, tick_budget: 0, defer_mmio: false, mmio_deferred: false, vq_violations: 0,
             approximate_cache: None, approximate_cache_pending: 0, approximate_cache_fast_internal: false, approximate_cache_inline: false,
@@ -817,6 +819,7 @@ impl SocBus {
     fn cadence_active(&self) -> bool {
         let p = &self.periph;
         p.i2s0.tx_running() || p.i2s1.tx_running()
+            || p.i2s0.rx_running() || p.i2s1.rx_running()   // Jumperly patch J17: the RX pump is a GDMA IN producer
             || p.lcd_cam.cam_active() || p.lcd_cam.lcd_running()
             // EX157: a running GDMA IN channel is passive. Its only producers are the camera
             // (capture or VSYNC enabled), AES (dma_pending) and mem-to-mem (needs the OUT side running),
@@ -849,6 +852,9 @@ impl SocBus {
         self.tick_budget = budget;
     }
 
+    /// Jumperly patch J17: elapsed cycles the device models have not seen yet (`flush_ticks`).
+    pub fn pending_cycles(&self) -> u64 { u64::from(self.tick_pending) }
+
     /// Deliver the deferred cycles to the device models now.
     pub fn flush_ticks(&mut self) {
         let c = std::mem::take(&mut self.tick_pending);
@@ -879,6 +885,7 @@ impl SocBus {
         self.complete_spi2_dma();
         self.deliver_spi2_transfer();
         self.dma_i2s_step(cycles as u64);
+        self.dma_i2s_rx_step(cycles as u64);   // Jumperly patch J17
         self.dma_cam_step(cycles as u64);
         self.dma_lcd_step(cycles as u64);
         self.dma_m2m_step();

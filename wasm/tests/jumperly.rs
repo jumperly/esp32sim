@@ -902,3 +902,79 @@ fn flash_octal_is_refused_after_boot() {
     let emu = Emu::boot("blink");
     assert_eq!(unsafe { esp32sim_flash_octal(emu.0, 1) }, 1);
 }
+
+// ------------------------------------------------------------------ Jumperly patch J17: I2S RX
+
+/// The I2S RX format `esp32sim_i2s_rx_need` reports: (frames needed, the eight u32 of the buffer).
+fn i2s_need(e: &mut Emu, port: u32, cycles: u32) -> (u32, [u32; 8]) {
+    let n = unsafe { esp32sim_i2s_rx_need(e.0, port, cycles) };
+    let b = e.buf(I2S_RX_INFO_BYTES);
+    (n, std::array::from_fn(|i| u32::from_le_bytes(b[i * 4..i * 4 + 4].try_into().unwrap())))
+}
+
+/// Run the `i2s-mic` fixture (ESP_I2S, RX master on GPIO4/5/6, 16 kHz, 32-bit mono left) for
+/// `ms` of device time in 1 ms slices, feeding I2S0 from `word(frame index) -> (left, right)`
+/// before every slice as the web adapter does. Returns the UART0 text and the last format seen.
+fn run_i2s_mic(host: bool, ms: u64, word: impl Fn(u64) -> [u32; 2]) -> (String, [u32; 8]) {
+    let mut e = Emu::boot("i2s-mic");
+    assert_eq!(unsafe { esp32sim_i2s_host(e.0, u32::from(host)) }, 0);
+    let (mut text, mut fmt, mut k) = (String::new(), [0; 8], 0u64);
+    let end = e.cycles() + ms * 1_000 * MHZ;
+    while e.cycles() < end {
+        let slice = (1_000 * MHZ) as u32;
+        let (n, f) = i2s_need(&mut e, 0, slice);
+        if f[0] != 0 && f[5] & 1 != 0 { fmt = f; }
+        if host && n > 0 {
+            let mut bytes = Vec::with_capacity(n as usize * 8);
+            for _ in 0..n { for w in word(k) { bytes.extend_from_slice(&w.to_le_bytes()); } k += 1; }
+            assert_eq!(unsafe { esp32sim_i2s_rx_push(e.0, 0, bytes.as_ptr(), n as usize) }, n);
+        }
+        assert_eq!(e.run(slice), 0);
+        text += &e.uart(0);
+    }
+    (text, fmt)
+}
+
+/// The values of `key=` in the fixture's last complete report line.
+fn last_report(text: &str, key: &str) -> f64 {
+    let line = text.lines().rev().find(|l| l.starts_with("n=1600 ")).unwrap_or_else(|| panic!("no full report in {text}"));
+    let v = line.split(' ').find_map(|f| f.strip_prefix(key)).unwrap_or_else(|| panic!("{key} in {line}"));
+    v.parse().unwrap_or(f64::NEG_INFINITY)
+}
+
+#[test]
+fn i2s_mic_reports_the_level_of_the_host_sine_on_the_left_slot() {
+    // a 1 kHz tone with a 24-bit peak of 420 426 (−26 dBFS, the INMP441 at 94 dB SPL) in the left
+    // slot, a full-scale square in the right one the receiver must ignore
+    let (text, fmt) = run_i2s_mic(true, 600, |k| {
+        let s = (420_426.0 * (2.0 * std::f64::consts::PI * 1000.0 * k as f64 / 16_000.0).sin()).round() as i32;
+        [(s << 8) as u32, 0x7fff_ff00]
+    });
+    assert!(text.contains("Ready"), "{text}");
+    assert_eq!(fmt, [16_000, 32, 32, 1, 2, 0b11, fmt[6], 1_024_000], "rate, slot bits, data bits, left slot, 2 slots, running Philips, queued, BCK");
+    let dbfs = last_report(&text, "dbfs=");
+    assert!((dbfs + 26.0).abs() < 0.2, "{text}");
+    let peak = last_report(&text, "peak=");
+    assert!((peak - 420_426.0).abs() < 2.0, "{text}");
+}
+
+#[test]
+fn i2s_mic_without_the_host_reads_silence_at_16_khz() {
+    let (text, fmt) = run_i2s_mic(false, 400, |_| [0x7fff_ff00; 2]);
+    assert_eq!(&fmt[..6], [16_000, 32, 32, 1, 2, 0b11]);
+    assert!(text.contains("n=1600 rms=0 peak=0 dbfs=-inf"), "{text}");
+}
+
+#[test]
+fn i2s_host_is_s3_only_and_bad_ports_need_nothing() {
+    let mut e = Emu::boot("blink");
+    assert_eq!(i2s_need(&mut e, 0, 1_000_000).0, 0, "the receiver is off");
+    assert_eq!(i2s_need(&mut e, 2, 1_000_000).0, 0);
+    assert_eq!(unsafe { esp32sim_i2s_rx_push(e.0, 7, [0u8; 8].as_ptr(), 1) }, 0);
+    let board = "esp32c3";
+    // SAFETY: the board name is readable for the call; the emulator is deleted below.
+    let c3 = unsafe { esp32sim_new(board.as_ptr(), board.len(), 4, 0) };
+    assert_eq!(unsafe { esp32sim_i2s_host(c3, 1) }, 1);
+    assert_eq!(unsafe { esp32sim_i2s_rx_need(c3, 0, 1000) }, 0);
+    unsafe { esp32sim_delete(c3) };
+}

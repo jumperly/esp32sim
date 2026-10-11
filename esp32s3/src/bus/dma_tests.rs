@@ -587,3 +587,65 @@ fn camera_large_frame_slow_clock_progress_does_not_overflow() {
     assert_eq!(bus.read32(M2M_DST).unwrap(), 0x5a5a5a5a);
     assert_eq!(bus.periph.gdma.inp[0].int_raw, 0x13);
 }
+
+/// Jumperly patch J17: I2S0 RX as ESP-IDF's `i2s_std` leaves it (master, Philips, 32-bit mono
+/// left, RX_EOF_NUM = the DMA buffer size) on a ring of two 8-byte IN descriptors, one frame per cycle.
+fn i2s0_rx_ring(bus: &mut SocBus) {
+    for (i, next) in [(0u32, RX_DESC + 16), (1, RX_DESC)] {
+        let d = RX_DESC + 16 * i;
+        bus.write32(d, (1 << 31) | (1 << 30) | (8 << 12) | 8).unwrap();       // owner DMA, EOF, length = size = 8
+        bus.write32(d + 4, OUTPUT + 8 * i).unwrap();
+        bus.write32(d + 8, next).unwrap();
+    }
+    let ch = &mut bus.periph.gdma.inp[1];
+    ch.running = true; ch.peri_sel = 3; ch.desc = RX_DESC;
+    let i2s = &mut bus.periph.i2s0;
+    i2s.write(0x28, 31 | (31 << 13) | (31 << 18) | (31 << 24) | (1 << 29));
+    i2s.write(0x50, (1 << 16) | 1);
+    i2s.write(0x64, 8);
+    i2s.write(0x20, (1 << 2) | (1 << 19) | (1 << 15) | (1 << 5) | (1 << 9));
+    i2s.rx_sample_rate = crate::periph::CPU_HZ as u32;
+}
+
+#[test]
+fn i2s_rx_fills_the_ring_with_host_frames_and_one_suc_eof_per_buffer() {
+    let mut bus = SocBus::new(1024, 1024, [0; 6]);
+    bus.i2s_host = true;
+    i2s0_rx_ring(&mut bus);
+    assert_eq!(bus.periph.i2s0.rx_frames_needed(3), 4);
+    bus.periph.i2s0.rx_push(&[[0x1111_1100, 1], [0x2222_2200, 2], [0x3333_3300, 3]]);
+    bus.dma_i2s_rx_step(3);
+    assert_eq!(bus.read32(OUTPUT).unwrap(), 0x1111_1100);
+    assert_eq!(bus.read32(OUTPUT + 4).unwrap(), 0x2222_2200);
+    assert_eq!(bus.read32(OUTPUT + 8).unwrap(), 0x3333_3300);
+    let ch = bus.periph.gdma.inp[1];
+    assert_eq!(ch.int_raw & 0b11, 0b11, "IN_DONE and IN_SUC_EOF");
+    assert_eq!(ch.eof_desc, RX_DESC);
+    assert_eq!((ch.desc, ch.buf_pos, ch.running), (RX_DESC + 16, 4, true));
+    assert_eq!(bus.read32(RX_DESC).unwrap(), (1 << 30) | (8 << 12) | 8, "written back: owner CPU, length 8, SUC_EOF");
+    assert!(bus.irq_dirty);
+    assert!(!bus.slice_yield);
+    bus.dma_i2s_rx_step(1);
+    assert!(bus.slice_yield, "a host shortfall ends the slice");
+    assert_eq!(bus.periph.i2s0.rx_owed, 1);
+    bus.periph.i2s0.rx_push(&[[0x4444_4400, 4]]);
+    bus.dma_i2s_rx_step(0);
+    let ch = bus.periph.gdma.inp[1];
+    assert_eq!(bus.read32(OUTPUT + 12).unwrap(), 0x4444_4400);
+    assert_eq!((ch.desc, ch.eof_desc), (RX_DESC, RX_DESC + 16), "the ring wraps");
+}
+
+#[test]
+fn i2s_rx_without_a_host_receives_silence_and_without_dma_drops_it() {
+    let mut bus = SocBus::new(1024, 1024, [0; 6]);
+    i2s0_rx_ring(&mut bus);
+    bus.write32(OUTPUT, 0xffff_ffff).unwrap();
+    bus.dma_i2s_rx_step(2);
+    assert_eq!(bus.read32(OUTPUT).unwrap(), 0);
+    assert_eq!(bus.periph.gdma.inp[1].eof_desc, RX_DESC);
+    assert!(!bus.slice_yield);
+    bus.periph.gdma.inp[1].running = false;
+    bus.dma_i2s_rx_step(2);
+    assert_eq!(bus.periph.i2s0.frames_in, 4);
+    assert_eq!(bus.periph.gdma.inp[1].desc, RX_DESC + 16);
+}

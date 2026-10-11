@@ -420,3 +420,28 @@ Mode Enabled"), the bootloader and the app find a Macronix octal chip (JEDEC C2 
 The same firmware on the quad model still runs: ESP-IDF's flash mode auto-detection falls back to
 DIO when efuse FLASH_TYPE is quad. `wasm/tests/jumperly.rs` (`octal_flash_modules_run_opi_firmware`)
 runs the `octal16` / `octal32` fixtures on 16 MB flash + 8 MB PSRAM and 32 MB + 16 MB.
+
+## I2S receive (microphones)
+
+Jumperly patch J17. The S3's I2S0 / I2S1 receive in master mode (ESP-IDF `i2s_std` / `i2s_tdm`,
+the core's `ESP_I2S`): the RX clock tree gives the frame rate, the RX registers the slot width,
+data bits, received slots and byte layout, and the SoC writes the samples into the GDMA IN ring at
+the frame rate with IN_SUC_EOF every RX_EOF_NUM bytes (ESP-IDF sets it to the DMA buffer size, so
+each buffer reaches `i2s_channel_read` through the driver's EOF callback). Without a host every
+frame is silence. With one, the host supplies the slot words of the frames before each run: the
+emulator does not shift SD bit by bit.
+
+| Export | Contract |
+| --- | --- |
+| `esp32sim_i2s_host(e, on)` | The host supplies what the receivers get (`on` nonzero); a shortfall ends the slice once. Survives a chip reset. ESP32-S3 only; 1 otherwise. |
+| `esp32sim_i2s_rx_need(e, port, cycles)` | Frames controller `port` (0, 1) should get now so the next `cycles` find them queued (those falling due, the ones owed, one of slack, less the queued); 0 while its receiver is stopped, a slave or PDM. The buffer: eight u32 LE — frame rate Hz, BCK per slot, data bits, received slot mask, slots per frame, flags (bit 0 running, bit 1 Philips), queued frames, BCK Hz. |
+| `esp32sim_i2s_rx_push(e, port, ptr, frames)` | Queue `frames` × 8 bytes: the left (WS low) and right (WS high) slot word, u32 LE, MSB-aligned (bit 31 = the first bit after the WS edge and the one-BCK delay). Returns how many it took (at most 65536 wait). |
+
+The receiver takes RX_BITS_MOD + 1 bits from the top of each received slot (RX_LEFT_ALIGN; the
+bottom ones without it, LSB first with RX_BIT_ORDER) into 1, 2, 3 or 4 bytes (24-bit in 4 with
+RX_24_FILL_EN), little-endian unless RX_BIG_ENDIAN; without RX_MSB_SHIFT the word arrives one bit
+late. Frames the host owes for more than 100 ms are given up as silence; starting or stopping the
+receiver drops the queue. The web simulator's adapter routes the request to the part on the
+pads of the RX BCK / WS outputs and the SD input. `wasm/tests/jumperly.rs`
+(`i2s_mic_reports_the_level_of_the_host_sine_on_the_left_slot`) runs the `i2s-mic` fixture (16 kHz,
+32-bit mono left) on a −26 dBFS host sine: the sketch reports −26.0 dBFS and the peak 420 426.

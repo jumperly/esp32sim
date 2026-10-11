@@ -442,6 +442,71 @@ pub unsafe extern "C" fn esp32sim_gpio_in_pin(e: *mut Emu, signal: u32) -> u32 {
     match sel { Some(sel) if sel & 0x80 != 0 => sel & 0x3f, _ => 255 }
 }
 
+// ------------------------------------------------------------------ Jumperly patch J17: I2S RX
+
+/// Bytes `esp32sim_i2s_rx_need` writes to the buffer: eight u32.
+pub const I2S_RX_INFO_BYTES: usize = 32;
+
+/// Jumperly patch J17: the host supplies what I2S RX receives (`esp32sim_i2s_rx_push`) when `on` is
+/// nonzero; otherwise a running receiver reads silence. A shortfall of host frames ends the slice
+/// once. Survives a chip reset. ESP32-S3 only; returns 1 otherwise.
+///
+/// # Safety
+/// `e` must point to a live emulator to which the caller has exclusive access.
+#[no_mangle]
+pub unsafe extern "C" fn esp32sim_i2s_host(e: *mut Emu, on: u32) -> u32 {
+    // SAFETY: the caller provides exclusive access to a live emulator.
+    let e = unsafe { &mut *e };
+    let Some(m) = e.m.s3_mut() else { return 1 };
+    m.bus.i2s_host = on != 0;
+    m.bus.refresh_tick_budget();
+    0
+}
+
+/// Jumperly patch J17: how many frames I2S controller `port` (0, 1) should get from the host now
+/// so the next `cycles` CPU cycles of a run find them queued (0 while its receiver is stopped, in
+/// slave or PDM mode, or for another chip or port). The buffer holds the format, eight u32 LE:
+/// frame rate Hz, BCK cycles per slot, data bits per slot, received slot mask, slots per frame,
+/// flags (bit 0 running, bit 1 Philips one-BCK delay), frames queued, BCK Hz.
+///
+/// # Safety
+/// `e` must point to a live emulator to which the caller has exclusive access.
+#[no_mangle]
+pub unsafe extern "C" fn esp32sim_i2s_rx_need(e: *mut Emu, port: u32, cycles: u32) -> u32 {
+    // SAFETY: the caller provides exclusive access to a live emulator.
+    let e = unsafe { &mut *e };
+    e.buf.clear();
+    let Some(m) = e.m.s3_mut() else { return 0 };
+    let pending = m.bus.pending_cycles();
+    let i2s = match port { 0 => &m.bus.periph.i2s0, 1 => &m.bus.periph.i2s1, _ => return 0 };
+    let flags = u32::from(i2s.rx_running()) | (u32::from(i2s.rx_conf1 & (1 << 29) != 0) << 1);
+    for v in [i2s.rx_sample_rate, i2s.rx_slot_bits(), i2s.rx_data_bits(), i2s.rx_slot_mask(), i2s.rx_slots(), flags, i2s.rx_frames.len() as u32, i2s.rx_bck_hz()] {
+        e.buf.extend_from_slice(&v.to_le_bytes());
+    }
+    // the cycles the devices have not seen yet fall due in the next run too
+    i2s.rx_frames_needed(pending + u64::from(cycles))
+}
+
+/// Jumperly patch J17: queue `frames` frames for I2S controller `port`'s receiver: 8 bytes each,
+/// the left (WS low) then the right (WS high) slot word, u32 LE, MSB-aligned (bit 31 is the first
+/// bit after the WS edge and the I2S one-BCK delay; the receiver takes its data bits from the top).
+/// Returns how many it took (at most 65536 wait). ESP32-S3 only; 0 otherwise.
+///
+/// # Safety
+/// `e` must point to a live emulator to which the caller has exclusive access. For nonzero
+/// `frames`, `ptr` must be non-null and readable for `8 * frames` bytes throughout this call.
+#[no_mangle]
+pub unsafe extern "C" fn esp32sim_i2s_rx_push(e: *mut Emu, port: u32, ptr: *const u8, frames: usize) -> u32 {
+    // SAFETY: the caller provides exclusive access to a live emulator.
+    let e = unsafe { &mut *e };
+    // SAFETY: the caller provides a readable input buffer for this call.
+    let data = unsafe { bytes(ptr, frames.saturating_mul(8)) };
+    let Some(m) = e.m.s3_mut() else { return 0 };
+    let i2s = match port { 0 => &mut m.bus.periph.i2s0, 1 => &mut m.bus.periph.i2s1, _ => return 0 };
+    let words: Vec<[u32; 2]> = data.chunks_exact(8).map(|c| [u32::from_le_bytes(c[0..4].try_into().unwrap()), u32::from_le_bytes(c[4..8].try_into().unwrap())]).collect();
+    i2s.rx_push(&words) as u32
+}
+
 // ------------------------------------------------------------------ Jumperly patch J11: Wi-Fi
 
 /// Jumperly patch J11: attach the virtual access point and its subnet like `esp32sim_wifi`, from
