@@ -6,4 +6,12 @@ impl Peripherals {
     pub(crate) fn spi2_pins(&self) -> SpiPins {
         ChipPins::S3.routes(&self.gpio, &self.io_mux).spi_pins(&self.spi2, [101, 102, 103, 110], 256, &[(4, 12, 11, 13, 10), (2, 36, 35, 37, 34)])
     }
+    /// Jumperly patch J18: SPI3 has no IO_MUX pins on the S3, only the matrix: SPI3_CLK 66, SPI3_Q 67,
+    /// SPI3_D 68, SPI3_CS0..2 71, 72, 127 (`soc/gpio_sig_map.h`).
+    pub(crate) fn spi3_pins(&self) -> SpiPins {
+        ChipPins::S3.routes(&self.gpio, &self.io_mux).spi_pins_cs(&self.spi3, [66, 67, 68], &[71, 72, 127], 256, &[])
+    }
+    /// Jumperly patch J18: GP-SPI `host` 2 or 3.
+    pub fn gpspi(&self, host: u8) -> &esp_periph::GpSpi { if host == 3 { &self.spi3 } else { &self.spi2 } }
+    pub fn gpspi_mut(&mut self, host: u8) -> &mut esp_periph::GpSpi { if host == 3 { &mut self.spi3 } else { &mut self.spi2 } }
 }

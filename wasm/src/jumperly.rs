@@ -310,25 +310,32 @@ pub unsafe extern "C" fn esp32sim_buf_len(e: *mut Emu) -> usize {
     unsafe { &*e }.buf.len()
 }
 
-// ------------------------------------------------------------------ Jumperly patch J6/J7: bus bridges
+// ------------------------------------------------------------------ Jumperly patch J6/J7/J18: bus bridges
 
 #[cfg(target_arch = "wasm32")]
 #[link(wasm_import_module = "env")]
 extern "C" {
     /// Jumperly patch J6: op 0 start (arg = addr << 1 | read) → ACK, 1 write (arg = byte) → ACK, 2 read → byte, 3 stop.
     fn host_i2c(bus: u32, op: u32, arg: u32) -> u32;
-    /// Jumperly patch J7: one full-duplex SPI2 transfer; the host writes `rx_len` MISO bytes to `rx`.
-    fn host_spi(tx: *const u8, tx_len: usize, rx: *mut u8, rx_len: usize);
+    /// Jumperly patch J7 / J18: one full-duplex transfer of GP-SPI controller `host` (2 = SPI2 / FSPI,
+    /// 3 = SPI3 / HSPI); the host writes `rx_len` MISO bytes to `rx`. Replaces J7's `host_spi`
+    /// (the same call without `host`, SPI2 only).
+    fn host_spi_bus(host: u32, tx: *const u8, tx_len: usize, rx: *mut u8, rx_len: usize);
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-thread_local! {
-    static NATIVE_I2C: std::cell::RefCell<Option<Box<dyn FnMut(u32, u32, u32) -> u32>>> = std::cell::RefCell::new(None);
-    static NATIVE_SPI: std::cell::RefCell<Option<Box<dyn FnMut(&[u8], &mut [u8])>>> = std::cell::RefCell::new(None);
-}
-/// Native builds (tests): answer the bus bridges with closures; WASM uses the host imports.
+type NativeI2c = std::cell::RefCell<Option<Box<dyn FnMut(u32, u32, u32) -> u32>>>;
 #[cfg(not(target_arch = "wasm32"))]
-pub fn set_native_bus_host(i2c: impl FnMut(u32, u32, u32) -> u32 + 'static, spi: impl FnMut(&[u8], &mut [u8]) + 'static) {
+type NativeSpi = std::cell::RefCell<Option<Box<dyn FnMut(u32, &[u8], &mut [u8])>>>;
+#[cfg(not(target_arch = "wasm32"))]
+thread_local! {
+    static NATIVE_I2C: NativeI2c = std::cell::RefCell::new(None);
+    static NATIVE_SPI: NativeSpi = std::cell::RefCell::new(None);
+}
+/// Native builds (tests): answer the bus bridges with closures; WASM uses the host imports. The SPI
+/// closure gets the controller (2 or 3) first, like `host_spi_bus`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn set_native_bus_host(i2c: impl FnMut(u32, u32, u32) -> u32 + 'static, spi: impl FnMut(u32, &[u8], &mut [u8]) + 'static) {
     NATIVE_I2C.with(|h| *h.borrow_mut() = Some(Box::new(i2c)));
     NATIVE_SPI.with(|h| *h.borrow_mut() = Some(Box::new(spi)));
 }
@@ -337,10 +344,18 @@ unsafe fn host_i2c(bus: u32, op: u32, arg: u32) -> u32 {
     NATIVE_I2C.with(|h| h.borrow_mut().as_mut().map_or(0, |f| f(bus, op, arg)))
 }
 #[cfg(not(target_arch = "wasm32"))]
-unsafe fn host_spi(tx: *const u8, tx_len: usize, rx: *mut u8, rx_len: usize) {
+unsafe fn host_spi_bus(host: u32, tx: *const u8, tx_len: usize, rx: *mut u8, rx_len: usize) {
     // SAFETY: the caller passes the buffers of a live transfer for the duration of this call.
     let (tx, rx) = unsafe { (std::slice::from_raw_parts(tx, tx_len), std::slice::from_raw_parts_mut(rx, rx_len)) };
-    NATIVE_SPI.with(|h| if let Some(f) = h.borrow_mut().as_mut() { f(tx, rx) });
+    NATIVE_SPI.with(|h| if let Some(f) = h.borrow_mut().as_mut() { f(host, tx, rx) });
+}
+
+/// Hand one waiting GP-SPI transfer of controller `host` to the host and return the MISO bytes.
+fn host_transfer(host: u32, t: &esp_periph::GpSpiTransfer) -> Vec<u8> {
+    let mut rx = vec![0xffu8; t.rx_len];
+    // SAFETY: both buffers live for the call; the host only writes `rx_len` bytes to `rx`.
+    unsafe { host_spi_bus(host, t.tx.as_ptr(), t.tx.len(), rx.as_mut_ptr(), rx.len()) };
+    rx
 }
 
 struct HostI2c { bus: u32 }
@@ -351,9 +366,9 @@ impl esp32s3::i2c::I2cHost for HostI2c {
     fn stop(&mut self) { unsafe { host_i2c(self.bus, 3, 0); } }
 }
 
-/// Turn the I2C / SPI2 host bridges on or off (they survive chip resets). Turning a bridge off
-/// finishes what still waits for the host without it: an I2C transaction NACKs unknown addresses,
-/// a SPI2 transfer reads 0xFF.
+/// Turn the I2C / SPI host bridges on or off (they survive chip resets); `spi` covers SPI2 and,
+/// on the S3, SPI3 (Jumperly patch J18). Turning a bridge off finishes what still waits for the
+/// host without it: an I2C transaction NACKs unknown addresses, a SPI transfer reads 0xFF.
 ///
 /// # Safety
 /// `e` must point to a live emulator to which the caller has exclusive access.
@@ -377,15 +392,17 @@ pub unsafe extern "C" fn esp32sim_bus_host(e: *mut Emu, i2c: u32, spi: u32) -> u
     for c in &mut m.bus.periph.i2c { finished |= c.set_defer(i2c != 0); }
     m.bus.spi_host = spi != 0;
     if spi == 0 {
-        if let Some(t) = m.bus.periph.spi2.host_wait.take() { m.bus.periph.spi2.finish_transfer(t, &[]); finished = true; }
+        for c in [&mut m.bus.periph.spi2, &mut m.bus.periph.spi3] {
+            if let Some(t) = c.host_wait.take() { c.finish_transfer(t, &[]); finished = true; }
+        }
     }
     if finished { m.bus.irq_dirty = true; m.bus.refresh_tick_budget(); }
     0
 }
 
-/// Run the I2C / SPI2 transactions the guest started since the last call, through `host_i2c` /
-/// `host_spi`, and raise their completion interrupts. Returns how many ran. Call it between runs,
-/// never from inside a host import.
+/// Run the I2C / SPI transactions the guest started since the last call, through `host_i2c` /
+/// `host_spi_bus` (SPI2, then SPI3 on the S3), and raise their completion interrupts. Returns how
+/// many ran. Call it between runs, never from inside a host import.
 ///
 /// # Safety
 /// `e` must point to a live emulator to which the caller has exclusive access.
@@ -398,9 +415,7 @@ pub unsafe extern "C" fn esp32sim_bus_service(e: *mut Emu) -> u32 {
         let mut host = HostI2c { bus: 0 };
         if m.bus.periph.i2c.service(&mut host) { n += 1; }
         if let Some(t) = m.bus.periph.spi2.host_wait.take() {
-            let mut rx = vec![0xffu8; t.rx_len];
-            // SAFETY: both buffers live for the call; the host only writes `rx_len` bytes to `rx`.
-            unsafe { host_spi(t.tx.as_ptr(), t.tx.len(), rx.as_mut_ptr(), rx.len()) };
+            let rx = host_transfer(2, &t);
             m.bus.periph.spi2.finish_transfer(t, &rx);
             n += 1;
         }
@@ -413,18 +428,19 @@ pub unsafe extern "C" fn esp32sim_bus_service(e: *mut Emu) -> u32 {
         let mut host = HostI2c { bus: bus as u32 };
         if m.bus.periph.i2c[bus].service(&mut host) { n += 1; }
     }
-    if let Some(t) = m.bus.periph.spi2.host_wait.take() {
-        let mut rx = vec![0xffu8; t.rx_len];
-        // SAFETY: both buffers live for the call; the host only writes `rx_len` bytes to `rx`.
-        unsafe { host_spi(t.tx.as_ptr(), t.tx.len(), rx.as_mut_ptr(), rx.len()) };
-        m.bus.periph.spi2.finish_transfer(t, &rx);
-        n += 1;
+    for host in [2u8, 3] {                                              // Jumperly patch J18: SPI3 too
+        let c = m.bus.periph.gpspi_mut(host);
+        if let Some(t) = c.host_wait.take() {
+            let rx = host_transfer(u32::from(host), &t);
+            c.finish_transfer(t, &rx);
+            n += 1;
+        }
     }
     if n > 0 { m.bus.irq_dirty = true; m.bus.refresh_tick_budget(); }
     n
 }
 
-/// The pin a matrix input signal reads (FSPIQ = 102 for MISO, I2CEXT0 SDA = 90 ...), 255 if none.
+/// The pin a matrix input signal reads (FSPIQ = 102 / SPI3_Q = 67 for MISO, I2CEXT0 SDA = 90 ...), 255 if none.
 ///
 /// # Safety
 /// `e` must point to a live emulator to which the caller has exclusive access.
@@ -590,6 +606,54 @@ mod bus_host_tests {
         assert!(!c.deferred);
         assert_ne!(c.int_raw & esp32s3::i2c::INT_NACK, 0);
         assert_eq!(unsafe { esp32sim_bus_service(e) }, 0);              // nothing left for the host
+        unsafe { esp32sim_delete(e) };
+    }
+
+    /// Jumperly patch J18: SPI2 and SPI3 transfers reach `host_spi_bus` with their controller, each
+    /// gets its own MISO bytes; turning the bridge off finishes a waiting SPI3 transfer with 0xFF.
+    #[test]
+    fn spi2_and_spi3_reach_the_host_with_their_controller() {
+        use xtensa_lx7::bus::Bus;
+        use std::{cell::RefCell, rc::Rc};
+        const SPI2: u32 = 0x6002_4000;
+        const SPI3: u32 = 0x6002_5000;
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let s = seen.clone();
+        set_native_bus_host(|_, _, _| 0, move |host, tx, rx| {
+            s.borrow_mut().push((host, tx.to_vec()));
+            rx.fill(host as u8 * 0x11);
+        });
+        let board = "none";
+        // SAFETY: the board name is readable for the call; the emulator is ours until deleted.
+        let e = unsafe { esp32sim_new(board.as_ptr(), board.len(), 4, 0) };
+        assert!(!e.is_null());
+        assert_eq!(unsafe { esp32sim_bus_host(e, 0, 1) }, 0);
+        fn bus<'a>(e: *mut Emu) -> &'a mut esp32s3::bus::SocBus {
+            // SAFETY: the test owns the live emulator.
+            &mut unsafe { &mut *e }.m.s3_mut().unwrap().bus
+        }
+        let start = |e: *mut Emu, base: u32, byte: u32| {
+            let b = bus(e);
+            b.write32(base + 0x10, (1 << 27) | (1 << 28) | 1).unwrap();   // full duplex, one byte
+            b.write32(base + 0x1c, 7).unwrap();
+            b.write32(base + 0x98, byte).unwrap();
+            b.write32(base, 1 << 24).unwrap();
+        };
+        start(e, SPI2, 0xa2);
+        start(e, SPI3, 0xa3);
+        assert_eq!(unsafe { esp32sim_bus_service(e) }, 2);
+        assert_eq!(&*seen.borrow(), &[(2, vec![0xa2]), (3, vec![0xa3])]);
+        let b = bus(e);
+        assert_eq!((b.read32(SPI2 + 0x98).unwrap() & 0xff, b.read32(SPI3 + 0x98).unwrap() & 0xff), (0x22, 0x33));
+        assert_eq!((b.read32(SPI2).unwrap() | b.read32(SPI3).unwrap()) & (1 << 24), 0, "both done");
+        start(e, SPI3, 0x55);
+        assert_ne!(bus(e).read32(SPI3).unwrap() & (1 << 24), 0, "waits for the host");
+        assert_eq!(unsafe { esp32sim_bus_host(e, 0, 0) }, 0);
+        let b = bus(e);
+        assert_eq!(b.read32(SPI3).unwrap() & (1 << 24), 0, "finished without the host");
+        assert_eq!(b.read32(SPI3 + 0x98).unwrap() & 0xff, 0xff);
+        assert_eq!(unsafe { esp32sim_bus_service(e) }, 0);
+        assert_eq!(seen.borrow().len(), 2);
         unsafe { esp32sim_delete(e) };
     }
 }

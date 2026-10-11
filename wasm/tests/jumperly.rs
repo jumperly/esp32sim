@@ -285,7 +285,7 @@ fn wire_scan_write_and_read_through_the_host_bridge() {
             2 => { let p = s.1; s.1 += 1; u32::from(s.0[p & 255]) }
             _ => 0,
         }
-    }, |_tx, _rx| {});
+    }, |_host, _tx, _rx| {});
     let mut e = Emu::boot("i2c");
     assert_eq!(unsafe { esp32sim_bus_host(e.0, 1, 0) }, 0);
     let text = run_with_bus_service(&mut e, "rd=");
@@ -297,12 +297,37 @@ fn wire_scan_write_and_read_through_the_host_bridge() {
 
 #[test]
 fn spi_transfer_through_the_host_bridge() {
-    set_native_bus_host(|_, _, _| 0, |tx, rx| for (r, t) in rx.iter_mut().zip(tx) { *r = !t; });
+    set_native_bus_host(|_, _, _| 0, |host, tx, rx| { assert_eq!(host, 2); for (r, t) in rx.iter_mut().zip(tx) { *r = !t; } });
     let mut e = Emu::boot("spi");
     assert_eq!(unsafe { esp32sim_bus_host(e.0, 0, 1) }, 0);
     let text = run_with_bus_service(&mut e, "spi=");
     assert!(text.contains("spi=5a edcb"), "{text}");
     assert_eq!(unsafe { esp32sim_gpio_in_pin(e.0, 102) }, 13);               // MISO on GPIO13
+}
+
+/// Jumperly patch J18: the `spi3` fixture drives an ILI9341 on SPI2 (FSPI) and a microSD on SPI3
+/// (`SPIClass(HSPI)`, MISO on GPIO16). Nothing answers, so the card never mounts, but its CMD0 reaches
+/// the host as a controller-3 transfer and the TFT's traffic as controller-2 transfers.
+#[test]
+fn spi3_transfers_reach_the_host_as_controller_3() {
+    use std::{cell::RefCell, rc::Rc};
+    let seen = Rc::new(RefCell::new((Vec::new(), Vec::new())));               // (SPI2 bytes, SPI3 bytes)
+    let s = seen.clone();
+    set_native_bus_host(|_, _, _| 0, move |host, tx, _rx| {
+        let mut s = s.borrow_mut();
+        match host { 2 => s.0.extend_from_slice(tx), 3 => s.1.extend_from_slice(tx), _ => panic!("controller {host}") }
+    });
+    let mut e = Emu::boot("spi3");
+    assert_eq!(unsafe { esp32sim_bus_host(e.0, 0, 1) }, 0);
+    let text = run_with_bus_service(&mut e, "mount failed");
+    assert!(text.contains("tft ready") && text.contains("mount failed"), "{text}");
+    let cmd0 = [0x40u8, 0, 0, 0, 0, 0x95];
+    let (spi2, spi3) = &*seen.borrow();
+    assert!(spi3.windows(6).any(|w| w == cmd0), "CMD0 on SPI3");
+    assert!(!spi2.windows(6).any(|w| w == cmd0), "no CMD0 on SPI2");
+    assert!(spi2.len() > 16, "the TFT's init went over SPI2");
+    assert_eq!(unsafe { esp32sim_gpio_in_pin(e.0, 67) }, 16);                // SPI3_Q on GPIO16
+    assert_eq!(unsafe { esp32sim_gpio_in_pin(e.0, 102) }, 13);               // FSPIQ on GPIO13
 }
 
 /// Run in ≤ 1 ms slices, serving the bus bridges after every return (a deferred transaction ends the

@@ -1341,3 +1341,97 @@ fn only_committing_pwm_writes_are_shown_to_the_host() {
     assert!(pwm_commit(0x6001_e000 + 0x50, 0));         // MCPWM0
     assert!(!pwm_commit(0x6000_4000, 1 << 4));          // GPIO
 }
+
+// ------------------------------------------------------------------ Jumperly patch J18: SPI3
+
+const SPI3: u32 = 0x6002_5000;
+
+/// Jumperly patch J18: SPI3 is its own GP-SPI block. A CPU-FIFO transfer, as the Arduino SPI driver
+/// makes it for `SPIClass(HSPI)`, reaches the board as host 3, raises TRANS_DONE on SPI3's source
+/// (22) and leaves SPI2 alone.
+#[test]
+fn spi3_cpu_transfer_reaches_the_board_as_host_3_on_its_own_source() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let mut bus = SocBus::new(1024, 1024, [0; 6]);
+    bus.board = Box::new(ProbeBoard { events: events.clone() });
+    bus.write32(SPI3 + 0x34, 1 << 12).unwrap();                         // TRANS_DONE enabled
+    bus.write32(SPI3 + 0x10, (1 << 27) | (1 << 28) | 1).unwrap();       // MOSI + MISO, full duplex
+    bus.write32(SPI3 + 0x1c, 15).unwrap();
+    bus.write32(SPI3 + 0x98, 0x3412).unwrap();
+    bus.write32(SPI3, 1 << 24).unwrap();
+    assert_eq!(&*events.lock().unwrap(), &["spi:3:[12, 34]:2"]);
+    assert_eq!(bus.read32(SPI3).unwrap() & (1 << 24), 0, "USR done");
+    assert_eq!(bus.read32(SPI3 + 0x98).unwrap() & 0xffff, 0x5150, "MISO in W0");
+    assert_eq!((bus.periph.spi3.transfers, bus.periph.spi2.transfers), (1, 0));
+    let status = bus.periph.source_status();
+    let on = |src: usize| status[src / 32] & (1 << (src % 32)) != 0;
+    assert!(on(crate::periph::SRC_SPI3) && !on(crate::periph::SRC_SPI2));
+    bus.write32(SPI3 + 0x38, 1 << 12).unwrap();
+    assert!(!bus.periph.spi3.irq());
+}
+
+/// Jumperly patch J18: with the host bridge on, an SPI3 transfer waits (USR busy, the slice ends)
+/// next to SPI2's, each in its own controller.
+#[test]
+fn spi3_waits_for_the_host_beside_spi2() {
+    let mut bus = SocBus::new(1024, 1024, [0; 6]);
+    bus.spi_host = true;
+    for (base, byte) in [(SPI2, 0x22), (SPI3, 0x33)] {
+        bus.write32(base + 0x10, 1 << 27).unwrap();
+        bus.write32(base + 0x1c, 7).unwrap();
+        bus.write32(base + 0x98, byte).unwrap();
+        bus.write32(base, 1 << 24).unwrap();
+        assert_ne!(bus.read32(base).unwrap() & (1 << 24), 0, "USR busy while the host has it");
+    }
+    assert!(std::mem::take(&mut bus.slice_yield));
+    let t2 = bus.periph.spi2.host_wait.take().expect("SPI2 waits");
+    let t3 = bus.periph.spi3.host_wait.take().expect("SPI3 waits");
+    assert_eq!((t2.tx.as_slice(), t3.tx.as_slice()), (&[0x22u8][..], &[0x33u8][..]));
+    bus.periph.spi3.finish_transfer(t3, &[]);
+    assert_eq!(bus.read32(SPI3).unwrap() & (1 << 24), 0);
+}
+
+/// Jumperly patch J18: SPI3's DMA data phase comes from the GDMA OUT channel bound to trigger 1
+/// (SOC_GDMA_TRIG_PERIPH_SPI3); a channel bound to SPI2 (trigger 0) does not feed it.
+#[test]
+fn spi3_dma_reads_the_gdma_channel_of_trigger_1() {
+    const DATA: u32 = 0x3fc9_0200;
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let mut bus = SocBus::new(1024, 1024, [0; 6]);
+    bus.board = Box::new(ProbeBoard { events: events.clone() });
+    bus.write32(DATA, 0x4433_2211).unwrap();
+    bus.write32(FIRST_DESC, 4 | (4 << 12) | (1 << 30) | (1 << 31)).unwrap();
+    bus.write32(FIRST_DESC + 4, DATA).unwrap();
+    bus.write32(FIRST_DESC + 8, 0).unwrap();
+    bus.periph.gdma.out[0].peri_sel = 0;                                // SPI2's channel, idle
+    bus.periph.gdma.out[1].peri_sel = 1;
+    bus.periph.gdma.out[1].desc = FIRST_DESC;
+    bus.periph.gdma.out[1].running = true;
+    bus.write32(SPI3 + 0x30, 1 << 28).unwrap();
+    bus.write32(SPI3 + 0x10, 1 << 27).unwrap();
+    bus.write32(SPI3 + 0x1c, 31).unwrap();
+    bus.write32(SPI3, 1 << 24).unwrap();
+    assert_eq!(&*events.lock().unwrap(), &["spi:3:[11, 22, 33, 44]:0"]);
+    assert_eq!(bus.periph.spi3.transfers, 1);
+    assert!(bus.periph.spi3.dma_tx_pending.is_none());
+    assert_ne!(bus.periph.gdma.out[1].int_raw & (1 << 1), 0, "OUT_EOF on SPI3's channel");
+    assert_eq!(bus.spi3_dma_fault, None);
+}
+
+/// Jumperly patch J18: a pin-aware board sees SPI3's routes through the matrix: SPI3_CLK 66,
+/// SPI3_D 68, SPI3_Q 67 in, SPI3_CS0 71; LEDC signal 73 (right after SPI3_CS1) is no select.
+#[test]
+fn spi3_routes_come_from_its_matrix_signals() {
+    let mut bus = SocBus::new(1024, 1024, [0; 6]);
+    for (pin, signal) in [(6u32, 66u32), (5, 68), (7, 71), (15, 73)] {
+        bus.write32(0x6000_4554 + 4 * pin, signal).unwrap();            // FUNC_OUT_SEL_CFG
+        bus.write32(0x6000_9004 + 4 * pin, (1 << 12) | (1 << 9)).unwrap();   // IO_MUX: GPIO function, input enable
+    }
+    bus.write32(0x6000_4154 + 4 * 67, 0x80 | 4).unwrap();               // FUNC_IN_SEL: SPI3_Q from GPIO4
+    bus.write32(0x6000_9004 + 4 * 4, (1 << 12) | (1 << 9)).unwrap();
+    bus.write32(SPI3 + 0x10, (1 << 27) | (1 << 28)).unwrap();
+    bus.write32(SPI3 + 0x20, 0x3e).unwrap();                            // CS0 only
+    let pins = bus.periph.spi3_pins();
+    assert_eq!((pins.sclk, pins.mosi, pins.miso, pins.cs), (1 << 6, 1 << 5, Some(4), 1 << 7));
+    assert_eq!(bus.periph.spi2_pins().sclk, 0, "SPI2 is routed nowhere");
+}

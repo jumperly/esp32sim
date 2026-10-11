@@ -43,6 +43,12 @@ impl PinRoutes<'_> {
         self.matrix_input(signal).filter(|&pin| self.matrix_output(pin as usize, signal as u32))
     }
     pub fn spi_pins(&self, spi: &GpSpi, signals: [u32; 4], gpio_signal: u32, native: &[(u32, usize, usize, usize, usize)]) -> SpiPins {
+        let cs: [u32; 6] = std::array::from_fn(|i| signals[3] + i as u32);
+        self.spi_pins_cs(spi, [signals[0], signals[1], signals[2]], &cs, gpio_signal, native)
+    }
+    /// Jumperly patch J18: `spi_pins` for a controller whose CS output signals are not consecutive
+    /// (the S3's SPI3: CS0 71, CS1 72, CS2 127; 73.. are LEDC outputs). `signals` = CLK, Q (MISO), D (MOSI).
+    pub fn spi_pins_cs(&self, spi: &GpSpi, signals: [u32; 3], cs_signals: &[u32], gpio_signal: u32, native: &[(u32, usize, usize, usize, usize)]) -> SpiPins {
         let outputs = |signal, role| {
             let mut mask = 0;
             for pin in 0..64 {
@@ -75,16 +81,18 @@ impl PinRoutes<'_> {
             {
                 pins.cs |= 1 << pin;
             }
-            for cs in 0..6 {
+            for (cs, &signal) in cs_signals.iter().enumerate() {
                 if spi.read(0x20) & ((1 << cs) | (1 << (cs + 7))) == 0
-                    && self.matrix_output(pin, signals[3] + cs)
+                    && self.matrix_output(pin, signal)
                 {
                     pins.cs |= 1 << pin;
                 }
             }
         }
-        if spi.read(0x20) & (1 | 1 << 7) == 0 {
-            pins.cs |= outputs(signals[3], 2);
+        if let Some(&cs0) = cs_signals.first() {
+            if spi.read(0x20) & (1 | 1 << 7) == 0 {
+                pins.cs |= outputs(cs0, 2);
+            }
         }
         if user & (1 << 28) != 0 {
             pins.miso = self.matrix_input(signals[1] as usize);

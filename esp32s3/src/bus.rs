@@ -61,6 +61,9 @@ pub struct SocBus {
     pub spi2_timing: bool,
     spi2_scheduled: Option<(u64, Spi2DmaCompletion)>,
     spi2_pins: Option<esp_soc::board::SpiPins>,
+    /// Jumperly patch J18: SPI3's DMA descriptor fault and routes, as SPI2's above (no wire timing).
+    pub spi3_dma_fault: Option<DmaDescriptorFault>,
+    spi3_pins: Option<esp_soc::board::SpiPins>,
     /// set by any peripheral write: interrupt lines must be re-evaluated before the next instruction
     pub irq_dirty: bool,
     /// GPIO edges for observers, while one wants them: (cycle, pin, level)
@@ -71,7 +74,7 @@ pub struct SocBus {
     pub rmt_tap: Option<Vec<(u64, u8, Vec<bool>)>>,
     /// Jumperly patch J4: PWM outputs (LEDC, MCPWM) with cycles.
     pub pwm_tap: Option<crate::pwm::PwmTap>,
-    /// Jumperly patch J6/J7: I2C and SPI2 transactions wait for the host (`esp32sim_bus_service`).
+    /// Jumperly patch J6/J7/J18: I2C and SPI2 / SPI3 transactions wait for the host (`esp32sim_bus_service`).
     pub i2c_host: bool,
     pub spi_host: bool,
     /// Jumperly patch J17: I2S RX samples come from the host (`I2s::rx_push`); a shortfall ends the slice.
@@ -151,7 +154,7 @@ fn tlb_idx(addr: u32) -> usize { xtensa_lx7::bus::tlb_index(addr) }
 static BUS_EPOCHS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 impl SocBus {
-    pub(crate) fn cancel_spi2_timing(&mut self) { self.spi2_scheduled = None; self.spi2_pins = None; }
+    pub(crate) fn cancel_spi2_timing(&mut self) { self.spi2_scheduled = None; self.spi2_pins = None; self.spi3_pins = None; }
 
     pub fn new(flash_size: usize, psram_size: usize, mac: [u8; 6]) -> Self { Self::with_sizes(flash_size, psram_size, mac) }
     pub fn with_sizes(flash_size: usize, psram_size: usize, mac: [u8; 6]) -> Self {
@@ -160,7 +163,7 @@ impl SocBus {
             sram: vec![0; SRAM_SIZE], irom: vec![0; (IROM_MASK_HIGH - IROM_MASK_LOW) as usize], drom: vec![0; (DROM_MASK_HIGH - DROM_MASK_LOW) as usize],
             rtc_fast: vec![0; 8192], rtc_slow: vec![0; 8192], flash: vec![0xff; flash_size], psram: vec![0; psram_size],
             mmu: [MMU_INVALID; MMU_ENTRIES], periph: Peripherals::new(mac), board: Box::new(crate::board::Atech14::new()), uart_pins: false, cycles: 0, last_fault: None, spi2_dma_fault: None, irq_dirty: false, gpio_events: None, pin_watch: None, rmt_tap: None, pwm_tap: None, i2c_host: false, spi_host: false, i2s_host: false, slice_yield: false, debug: Default::default(),
-            spi2_timing: false, spi2_scheduled: None, spi2_pins: None,
+            spi2_timing: false, spi2_scheduled: None, spi2_pins: None, spi3_dma_fault: None, spi3_pins: None,
             tlb: vec![TlbEntry::EMPTY; TLB_SIZE], page_ver: Vec::new(), ver_base: [0; 7], flash_epoch: BUS_EPOCHS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) << 32, code_blk: Vec::new(), tick_pending: 0, tick_budget: 0, defer_mmio: false, mmio_deferred: false, vq_violations: 0,
             approximate_cache: None, approximate_cache_pending: 0, approximate_cache_fast_internal: false, approximate_cache_inline: false,
             approximate_cache_yield_miss: false,
@@ -483,10 +486,11 @@ impl SocBus {
         self.flush_ticks();
         let a = addr & !3;
         // mmio-s1: SPI2 and GDMA writes reach only those two devices' sources (and RAM, the board),
-        // so they re-derive interrupt lines only when one of those sources moved.
-        let spi = matches!(a >> 12, 0x60024 | 0x6003f);
-        let sources = |p: &Peripherals| (p.spi2.irq(), esp_periph::Device::irq_sources(&p.gdma));
-        let before = if spi { sources(&self.periph) } else { (false, 0) };
+        // so they re-derive interrupt lines only when one of those sources moved. Jumperly patch
+        // J18: SPI3 (0x60025) likewise.
+        let spi = matches!(a >> 12, 0x60024 | 0x60025 | 0x6003f);
+        let sources = |p: &Peripherals| (p.spi2.irq(), p.spi3.irq(), esp_periph::Device::irq_sources(&p.gdma));
+        let before = if spi { sources(&self.periph) } else { (false, false, 0) };
         if a == PERIPH_BASE + 0x24_000 && v & (1 << 24) != 0 {
             self.spi2_dma_fault = None;
             self.spi2_scheduled = None;
@@ -514,6 +518,10 @@ impl SocBus {
         if a == PERIPH_BASE + 0x24_000 && v & (1 << 24) != 0 && !self.periph.spi2.has_pending_transfer() {
             self.spi2_pins = self.board.uses_spi_pins().then(|| self.periph.spi2_pins());
         }
+        if a == PERIPH_BASE + 0x25_000 && v & (1 << 24) != 0 && !self.periph.spi3.has_pending_transfer() {   // Jumperly patch J18
+            self.spi3_dma_fault = None;
+            self.spi3_pins = self.board.uses_spi_pins().then(|| self.periph.spi3_pins());
+        }
         self.periph.write32(a, v);
         if old_gpio_out != self.periph.gpio.out || old_gpio_enable != self.periph.gpio.enable {
             let changes = &self.periph.gpio.changes;
@@ -531,6 +539,8 @@ impl SocBus {
         if self.periph.i2c.iter().any(|c| c.deferred) { self.slice_yield = true; }   // Jumperly patch J6
         self.complete_spi2_dma();
         self.deliver_spi2_transfer();
+        self.complete_spi3_dma();       // Jumperly patch J18
+        self.deliver_spi3_transfer();
         // GPIO output writes usually only drive the board, but an enabled level
         // interrupt also observes output levels. Inspect only changed output pins.
         if spi {
@@ -828,6 +838,7 @@ impl SocBus {
             || p.wifi.link.ap().is_some() || p.wifi.link.net().is_some() || !p.wifi.tx_pending.is_empty()
             || p.aes.dma_pending || p.sha.dma_pending
             || p.spi2.has_pending_transfer() || p.spi2.dma_tx_pending.is_some()
+            || p.spi3.has_pending_transfer() || p.spi3.dma_tx_pending.is_some()   // Jumperly patch J18
             || p.rmt.ch.iter().any(|c| c.running) || !p.rmt.done.is_empty()
             || !p.gpio.changes.is_empty() || !p.gpio.input_changes.is_empty()
             || p.rtc.ram.read(0x98) & (1 << 31) != 0
@@ -884,6 +895,8 @@ impl SocBus {
         }
         self.complete_spi2_dma();
         self.deliver_spi2_transfer();
+        self.complete_spi3_dma();       // Jumperly patch J18
+        self.deliver_spi3_transfer();
         self.dma_i2s_step(cycles as u64);
         self.dma_i2s_rx_step(cycles as u64);   // Jumperly patch J17
         self.dma_cam_step(cycles as u64);
@@ -903,6 +916,7 @@ impl SocBus {
             self.periph.gpio.changes.clear();
         }
         self.deliver_spi2_transfer();
+        self.deliver_spi3_transfer();   // Jumperly patch J18
         if !self.periph.rmt.done.is_empty() {
             for (ch, bits) in std::mem::take(&mut self.periph.rmt.done) {
                 let pin = self.periph.gpio.pin_for_signal(RMT_SIG_OUT0 + ch as u32).unwrap_or(u8::MAX);
