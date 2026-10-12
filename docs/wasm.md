@@ -457,6 +457,7 @@ reading it) or on its own IO_MUX pads with the matrix bypassed (S3: UART0 on 43 
 | Export | Contract |
 | --- | --- |
 | `esp32sim_uart_pins(e, port)` | The pads of UART `port` as `tx \| rx << 8`, 255 for none: TX is the pad routed to TXD_OUT through the matrix, else the IO_MUX TX pad in its UART function; RX the pad the matrix routes to RXD_IN, else (matrix bypassed) the IO_MUX RX pad in its UART function with input enabled. S3: ports 0..2; C3: 0, 1. |
+| `esp32sim_uart_baud(e, port)` | Jumperly patch J21: the baud UART `port` is set to (its clock source and dividers, upstream's `uart_route`), 0 when not configured or no such port. |
 | `esp32sim_gpio_in_pin(e, signal)` | The pad a matrix input signal reads, 255 if none. On the C3 it now decodes the C3 layout (SIG_IN_SEL at bit 6, pad in bits 0..4; the S3: bit 7, 0..5). |
 
 `wasm/tests/jumperly.rs` (`serial1_and_serial2_on_matrix_pins`, `c3_serial1_on_matrix_pins`) runs

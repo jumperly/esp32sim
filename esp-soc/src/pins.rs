@@ -42,20 +42,6 @@ impl PinRoutes<'_> {
     pub fn i2c_pin(&self, signal: usize) -> Option<u8> {
         self.matrix_input(signal).filter(|&pin| self.matrix_output(pin as usize, signal as u32))
     }
-    /// Jumperly patch J19: the pads of a UART. TX: a pad whose matrix output is `signal` (TXD_OUT),
-    /// else the IO_MUX TX pad of `native` (tx pad, rx pad, function) when in that function. RX: the
-    /// pad the matrix input `signal` (RXD_IN) reads, else — the matrix bypassed — the IO_MUX RX pad
-    /// in that function with its input enabled.
-    pub fn uart_pins(&self, signal: u32, native: Option<(usize, usize, u32)>) -> (Option<u8>, Option<u8>) {
-        let tx = (0..64).find(|&pin| self.valid_pin(pin) && self.matrix_output(pin, signal)).map(|pin| pin as u8).or_else(|| {
-            native.and_then(|(tx, _, f)| self.function(tx, f).then_some(tx as u8))
-        });
-        let bypassed = self.gpio.func_in_sel[signal as usize] & self.chip.input_select == 0;
-        let rx = self.input_pin(signal as usize).or_else(|| {
-            native.and_then(|(_, rx, f)| (bypassed && self.input_function(rx, f)).then_some(rx as u8))
-        });
-        (tx, rx)
-    }
     pub fn spi_pins(&self, spi: &GpSpi, signals: [u32; 4], gpio_signal: u32, native: &[(u32, usize, usize, usize, usize)]) -> SpiPins {
         let cs: [u32; 6] = std::array::from_fn(|i| signals[3] + i as u32);
         self.spi_pins_cs(spi, [signals[0], signals[1], signals[2]], &cs, gpio_signal, native)

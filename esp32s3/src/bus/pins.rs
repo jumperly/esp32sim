@@ -11,17 +11,17 @@ impl Peripherals {
     pub(crate) fn spi3_pins(&self) -> SpiPins {
         ChipPins::S3.routes(&self.gpio, &self.io_mux).spi_pins_cs(&self.spi3, [66, 67, 68], &[71, 72, 127], 256, &[])
     }
-    /// Jumperly patch J19: the (TX, RX) pads of UART `port`: U0 signal 12 with IO_MUX pads 43 / 44
-    /// (function 0), U1 signal 15 with pads 17 / 18 (function 2), U2 signal 18 on the matrix only
-    /// (`soc/gpio_sig_map.h`, `soc/uart_pins.h`).
+    /// Jumperly patches J19 / J21: the (TX, RX) pads of UART `port` (0..2) from upstream's route
+    /// (the GPIO matrix or the UART's IO_MUX pads; the lowest TX pad when it fans out).
     pub fn uart_pins(&self, port: u8) -> (Option<u8>, Option<u8>) {
-        let routes = ChipPins::S3.routes(&self.gpio, &self.io_mux);
-        match port {
-            0 => routes.uart_pins(12, Some((43, 44, 0))),
-            1 => routes.uart_pins(15, Some((17, 18, 2))),
-            2 => routes.uart_pins(18, None),
-            _ => (None, None),
-        }
+        if port > 2 { return (None, None); }
+        let r = self.uart_route(port as usize);
+        ((r.tx_pins != 0).then(|| r.tx_pins.trailing_zeros() as u8), r.rx_pin)
+    }
+    /// Jumperly patch J21: the baud UART `port` (0..2) is set to, if its clock and divider are.
+    pub fn uart_baud(&self, port: u8) -> Option<u32> {
+        if port > 2 { return None; }
+        self.uart_route(port as usize).baud
     }
     /// Jumperly patch J18: GP-SPI `host` 2 or 3.
     pub fn gpspi(&self, host: u8) -> &esp_periph::GpSpi { if host == 3 { &self.spi3 } else { &self.spi2 } }

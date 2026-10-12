@@ -479,6 +479,26 @@ pub unsafe extern "C" fn esp32sim_uart_pins(e: *mut Emu, port: u32) -> u32 {
     u32::from(tx.unwrap_or(255)) | u32::from(rx.unwrap_or(255)) << 8
 }
 
+/// Jumperly patch J21: the baud UART `port` is set to (its clock source and dividers), 0 when it is
+/// not configured or there is no such port (S3: 0..2; C3: 0, 1).
+///
+/// # Safety
+/// `e` must point to a live emulator to which the caller has exclusive access.
+#[no_mangle]
+pub unsafe extern "C" fn esp32sim_uart_baud(e: *mut Emu, port: u32) -> u32 {
+    // SAFETY: the caller provides exclusive access to a live emulator.
+    let e = unsafe { &mut *e };
+    let port = port.min(255) as u8;
+    let baud = if let Some(m) = e.m.c3_mut() {
+        m.bus.periph.uart_baud(port)
+    } else if let Some(m) = e.m.s3_mut() {
+        m.bus.periph.uart_baud(port)
+    } else {
+        None
+    };
+    baud.unwrap_or(0)
+}
+
 // ------------------------------------------------------------------ Jumperly patch J17: I2S RX
 
 /// Bytes `esp32sim_i2s_rx_need` writes to the buffer: eight u32.

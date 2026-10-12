@@ -495,6 +495,12 @@ fn serial1_and_serial2_on_matrix_pins() {
     assert_eq!(uart_pins(&e, 1), (17, 16));
     assert_eq!(uart_pins(&e, 2), (5, 4));
     assert_eq!(uart_pins(&e, 3), (255, 255));
+    // J21: the baud each port is set to (Serial1 / Serial2 at 115200 in the sketch), 0 for none.
+    for port in 0..3 {
+        let baud = unsafe { esp32sim_uart_baud(e.0, port) };
+        assert!(baud.abs_diff(115_200) * 100 <= 115_200 * 3, "port {port}: {baud}");
+    }
+    assert_eq!(unsafe { esp32sim_uart_baud(e.0, 3) }, 0);
     unsafe {
         assert_eq!(esp32sim_uart_in(e.0, 1, b"hi
 ".as_ptr(), 3), 3);
@@ -520,6 +526,8 @@ fn c3_serial1_on_matrix_pins() {
     assert_eq!(uart_pins(&e, 0), (21, 20));
     assert_eq!(uart_pins(&e, 1), (4, 3));
     assert_eq!(uart_pins(&e, 2), (255, 255));
+    let baud = unsafe { esp32sim_uart_baud(e.0, 1) };
+    assert!(baud.abs_diff(115_200) * 100 <= 115_200 * 3, "{baud}");
     assert_eq!(unsafe { esp32sim_uart_in(e.0, 1, b"hi\n".as_ptr(), 3) }, 3);
     let (_, _, text) = e.run_c3(50_000);
     assert!(text.contains("rx1=hi"), "{text}");
