@@ -125,7 +125,10 @@ impl VirtualNet {
         let mut sip = [0u8; 4]; sip.copy_from_slice(&p[12..16]);
         let mut dip = [0u8; 4]; dip.copy_from_slice(&p[16..20]);
         // Jumperly patch J14: another board's packet leaves before the gateway's services and the NAT see it
-        if self.lan_out(proto, body, &dip, &p[..total]) { return Vec::new(); }
+        // Jumperly patch J20: an mDNS query (224.0.0.251:5353) also goes on to the NAT, where the host
+        // answers `*.local` names of the user's own LAN
+        let mdns = proto == 17 && body.len() >= 8 && dip == MDNS_IP && be16(&body[2..4]) == MDNS_PORT && self.nat.is_some();
+        if self.lan_out(proto, body, &dip, &p[..total]) && !mdns { return Vec::new(); }
         match proto {
             17 if body.len() >= 8 && be16(&body[2..4]) == 67 => self.dhcp(&body[8..], src),
             17 if body.len() >= 8 && self.local_ntp && be16(&body[2..4]) == 123 => self.ntp(&body[8..], src, &sip, &dip, be16(&body[0..2])),
@@ -136,7 +139,15 @@ impl VirtualNet {
                 let now = self.now_us;
                 // Jumperly patch J12: a transport that resolves names itself answers DNS
                 if dport == 53 && self.nat.as_mut().unwrap().dns_query(src, &sip, sport, &dip, &body[8..], now) { return Vec::new(); }
-                let (host_dst, reply_src) = if dport == 53 { (self.nat.as_ref().unwrap().resolver, dip) } else { (dip, dip) };
+                // Jumperly patch J20: a reply to a multicast flow comes from the gateway's unicast address
+                // (lwIP drops a packet whose source is a group address)
+                let (host_dst, reply_src) = if dport == 53 {
+                    (self.nat.as_ref().unwrap().resolver, dip)
+                } else if (224..=239).contains(&dip[0]) {
+                    (dip, self.gw_ip)
+                } else {
+                    (dip, dip)
+                };
                 self.nat.as_mut().unwrap().udp_out(src, &sip, sport, &host_dst, &reply_src, dport, &body[8..], now);
                 Vec::new()
             }
@@ -313,9 +324,41 @@ impl VirtualNet {
     }
 }
 
+/// Jumperly patch J20: the mDNS group and port.
+const MDNS_IP: [u8; 4] = [224, 0, 0, 251];
+const MDNS_PORT: u16 = 5353;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Jumperly patch J20: an mDNS query goes to the peers and to the NAT; the host's answer on that
+    /// flow reaches the station from the gateway (10.0.2.2:5353), not from the group address.
+    #[test]
+    fn an_mdns_query_reaches_the_nat_too_and_its_answer_comes_from_the_gateway() {
+        let mut net = lan_net();
+        let (t, h) = crate::nat::QueueTransport::new();
+        net.nat = Some(crate::nat::Nat::with_transport(false, Box::new(t)));
+        let query = udp_to(&MDNS_IP, MDNS_PORT);
+        assert!(net.handle(&ethernet(&GATEWAY_MAC, &STA_MAC, 0x0800, &query), 3).is_empty());
+        assert_eq!(net.lan.as_ref().unwrap().out.len(), 1, "the peers get it");
+        let mut ops = Vec::new();
+        assert_eq!(h.take_ops(&mut ops), 2, "UDP_OPEN and UDP_DATA for the host");
+        let id = u32::from_le_bytes(ops[4..8].try_into().unwrap());
+        assert_eq!(ops[0], 5, "UDP_OPEN");
+        assert_eq!(&ops[12..16], &MDNS_IP);
+        assert_eq!(h.event(crate::nat::HostEvent::UdpData { id, data: b"answer" }), 1);
+        let frames = net.poll(4);
+        assert_eq!(frames.len(), 1);
+        let f = &frames[0];
+        assert_eq!(&f[26..30], &[10, 0, 2, 2], "from the gateway");
+        assert_eq!(&f[30..34], &[10, 0, 2, 15]);
+        assert_eq!(&f[34..38], &[0x14, 0xe9, 0x1b, 0x59], "5353 -> 7001");
+        assert_eq!(&f[42..], b"answer");
+        // Another multicast (not mDNS) still stays on the LAN only.
+        assert!(net.handle(&ethernet(&GATEWAY_MAC, &STA_MAC, 0x0800, &udp_to(&[239, 1, 2, 3], 7001)), 5).is_empty());
+        assert_eq!(h.take_ops(&mut Vec::new()), 0);
+    }
 
     const STA_MAC: [u8; 6] = [0x44, 0x1b, 0xf6, 0x75, 0xdc, 0xe0];
     const PEER: [u8; 4] = [10, 0, 2, 16];
