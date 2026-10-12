@@ -448,14 +448,35 @@ pub unsafe extern "C" fn esp32sim_bus_service(e: *mut Emu) -> u32 {
 pub unsafe extern "C" fn esp32sim_gpio_in_pin(e: *mut Emu, signal: u32) -> u32 {
     // SAFETY: the caller provides exclusive access to a live emulator.
     let e = unsafe { &mut *e };
-    let sel = if let Some(m) = e.m.c3_mut() {
-        m.bus.periph.gpio.func_in_sel.get(signal as usize).copied()
+    // Jumperly patch J19: the C3 has SIG_IN_SEL at bit 6 and the pad in bits 0..4 (the S3: 7, 0..5).
+    let (sel, routed, pad) = if let Some(m) = e.m.c3_mut() {
+        (m.bus.periph.gpio.func_in_sel.get(signal as usize).copied(), 0x40, 0x1f)
     } else if let Some(m) = e.m.s3_mut() {
-        m.bus.periph.gpio.func_in_sel.get(signal as usize).copied()
+        (m.bus.periph.gpio.func_in_sel.get(signal as usize).copied(), 0x80, 0x3f)
     } else {
-        None
+        (None, 0, 0)
     };
-    match sel { Some(sel) if sel & 0x80 != 0 => sel & 0x3f, _ => 255 }
+    match sel { Some(sel) if sel & routed != 0 => sel & pad, _ => 255 }
+}
+
+/// Jumperly patch J19: the pads UART `port` is on, through the GPIO matrix or on its IO_MUX pads, as
+/// `tx | rx << 8` with 255 for none (S3: ports 0..2; C3: 0..1; other ports and chips: none).
+///
+/// # Safety
+/// `e` must point to a live emulator to which the caller has exclusive access.
+#[no_mangle]
+pub unsafe extern "C" fn esp32sim_uart_pins(e: *mut Emu, port: u32) -> u32 {
+    // SAFETY: the caller provides exclusive access to a live emulator.
+    let e = unsafe { &mut *e };
+    let port = port.min(255) as u8;
+    let (tx, rx) = if let Some(m) = e.m.c3_mut() {
+        m.bus.periph.uart_pins(port)
+    } else if let Some(m) = e.m.s3_mut() {
+        m.bus.periph.uart_pins(port)
+    } else {
+        (None, None)
+    };
+    u32::from(tx.unwrap_or(255)) | u32::from(rx.unwrap_or(255)) << 8
 }
 
 // ------------------------------------------------------------------ Jumperly patch J17: I2S RX

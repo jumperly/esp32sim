@@ -445,3 +445,21 @@ receiver drops the queue. The web simulator's adapter routes the request to the 
 pads of the RX BCK / WS outputs and the SD input. `wasm/tests/jumperly.rs`
 (`i2s_mic_reports_the_level_of_the_host_sine_on_the_left_slot`) runs the `i2s-mic` fixture (16 kHz,
 32-bit mono left) on a −26 dBFS host sine: the sketch reports −26.0 dBFS and the peak 420 426.
+
+## UART pads
+
+Jumperly patch J19. The UARTs move bytes straight between the console and the FIFOs; which pads
+carry them is the host's business (the web simulator routes the bytes along the wires of the pads).
+A UART reaches its pads either through the GPIO matrix (any pad: TXD_OUT on the pad's output, RXD_IN
+reading it) or on its own IO_MUX pads with the matrix bypassed (S3: UART0 on 43 / 44, UART1 on
+17 / 18; C3: UART0 on 21 / 20; ESP-IDF picks them when the sketch asks for exactly those pins).
+
+| Export | Contract |
+| --- | --- |
+| `esp32sim_uart_pins(e, port)` | The pads of UART `port` as `tx \| rx << 8`, 255 for none: TX is the pad routed to TXD_OUT through the matrix, else the IO_MUX TX pad in its UART function; RX the pad the matrix routes to RXD_IN, else (matrix bypassed) the IO_MUX RX pad in its UART function with input enabled. S3: ports 0..2; C3: 0, 1. |
+| `esp32sim_gpio_in_pin(e, signal)` | The pad a matrix input signal reads, 255 if none. On the C3 it now decodes the C3 layout (SIG_IN_SEL at bit 6, pad in bits 0..4; the S3: bit 7, 0..5). |
+
+`wasm/tests/jumperly.rs` (`serial1_and_serial2_on_matrix_pins`, `c3_serial1_on_matrix_pins`) runs
+the `serial12` fixture (Serial1 RX 16 / TX 17, Serial2 RX 4 / TX 5) and `c3-serial1` (Serial1 RX 3 /
+TX 4): the bytes come out of console ports 1 and 2, the pads are found, and lines fed to the ports
+come back on UART0.

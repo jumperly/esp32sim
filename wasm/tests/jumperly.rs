@@ -463,6 +463,68 @@ fn c3_a_host_reset_reboots_the_chip_and_keeps_the_clock() {
     assert!(e.cycles() >= before + 600_000 * C3_MHZ);
 }
 
+// ------------------------------------------------------------------ Jumperly patch J19: UART pins
+
+/// The matrix output signal in a pin state word (bits 16..24).
+fn signal_of(e: &Emu, pin: u32) -> u32 { (unsafe { esp32sim_pin_state(e.0, pin) } >> 16) & 0x1ff }
+
+/// `esp32sim_uart_pins` as (TX, RX), 255 for none.
+fn uart_pins(e: &Emu, port: u32) -> (u32, u32) {
+    let v = unsafe { esp32sim_uart_pins(e.0, port) };
+    (v & 0xff, v >> 8 & 0xff)
+}
+
+/// `serial12` runs Serial1 (RX 16, TX 17) and Serial2 (RX 4, TX 5): what they send comes out of
+/// console ports 1 and 2, and lines the host puts in come back on UART0. GPIO17 is UART1's own
+/// IO_MUX TX pad, so U1TXD leaves there without the matrix; RX on GPIO16 and all of UART2 go through
+/// the matrix (U1RXD 15, U2TXD / U2RXD 18).
+#[test]
+fn serial1_and_serial2_on_matrix_pins() {
+    let mut e = Emu::boot("serial12");
+    let (_, text) = e.run_for(400_000 * MHZ);
+    assert!(text.contains("Ready"), "{text}");
+    let (one, two) = (e.uart(1), e.uart(2));
+    assert!(one.contains("one 0
+") && one.contains("one 2
+"), "{one}");
+    assert!(two.contains("two 0
+") && !two.contains("one"), "{two}");
+    assert_eq!(signal_of(&e, 5), 18);                                      // U2TXD_OUT on the matrix
+    assert_eq!(unsafe { (esp32sim_gpio_in_pin(e.0, 15), esp32sim_gpio_in_pin(e.0, 18)) }, (16, 4));
+    assert_eq!(uart_pins(&e, 0), (43, 44));                                // UART0 on its IO_MUX pads
+    assert_eq!(uart_pins(&e, 1), (17, 16));
+    assert_eq!(uart_pins(&e, 2), (5, 4));
+    assert_eq!(uart_pins(&e, 3), (255, 255));
+    unsafe {
+        assert_eq!(esp32sim_uart_in(e.0, 1, b"hi
+".as_ptr(), 3), 3);
+        assert_eq!(esp32sim_uart_in(e.0, 2, b"yo
+".as_ptr(), 3), 3);
+    }
+    let (_, text) = e.run_for(50_000 * MHZ);
+    assert!(text.contains("rx1=hi") && text.contains("rx2=yo"), "{text}");
+}
+
+/// The C3's input selection has SIG_IN_SEL at bit 6 and the pad in bits 0..4 (the S3: bit 7, 0..5).
+/// `c3-serial1` runs Serial1 on RX 3, TX 4.
+#[test]
+fn c3_serial1_on_matrix_pins() {
+    let mut e = Emu::boot_c3("c3-serial1");
+    let (_, _, text) = e.run_c3(400_000);
+    assert!(text.contains("Ready"), "{text}");
+    let one = e.uart(1);
+    assert!(one.contains("one 0\n") && one.contains("one 2\n"), "{one}");
+    assert_eq!(signal_of(&e, 4), 9);                                       // U1TXD_OUT
+    assert_eq!(unsafe { esp32sim_gpio_in_pin(e.0, 9) }, 3);                // U1RXD_IN reads GPIO3
+    assert_eq!(unsafe { esp32sim_gpio_in_pin(e.0, 6) }, 255);              // UART0 RX on its IO_MUX pad
+    assert_eq!(uart_pins(&e, 0), (21, 20));
+    assert_eq!(uart_pins(&e, 1), (4, 3));
+    assert_eq!(uart_pins(&e, 2), (255, 255));
+    assert_eq!(unsafe { esp32sim_uart_in(e.0, 1, b"hi\n".as_ptr(), 3) }, 3);
+    let (_, _, text) = e.run_c3(50_000);
+    assert!(text.contains("rx1=hi"), "{text}");
+}
+
 // ------------------------------------------------------------------ Jumperly patch J11: Wi-Fi
 
 /// Attach the virtual AP from fields (`esp32sim_wifi_ap`); returns its result code.
