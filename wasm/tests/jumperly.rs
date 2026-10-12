@@ -660,6 +660,39 @@ fn net_host_needs_an_access_point_and_without_it_nothing_is_queued() {
     unsafe { esp32sim_delete(e) };
 }
 
+/// One `esp32sim_wifi_beacons` entry.
+fn beacon(ssid: &str, channel: u8, rssi: i8, secure: bool, bssid: [u8; 6]) -> Vec<u8> {
+    let mut v = vec![ssid.len() as u8];
+    v.extend_from_slice(ssid.as_bytes());
+    v.extend_from_slice(&[channel, rssi as u8, secure as u8]);
+    v.extend_from_slice(&bssid);
+    v
+}
+
+/// Jumperly patch J22: networks around the user are heard by a scan with their own channel, signal
+/// and security; one with the access point's own SSID is that AP; bad lists are refused.
+#[test]
+fn a_scan_lists_the_networks_around_with_their_channel_signal_and_security() {
+    let list = [
+        beacon("Home", 11, -55, true, [0x02, 0, 0, 0, 0, 0x11]),
+        beacon("Cafe", 1, -72, false, [0x02, 0, 0, 0, 0, 0x22]),
+        beacon("Jumperly", 3, -30, false, [0x02, 0, 0, 0, 0, 0x33]),
+    ]
+    .concat();
+    let mut e = Emu::boot_with("wifi-net", |e| {
+        assert_eq!(wifi_ap(e, "Jumperly", "", 6), 0);
+        assert_eq!(unsafe { esp32sim_wifi_beacons(e, list.as_ptr(), list.len()) }, 0);
+        assert_eq!(unsafe { esp32sim_wifi_beacons(e, [3u8, b'a'].as_ptr(), 2) }, 1, "cut short");
+        let bad = beacon("x", 15, -50, false, [0; 6]);
+        assert_eq!(unsafe { esp32sim_wifi_beacons(e, bad.as_ptr(), bad.len()) }, 1, "channel 15");
+    });
+    let (_, text) = e.run_for(8_000_000 * MHZ);
+    assert!(text.contains("scan: 3 network(s)"), "{text}");
+    assert!(text.contains("Jumperly rssi=-40 ch=6 open"), "{text}");
+    assert!(text.contains("Home rssi=-55 ch=11 secured"), "{text}");
+    assert!(text.contains("Cafe rssi=-72 ch=1 open"), "{text}");
+}
+
 #[test]
 fn wifi_net_reaches_a_scripted_internet_through_the_host() {
     let mut e = Emu::boot_with("wifi-net", |e| {

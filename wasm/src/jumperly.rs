@@ -595,6 +595,34 @@ pub unsafe extern "C" fn esp32sim_wifi_ap(e: *mut Emu, ssid: *const u8, ssid_len
     0
 }
 
+/// Jumperly patch J22: the networks around the user (the local helper's scan), heard by the
+/// board's scans but not joinable, replacing the ones there were. `data` holds entries of
+/// `[ssid_len u8][ssid][channel u8][rssi i8][secure u8][bssid 6]` (empty: none), at most 32; a network
+/// with the access point's own SSID is left out. Returns 0, or 1 (no access point, bad data; logged).
+///
+/// # Safety
+/// `e` must point to a live emulator to which the caller has exclusive access; for a nonzero `len`,
+/// `data` must be readable for `len` bytes throughout this call.
+#[no_mangle]
+pub unsafe extern "C" fn esp32sim_wifi_beacons(e: *mut Emu, data: *const u8, len: usize) -> u32 {
+    // SAFETY: the caller provides exclusive access to a live emulator.
+    let e = unsafe { &mut *e };
+    // SAFETY: the caller provides a readable buffer for this call.
+    let data = unsafe { bytes(data, len) };
+    let list = match esp_soc::wifi::BeaconAp::parse_list(data) {
+        Ok(list) => list,
+        Err(reason) => { log(&format!("[emu] wifi: {reason}")); return 1; }
+    };
+    let set = if let Some(m) = e.m.c3_mut() {
+        m.bus.periph.wifi.link.set_beacons(list)
+    } else if let Some(m) = e.m.s3_mut() {
+        m.bus.periph.wifi.link.set_beacons(list)
+    } else {
+        false
+    };
+    if set { 0 } else { log("[emu] wifi: beacons need the virtual access point (esp32sim_wifi_ap)"); 1 }
+}
+
 /// Jumperly patch J11: the SSID of the last directed probe request for a network other than the
 /// virtual access point's since the last call (the network the firmware looks for): its length,
 /// 0 for none; the bytes are in the buffer (`esp32sim_buf_ptr`).

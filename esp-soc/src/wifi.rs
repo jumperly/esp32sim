@@ -116,6 +116,37 @@ pub struct Wpa {
     pub state: WpaState,
 }
 
+/// Jumperly patch J22: a network around the user (the web simulator's local helper scanned it),
+/// heard on the air but not joinable: it answers probe requests (a scan lists it with its channel,
+/// signal and security) and nothing else, so connecting to it fails as to a network out of reach.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BeaconAp { pub ssid: String, pub bssid: [u8; 6], pub channel: u8, pub rssi: i8, pub secure: bool }
+
+/// The most beacon-only networks an access point carries.
+pub const BEACONS_MAX: usize = 32;
+
+impl BeaconAp {
+    /// The list `esp32sim_wifi_beacons` takes: entries of `[ssid_len u8][ssid][channel u8][rssi i8]
+    /// [secure u8][bssid 6]`, at most `BEACONS_MAX`; the SSID 1..=32 bytes of UTF-8, the channel 1..=14.
+    pub fn parse_list(mut data: &[u8]) -> Result<Vec<BeaconAp>, String> {
+        let mut out = Vec::new();
+        while !data.is_empty() {
+            let n = data[0] as usize;
+            if !(1..=32).contains(&n) || data.len() < 1 + n + 9 { return Err("a beacon entry is cut short or its SSID is not 1..=32 bytes".into()); }
+            let ssid = std::str::from_utf8(&data[1..1 + n]).map_err(|_| "a beacon SSID is not UTF-8".to_string())?.to_string();
+            let rest = &data[1 + n..];
+            let channel = rest[0];
+            if !(1..=14).contains(&channel) { return Err(format!("beacon '{ssid}': channel {channel}, expected 1 through 14")); }
+            let mut bssid = [0u8; 6];
+            bssid.copy_from_slice(&rest[3..9]);
+            out.push(BeaconAp { ssid, bssid, channel, rssi: rest[1] as i8, secure: rest[2] != 0 });
+            if out.len() > BEACONS_MAX { return Err(format!("more than {BEACONS_MAX} beacons")); }
+            data = &rest[9..];
+        }
+        Ok(out)
+    }
+}
+
 pub struct VirtualAp {
     pub cfg: ApConfig,
     pub wpa: Wpa,
@@ -132,6 +163,8 @@ pub struct VirtualAp {
     /// Jumperly patch J11: the SSID of the last directed probe request for another network, until
     /// the host takes it (`take_probed`). A station that joins a network sends one with that SSID.
     pub probed: Option<Vec<u8>>,
+    /// Jumperly patch J22: the networks around (beacon-only, not joinable).
+    pub beacons: Vec<BeaconAp>,
 }
 
 impl VirtualAp {
@@ -145,7 +178,7 @@ impl VirtualAp {
             for i in 0..16 { wpa.gtk[i] = seed[(i + 3) % 20] ^ 0x5a; }
         }
         VirtualAp { cfg, wpa, state: StaState::Idle, sta: [0; 6], aid: 1, next_beacon_us: 100_000, beacon_interval_us: 102_400, seq: 0,
-                    queue: Vec::new(), pn: 0, log, stats: (0, 0, 0), probed: None }
+                    queue: Vec::new(), pn: 0, log, stats: (0, 0, 0), probed: None, beacons: Vec::new() }
     }
     /// Jumperly patch J11: the SSID of the last directed probe request that named another network
     /// since the last call. A wildcard probe (a scan) and a probe for this AP's SSID leave it.
@@ -175,6 +208,32 @@ impl VirtualAp {
         f.extend_from_slice(&self.capability().to_le_bytes());
         self.common_ies(&mut f);
         f
+    }
+    /// Jumperly patch J22: a probe response of a beacon-only network `b` (its BSSID, channel and
+    /// security; the rates of this access point).
+    fn beacon_ap_response(&mut self, b: &BeaconAp, dst: &[u8; 6], now_us: u64) -> Vec<u8> {
+        let mut f = Vec::with_capacity(96);
+        f.extend_from_slice(&(5u16 << 4).to_le_bytes()); f.extend_from_slice(&[0, 0]);
+        f.extend_from_slice(dst); f.extend_from_slice(&b.bssid); f.extend_from_slice(&b.bssid);
+        f.extend_from_slice(&(self.seq << 4).to_le_bytes()); self.seq = self.seq.wrapping_add(1);
+        f.extend_from_slice(&now_us.to_le_bytes());
+        f.extend_from_slice(&100u16.to_le_bytes());
+        let cap: u16 = 0x0001 | if b.secure { 0x0010 } else { 0 } | 0x0400;
+        f.extend_from_slice(&cap.to_le_bytes());
+        f.push(0); f.push(b.ssid.len() as u8); f.extend_from_slice(b.ssid.as_bytes());
+        f.extend_from_slice(&[1, 8, 0x82, 0x84, 0x8b, 0x96, 0x0c, 0x12, 0x18, 0x24]);
+        f.extend_from_slice(&[3, 1, b.channel]);
+        f.extend_from_slice(&[50, 4, 0x30, 0x48, 0x60, 0x6c]);
+        if b.secure { f.extend_from_slice(RSN_IE); }
+        f
+    }
+    /// Jumperly patch J22: the channel and signal (dBm) a frame from the air arrives with: a
+    /// beacon-only network's own, this access point's otherwise (−40 dBm).
+    pub fn rx_meta(&self, frame: &[u8]) -> (u8, i8) {
+        if frame.len() >= 16 {
+            if let Some(b) = self.beacons.iter().find(|b| frame[10..16] == b.bssid) { return (b.channel, b.rssi); }
+        }
+        (self.cfg.channel, -40)
     }
     fn send(&mut self, at_us: u64, frame: Vec<u8>) {
         if self.log { let d = describe(&frame); if d.contains("auth") || d.contains("assoc") || d.contains("888e") { eprintln!("[wifi] AP -> {}  hex={:02x?}", d, frame); } else { eprintln!("[wifi] AP -> {} (t+{} us)", d, at_us); } }
@@ -212,6 +271,14 @@ impl VirtualAp {
                     ies(f, 24).into_iter().find(|(id, d)| *id == 0 && !d.is_empty() && *d != self.cfg.ssid.as_bytes()).map(|(_, d)| d.to_vec())
                 } else { None };
                 if ssid_ok && to_us(&f[4..10]) { let r = self.beacon_like(5, &a2, now_us); self.stats.1 += 1; self.send(now_us + 1500, r); }
+                // Jumperly patch J22: the networks around answer a wildcard probe, or one for their SSID
+                let asked: Vec<Vec<u8>> = ies(f, 24).into_iter().filter(|(id, _)| *id == 0).map(|(_, d)| d.to_vec()).collect();
+                let around: Vec<BeaconAp> = self.beacons.iter()
+                    .filter(|b| asked.iter().any(|s| s.is_empty() || *s == b.ssid.as_bytes())).cloned().collect();
+                for (i, b) in around.iter().enumerate() {
+                    let r = self.beacon_ap_response(b, &a2, now_us);
+                    self.send(now_us + 1900 + 400 * i as u64, r);
+                }
                 if other.is_some() { self.probed = other; }
             }
             (0, 11) if f.len() >= 30 && to_us(&f[4..10]) => {                                // authentication (open system)
@@ -475,6 +542,15 @@ impl StationLink {
     pub fn rx_frames(&self) -> u64 { self.rx_frames }
     pub fn rx_dropped(&self) -> u64 { self.rx_dropped }
     pub fn tx_dropped(&self) -> u64 { self.tx_dropped }
+    /// Jumperly patch J22: the networks around, replacing the ones there were; false without an
+    /// access point.
+    pub fn set_beacons(&mut self, beacons: Vec<BeaconAp>) -> bool {
+        let Some(ap) = self.ap.as_mut() else { return false };
+        // A network with the access point's own SSID is that access point.
+        let own = ap.cfg.ssid.clone();
+        ap.beacons = beacons.into_iter().filter(|b| b.ssid != own).collect();
+        true
+    }
     /// Jumperly patch J11: `VirtualAp::take_probed` of the access point, None without one.
     pub fn take_probed_ssid(&mut self) -> Option<Vec<u8>> { self.ap.as_mut()?.take_probed() }
 
