@@ -170,10 +170,12 @@ enable to a discovered client configuration descriptor. Commands are validated w
 CLI arguments are parsed, before loading the ROM, and require `--ble`. `connect` waits for guest advertising;
 ATT commands wait for the connection and run in order, with one request outstanding.
 At exit, the CLI reports the number of queued or in-flight commands still pending.
-Writes are limited to 20 bytes. A scanning guest sees a virtual
-peripheral named `esp32sim` advertising the Battery Service.
+Jumperly patch J24: right after connecting the peer exchanges the ATT MTU (it asks 247), reads
+whose response fills the MTU continue with Read Blob, writes longer than one PDU go as Prepare
+Writes and an Execute Write (values up to 512 bytes), and `ble disconnect` ends the connection.
+A scanning guest sees a virtual peripheral named `esp32sim` advertising the Battery Service.
 
-This models one unencrypted LE link, legacy advertisements and ATT MTU 23.
+This models one unencrypted LE link and legacy advertisements.
 It does not model RF, pairing, physical connection timing or the controller's
 registers. Unsupported HCI commands return Unknown Command. The callback task
 and its storage stay allocated until reboot. C6 initializes the guest NPL support

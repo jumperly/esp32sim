@@ -42,11 +42,23 @@ enum Request {
     Descriptors,
     Read(u16),
     Write(u16),
+    /// Jumperly patch J24: the MTU exchange before the first request of a connection.
+    Mtu,
+    /// Jumperly patch J24: a long write, its prepared parts (`write_rest`), then the execute.
+    Prepare(u16),
+    Execute(u16),
 }
+
+/// Jumperly patch J24: the MTU the peer asks for (the guest's may be smaller).
+const PEER_MTU: u16 = 247;
+/// The longest attribute value (Core Vol 3 Part F 3.2.9).
+const VALUE_MAX: usize = 512;
 
 #[derive(Debug, PartialEq)]
 pub enum Command {
     Connect,
+    /// Jumperly patch J24.
+    Disconnect,
     Discover,
     Read(u16),
     Write(u16, Vec<u8>),
@@ -57,9 +69,10 @@ impl std::str::FromStr for Command {
         let parts: Vec<_> = command.split_whitespace().collect();
         match parts.as_slice() {
             ["connect"] => return Ok(Self::Connect),
+            ["disconnect"] => return Ok(Self::Disconnect),
             ["discover"] => return Ok(Self::Discover),
             ["read" | "subscribe", _] | ["write", _, _] => {}
-            _ => return Err("expected connect, discover, read HANDLE, write HANDLE HEX, subscribe CCC_HANDLE".into()),
+            _ => return Err("expected connect, disconnect, discover, read HANDLE, write HANDLE HEX, subscribe CCC_HANDLE".into()),
         }
         let handle =
             if let Some(h) = parts[1].strip_prefix("0x") { u16::from_str_radix(h, 16) } else { parts[1].parse() }
@@ -71,8 +84,8 @@ impl std::str::FromStr for Command {
             "subscribe" => Self::Write(handle, vec![1, 0]),
             _ => {
                 let value = parts[2];
-                if value.len() % 2 != 0 || !value.bytes().all(|b| b.is_ascii_hexdigit()) || value.len() > 40 {
-                    return Err("BLE write requires at most 20 bytes of hexadecimal data".into());
+                if value.len() % 2 != 0 || !value.bytes().all(|b| b.is_ascii_hexdigit()) || value.len() > 2 * VALUE_MAX {
+                    return Err(format!("BLE write requires at most {VALUE_MAX} bytes of hexadecimal data"));
                 }
                 Self::Write(
                     handle,
@@ -93,6 +106,13 @@ pub struct Peer {
     pending: Option<Request>,
     discovery_start: u16,
     value: Vec<u8>,
+    /// Jumperly patch J24: the ATT MTU of the connection, whether it was exchanged, the value a
+    /// long read gathers, and what a long write still has to send.
+    mtu: u16,
+    mtu_done: bool,
+    read_acc: Vec<u8>,
+    write_rest: Vec<u8>,
+    write_offset: u16,
 }
 impl Peer {
     fn new(link: Link) -> Self {
@@ -107,6 +127,11 @@ impl Peer {
             pending: None,
             discovery_start: 1,
             value: vec![100],
+            mtu: 23,
+            mtu_done: false,
+            read_acc: Vec::new(),
+            write_rest: Vec::new(),
+            write_offset: 0,
         }
     }
     fn advertisement(&mut self, adv: Vec<u8>, scan_response: Vec<u8>) {
@@ -129,24 +154,56 @@ impl Peer {
                 self.commands.pop_front();
                 break;
             }
+            if matches!(command, Command::Disconnect) {
+                self.commands.pop_front();
+                if self.connected { self.link.borrow_mut().to_controller.push_back(LinkAction::Disconnect); }
+                else { self.log.push("not connected".into()); }
+                continue;
+            }
             if !self.connected || self.guest_central { break; }
             match self.commands.pop_front().unwrap() {
-                Command::Connect => unreachable!(),
+                Command::Connect | Command::Disconnect => unreachable!(),
                 Command::Discover => self.discover(Request::Services, 1),
                 Command::Read(handle) => {
                     self.pending = Some(Request::Read(handle));
+                    self.read_acc.clear();
                     self.att(&[0x0a, handle as u8, (handle >> 8) as u8]);
                 }
-                Command::Write(handle, value) => {
+                Command::Write(handle, value) if value.len() <= self.mtu as usize - 3 => {
                     self.pending = Some(Request::Write(handle));
                     let mut p = vec![0x12, handle as u8, (handle >> 8) as u8];
                     p.extend(value);
                     self.att(&p);
                 }
+                Command::Write(handle, value) => {
+                    // Jumperly patch J24: longer than one write: prepared parts, then execute.
+                    self.write_rest = value;
+                    self.write_offset = 0;
+                    self.prepare_next(handle);
+                }
             }
         }
     }
     fn att(&mut self, pdu: &[u8]) { self.l2cap(4, pdu); }
+    /// Jumperly patch J24: the next Prepare Write of a long write, or its Execute Write.
+    fn prepare_next(&mut self, handle: u16) {
+        if self.write_rest.is_empty() {
+            self.pending = Some(Request::Execute(handle));
+            self.att(&[0x18, 1]);
+            return;
+        }
+        let n = self.write_rest.len().min(self.mtu as usize - 5);
+        let part: Vec<u8> = self.write_rest.drain(..n).collect();
+        let mut p = vec![0x16, handle as u8, (handle >> 8) as u8, self.write_offset as u8, (self.write_offset >> 8) as u8];
+        p.extend_from_slice(&part);
+        self.write_offset += n as u16;
+        self.pending = Some(Request::Prepare(handle));
+        self.att(&p);
+    }
+    fn log_read(&mut self, handle: u16) {
+        let value = std::mem::take(&mut self.read_acc);
+        self.log.push(format!("read handle=0x{handle:04x} value={} text={:?}", hex(&value), String::from_utf8_lossy(&value)));
+    }
     fn l2cap(&mut self, cid: u16, pdu: &[u8]) { self.link.borrow_mut().to_controller.push_back(LinkAction::Data(cid, pdu.to_vec())); }
     fn poll(&mut self) {
         loop {
@@ -165,8 +222,16 @@ impl Peer {
                 LinkEvent::Connected(central) => {
                     self.connecting = false;
                     self.connected = true;
+                    self.mtu = 23;
+                    self.mtu_done = false;
                     self.advertising = false;
                     self.guest_central = central;
+                    // Jumperly patch J24: as a phone does, the MTU exchange right after connecting.
+                    if !central {
+                        self.mtu_done = true;
+                        self.pending = Some(Request::Mtu);
+                        self.att(&[2, PEER_MTU as u8, (PEER_MTU >> 8) as u8]);
+                    }
                     self.log.push(format!(
                         "connected handle=0x{HANDLE:04x} guest={}",
                         if central { "central" } else { "peripheral" }
@@ -176,6 +241,8 @@ impl Peer {
                     self.connecting = false;
                     self.connected = false;
                     self.pending = None;
+                    self.mtu = 23;
+                    self.mtu_done = false;
                     self.log.push("disconnected".into());
                 }
                 LinkEvent::Reset => {
@@ -261,6 +328,12 @@ impl Peer {
         if p[0] == 1 && p.len() == 5 {
             if p[4] == 0x0a && matches!(kind, Request::Services | Request::Characteristics | Request::Descriptors) {
                 self.discovery_next(kind);
+            } else if let (Request::Read(handle), 0x0c) = (kind, p[1]) {
+                // Jumperly patch J24: a read blob past the end (or of a value that is not long)
+                // ends the long read with what it has.
+                self.log_read(handle);
+            } else if kind == Request::Mtu {
+                self.log.push(format!("mtu {}", self.mtu));
             } else {
                 self.log.push(format!(
                     "ATT error request=0x{:02x} handle=0x{:04x} error=0x{:02x}",
@@ -272,12 +345,22 @@ impl Peer {
             return;
         }
         match kind {
-            Request::Read(handle) if p[0] == 0x0b => self.log.push(format!(
-                "read handle=0x{handle:04x} value={} text={:?}",
-                hex(&p[1..]),
-                String::from_utf8_lossy(&p[1..])
-            )),
+            Request::Read(handle) if p[0] == 0x0b || p[0] == 0x0d => {
+                // Jumperly patch J24: a full response may have more: read blob from there.
+                self.read_acc.extend_from_slice(&p[1..]);
+                if p.len() - 1 == self.mtu as usize - 1 && self.read_acc.len() < VALUE_MAX {
+                    let off = self.read_acc.len() as u16;
+                    self.pending = Some(Request::Read(handle));
+                    self.att(&[0x0c, handle as u8, (handle >> 8) as u8, off as u8, (off >> 8) as u8]);
+                } else { self.log_read(handle); }
+            }
             Request::Write(handle) if p == [0x13] => self.log.push(format!("write complete handle=0x{handle:04x}")),
+            Request::Mtu if p[0] == 3 && p.len() == 3 => {
+                self.mtu = word(&p[1..]).clamp(23, PEER_MTU);
+                self.log.push(format!("mtu {}", self.mtu));
+            }
+            Request::Prepare(handle) if p[0] == 0x17 => self.prepare_next(handle),
+            Request::Execute(handle) if p == [0x19] => self.log.push(format!("write complete handle=0x{handle:04x}")),
             Request::Services | Request::Characteristics | Request::Descriptors => {
                 let expected = match kind {
                     Request::Services => 0x11,
@@ -444,6 +527,10 @@ mod tests {
         cmd(c, 0x200a, &[1]);
         c.command("connect").unwrap();
         while c.pop_packet().is_some() {}
+        // Jumperly patch J24: the guest answers the peer's MTU exchange (the default MTU).
+        acl(c, &[3, 23, 0]);
+        while c.pop_packet().is_some() {}
+        c.drain_log();
     }
     #[test]
     fn deferred_controller_is_bounded_and_pending_commands_survive() {
@@ -474,6 +561,11 @@ mod tests {
         assert_eq!(calls.get(), 64);
         assert_eq!(c.pending_commands(), 1);
         assert_eq!(link.borrow().to_controller.len(), 1);
+        c.advance_to(100);
+        // Jumperly patch J24: the MTU exchange after connecting is one request in flight.
+        assert_eq!(c.pending_commands(), 1);
+        link.borrow_mut().to_controller.clear();
+        link.borrow_mut().to_peer.push_back(LinkEvent::Data(4, vec![3, 23, 0]));
         c.advance_to(100);
         assert_eq!(c.pending_commands(), 0);
         c.command("read 3").unwrap();
@@ -599,6 +691,11 @@ mod tests {
         cmd(&mut c, 0x200a, &[1]);
         c.pop_packet(); // command complete
         assert_eq!(c.pop_packet().unwrap()[1], 0x3e);
+        // Jumperly patch J24: the MTU exchange first; the queued commands follow its answer.
+        assert_eq!(&c.pop_packet().unwrap()[9..], &[2, 247, 0]);
+        assert!(c.pop_packet().is_none());
+        acl(&mut c, &[3, 23, 0]);
+        c.pop_packet(); // ACL credit
         assert_eq!(&c.pop_packet().unwrap()[9..], &[0x0a, 3, 0]);
         assert!(c.pop_packet().is_none());
         acl(&mut c, &[0x0b, 100]);
@@ -637,6 +734,7 @@ mod tests {
                     let Some(action) = action else { break };
                     let event = match action {
                         LinkAction::Connect => LinkEvent::Connected(false),
+                        LinkAction::Data(4, p) if p[0] == 2 => LinkEvent::Data(4, vec![3, 23, 0]),
                         LinkAction::Data(4, p) => {
                             assert_eq!(p, [0x0a, 3, 0]);
                             LinkEvent::Data(4, vec![0x0b, 42])
@@ -661,5 +759,68 @@ mod tests {
         assert_eq!(c.controller.next_deadline(), Some(100));
         assert!(!c.peer.connected);
         assert!(c.peer.commands.is_empty());
+    }
+
+    /// Jumperly patch J24: a phone-like MTU, long reads (read blob) and writes (prepare /
+    /// execute), and the peer ending the connection.
+    #[test]
+    fn mtu_long_values_and_disconnect() {
+        let mut c = Session::default();
+        cmd(&mut c, 0x200a, &[1]);
+        c.command("connect").unwrap();
+        while c.pop_packet().is_some() {}
+        acl(&mut c, &[3, 100, 0]);
+        while c.pop_packet().is_some() {}
+        assert!(c.drain_log().iter().any(|l| l == "mtu 100"));
+        // A long read: a full response (MTU - 1 = 99 bytes) asks for the rest.
+        c.command("read 3").unwrap();
+        while c.pop_packet().is_some() {}
+        let mut full = vec![0x0b];
+        full.extend(std::iter::repeat_n(b'a', 99));
+        acl(&mut c, &full);
+        let blob: Vec<_> = std::iter::from_fn(|| c.pop_packet()).filter(|p| p[0] == 2).collect();
+        assert_eq!(&blob[0][9..], &[0x0c, 3, 0, 99, 0]);
+        acl(&mut c, &[0x0d, b'b', b'c']);
+        while c.pop_packet().is_some() {}
+        let log = c.drain_log();
+        assert!(log.iter().any(|l| l.contains("read handle=0x0003") && l.contains(&format!("text=\"{}bc\"", "a".repeat(99)))), "{log:?}");
+        // A long write: 200 bytes in parts of MTU - 5 = 95, then execute.
+        c.command(&format!("write 3 {}", "41".repeat(200))).unwrap();
+        let parts: Vec<_> = std::iter::from_fn(|| c.pop_packet()).filter(|p| p[0] == 2).collect();
+        assert_eq!(&parts[0][9..14], &[0x16, 3, 0, 0, 0]);
+        assert_eq!(parts[0].len() - 14, 95);
+        acl(&mut c, &[0x17]);
+        let p: Vec<_> = std::iter::from_fn(|| c.pop_packet()).filter(|p| p[0] == 2).collect();
+        assert_eq!(&p[0][9..14], &[0x16, 3, 0, 95, 0]);
+        acl(&mut c, &[0x17]);
+        let p: Vec<_> = std::iter::from_fn(|| c.pop_packet()).filter(|p| p[0] == 2).collect();
+        assert_eq!(&p[0][9..14], &[0x16, 3, 0, 190, 0]);
+        assert_eq!(p[0].len() - 14, 10);
+        acl(&mut c, &[0x17]);
+        let p: Vec<_> = std::iter::from_fn(|| c.pop_packet()).filter(|p| p[0] == 2).collect();
+        assert_eq!(&p[0][9..], &[0x18, 1]);
+        acl(&mut c, &[0x19]);
+        while c.pop_packet().is_some() {}
+        assert!(c.drain_log().iter().any(|l| l == "write complete handle=0x0003"));
+        // The peer ends the connection: the guest gets Disconnection Complete (remote user).
+        c.command("disconnect").unwrap();
+        let events: Vec<_> = std::iter::from_fn(|| c.pop_packet()).collect();
+        assert!(events.iter().any(|e| e == &[4, 5, 4, 0, 1, 0, 0x13]), "{events:?}");
+        assert!(c.drain_log().iter().any(|l| l == "disconnected"));
+        c.command("disconnect").unwrap();
+        assert!(c.drain_log().iter().any(|l| l == "not connected"));
+    }
+
+    /// Jumperly patch J24: a frame longer than the ACL buffer reaches the guest in fragments.
+    #[test]
+    fn long_frames_are_fragmented() {
+        let mut ctl = Controller::default();
+        ctl.connected = true;
+        ctl.l2cap(4, &[7u8; 300]);
+        let a = ctl.pop_packet().unwrap();
+        let b = ctl.pop_packet().unwrap();
+        assert_eq!(&a[..5], &[2, 1, 0x20, 0xfb, 0]);
+        assert_eq!(&b[..3], &[2, 1, 0x10]);
+        assert_eq!(a.len() - 5 + b.len() - 5, 304);
     }
 }

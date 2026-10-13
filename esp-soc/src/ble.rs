@@ -46,11 +46,15 @@ pub enum LinkError {
 }
 pub enum LinkAction {
     Connect,
+    /// Jumperly patch J24: the peer ends the connection (remote user terminated).
+    Disconnect,
     Advertisement(Vec<u8>, bool),
     Data(u16, Vec<u8>),
 }
 
 const HANDLE: u16 = 1;
+/// The ACL data length the controller reports (LE Read Buffer Size): 251 bytes.
+const ACL_MAX: usize = 0xfb;
 const ADDRESS: [u8; 6] = [1, 0, 0, 0x49, 0x53, 2];
 const PEER: [u8; 6] = [2, 0, 0, 0x49, 0x53, 2];
 
@@ -105,12 +109,18 @@ impl Controller {
     fn status(&mut self, op: u16, status: u8) { self.event(0x0f, &[status, 1, op as u8, (op >> 8) as u8]); }
     fn l2cap(&mut self, cid: u16, pdu: &[u8]) {
         let len = pdu.len() as u16;
-        let mut p = vec![2, HANDLE as u8, 0x20];
-        p.extend_from_slice(&(len + 4).to_le_bytes());
-        p.extend_from_slice(&len.to_le_bytes());
-        p.extend_from_slice(&cid.to_le_bytes());
-        p.extend_from_slice(pdu);
-        self.packets.push_back(p);
+        let mut frame = Vec::with_capacity(pdu.len() + 4);
+        frame.extend_from_slice(&len.to_le_bytes());
+        frame.extend_from_slice(&cid.to_le_bytes());
+        frame.extend_from_slice(pdu);
+        // Jumperly patch J24: a frame longer than the ACL buffer (LE Read Buffer Size, 251) goes in
+        // fragments: the first with packet boundary 0b10, the rest 0b01.
+        for (i, chunk) in frame.chunks(ACL_MAX).enumerate() {
+            let mut p = vec![2, HANDLE as u8, if i == 0 { 0x20 } else { 0x10 }];
+            p.extend_from_slice(&(chunk.len() as u16).to_le_bytes());
+            p.extend_from_slice(chunk);
+            self.packets.push_back(p);
+        }
     }
     fn connect(&mut self, guest_central: bool) {
         self.connected = true;
@@ -449,6 +459,12 @@ impl HciController for Controller {
                     }
                 }
                 LinkAction::Data(cid, pdu) if self.connected => self.l2cap(cid, &pdu),
+                LinkAction::Disconnect if self.connected => {
+                    self.event(5, &[0, HANDLE as u8, 0, 0x13]);
+                    self.connected = false;
+                    self.fragments.clear();
+                    self.emit(LinkEvent::Disconnected);
+                }
                 _ => {}
             }
         }
