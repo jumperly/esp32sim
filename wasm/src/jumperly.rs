@@ -623,6 +623,90 @@ pub unsafe extern "C" fn esp32sim_wifi_beacons(e: *mut Emu, data: *const u8, len
     if set { 0 } else { log("[emu] wifi: beacons need the virtual access point (esp32sim_wifi_ap)"); 1 }
 }
 
+/// Jumperly patch J23: the virtual BLE controller (`--ble` of the CLI) on the S3 or the C3. `elf`
+/// is the application ELF with its symbols (the guest's controller functions are found by name);
+/// before boot. Its log lines (`t=<s>s <line>`, the CLI's `[ble]` output) are kept for
+/// `esp32sim_ble_log_take`. Returns 0, or 1 (another chip, after boot, a bad or unsuitable ELF;
+/// logged).
+///
+/// # Safety
+/// `e` must point to a live emulator to which the caller has exclusive access; for a nonzero `len`,
+/// `elf` must be readable for `len` bytes throughout this call.
+#[no_mangle]
+pub unsafe extern "C" fn esp32sim_ble_virtual(e: *mut Emu, elf: *const u8, len: usize) -> u32 {
+    // SAFETY: the caller provides exclusive access to a live emulator.
+    let e = unsafe { &mut *e };
+    if e.booted { log("[emu] ble: the virtual controller is enabled before boot"); return 1; }
+    // SAFETY: the caller provides a readable buffer for this call.
+    let data = unsafe { bytes(elf, len) };
+    let elf = match esp_soc::elf::parse(data) {
+        Ok(elf) => elf,
+        Err(reason) => { log(&format!("[emu] ble: {reason}")); return 1; }
+    };
+    let result = if let Some(m) = e.m.c3_mut() {
+        m.bus.ble.capture = Some(Default::default());
+        m.bus.enable_ble(&elf)
+    } else if let Some(m) = e.m.s3_mut() {
+        m.bus.ble.capture = Some(Default::default());
+        m.bus.enable_ble(&elf)
+    } else {
+        Err("the virtual BLE controller needs an ESP32-S3 or ESP32-C3".into())
+    };
+    match result {
+        Ok(()) => 0,
+        Err(reason) => { log(&format!("[emu] ble: {reason}")); 1 }
+    }
+}
+
+/// Jumperly patch J23: a command for the virtual peer, now: `connect`, `discover`, `read HANDLE`,
+/// `write HANDLE HEX` (at most 20 bytes), `subscribe CCC_HANDLE` (the CLI's script `ble` commands).
+/// Returns 0, or 1 (no virtual controller, a bad command; the reason is the next log line).
+///
+/// # Safety
+/// `e` must point to a live emulator to which the caller has exclusive access; for a nonzero `len`,
+/// `cmd` must be readable for `len` bytes throughout this call.
+#[no_mangle]
+pub unsafe extern "C" fn esp32sim_ble_command(e: *mut Emu, cmd: *const u8, len: usize) -> u32 {
+    // SAFETY: the caller provides exclusive access to a live emulator.
+    let e = unsafe { &mut *e };
+    // SAFETY: the caller provides a readable buffer for this call.
+    let Ok(cmd) = std::str::from_utf8(unsafe { bytes(cmd, len) }) else { return 1 };
+    let cmd = cmd.to_string();
+    let (result, ble) = if let Some(m) = e.m.c3_mut() {
+        (m.bus.ble_command(&cmd), &mut m.bus.ble)
+    } else if let Some(m) = e.m.s3_mut() {
+        (m.bus.ble_command(&cmd), &mut m.bus.ble)
+    } else {
+        return 1;
+    };
+    match result {
+        Ok(()) => 0,
+        Err(reason) => { ble.note(format!("error {reason}")); 1 }
+    }
+}
+
+/// Jumperly patch J23: the oldest log line of the virtual BLE controller, into the buffer: its
+/// length, 0 when there is none.
+///
+/// # Safety
+/// `e` must point to a live emulator to which the caller has exclusive access.
+#[no_mangle]
+pub unsafe extern "C" fn esp32sim_ble_log_take(e: *mut Emu) -> u32 {
+    // SAFETY: the caller provides exclusive access to a live emulator.
+    let e = unsafe { &mut *e };
+    e.buf.clear();
+    let line = if let Some(m) = e.m.c3_mut() {
+        m.bus.ble.take_line()
+    } else if let Some(m) = e.m.s3_mut() {
+        m.bus.ble.take_line()
+    } else {
+        None
+    };
+    let Some(line) = line else { return 0 };
+    e.buf.extend_from_slice(line.as_bytes());
+    line.len() as u32
+}
+
 /// Jumperly patch J11: the SSID of the last directed probe request for a network other than the
 /// virtual access point's since the last call (the network the firmware looks for): its length,
 /// 0 for none; the bytes are in the buffer (`esp32sim_buf_ptr`).

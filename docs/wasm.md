@@ -267,6 +267,18 @@ The receiver copies the message before returning and applies it at the next run
 boundary. Sensor SCCB settings select output format and geometry. A board without
 a camera emits `{"t":"camera-error","message":"no camera on this board"}`.
 
+### Virtual BLE controller (Jumperly patch J23)
+
+The CLI's `--ble` in the browser, on the S3 and the C3. `esp32sim_ble_virtual(e, elf, len)` before
+boot: the application ELF (its symbols; debug info is not needed) — 0, or 1 for another chip, after
+boot, or an ELF without the controller symbols (logged). `esp32sim_ble_command(e, cmd, len)`: a
+command for the virtual peer now — `connect`, `discover`, `read HANDLE`, `write HANDLE HEX` (at most
+20 bytes), `subscribe CCC_HANDLE`; 0, or 1 (no virtual controller, a bad command: the reason is the
+next log line, `error …`). `esp32sim_ble_log_take(e)`: the oldest log line into the buffer (its
+length, 0 = none) — `t=<seconds>s <text>`, the lines the CLI prints as `[ble]` (advertising, the
+connection, discovered services / characteristics / attributes, reads, writes, notifications, ATT
+errors, unsupported HCI opcodes); at most 1024 wait, older ones are dropped.
+
 ### C3 full BLE observation
 
 Call `esp32sim_ble_full(emu)` before boot (0 = enabled, 1 = wrong chip or already

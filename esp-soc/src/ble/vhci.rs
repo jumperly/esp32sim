@@ -57,7 +57,14 @@ pub struct Ble {
     yield_to_host: bool,
     pub task_created: bool,
     pub original_flash: Option<(usize, Vec<u8>)>,
+    /// Jumperly patch J23: the log lines kept for the host (`take_line`) instead of stderr, which
+    /// a browser does not have; at most `CAPTURE_MAX`, older ones dropped (`dropped`).
+    pub capture: Option<std::collections::VecDeque<String>>,
+    pub dropped: u64,
 }
+
+/// Jumperly patch J23: the most log lines `Ble::capture` keeps.
+pub const CAPTURE_MAX: usize = 1024;
 
 impl Ble {
     pub fn enable(&mut self, symbols: &HashMap<String, u32>, init_size: u32, abi: &Abi) -> Result<(), String> {
@@ -102,6 +109,7 @@ impl Ble {
         next.kinds.insert(init + POLL, Hook::Poll);
         next.kinds.insert(init + CREATED, Hook::Created);
         next.hooks = next.kinds.keys().copied().collect();
+        next.capture = self.capture.take();
         *self = next;
         Ok(())
     }
@@ -123,9 +131,23 @@ impl Ble {
         result
     }
 
-    fn log(&mut self, cycles: u64, hz: u64) {
-        for line in self.session.drain_log() { eprintln!("[ble] t={:.6}s {line}", cycles as f64 / hz as f64); }
+    pub fn log(&mut self, cycles: u64, hz: u64) {
+        for line in self.session.drain_log() { self.note(format!("t={:.6}s {line}", cycles as f64 / hz as f64)); }
     }
+
+    /// Jumperly patch J23: one log line — kept for the host when it captures, else to stderr.
+    pub fn note(&mut self, line: String) {
+        match self.capture.as_mut() {
+            Some(q) => {
+                if q.len() >= CAPTURE_MAX { q.pop_front(); self.dropped += 1; }
+                q.push_back(line);
+            }
+            None => eprintln!("[ble] {line}"),
+        }
+    }
+
+    /// Jumperly patch J23: the oldest captured log line, if any.
+    pub fn take_line(&mut self) -> Option<String> { self.capture.as_mut()?.pop_front() }
 }
 
 pub fn install<B: VhciBus>(bus: &mut B) -> Result<(), String> {
@@ -178,7 +200,7 @@ pub fn intercept<C: Core, B: VhciBus>(cpu: &mut C, bus: &mut B, redirect: impl F
                         return true;
                     }
                     Err(error) => {
-                        eprintln!("[ble] {error}");
+                        bus.ble().note(error);
                         result = u32::MAX;
                     }
                 }
@@ -189,7 +211,7 @@ pub fn intercept<C: Core, B: VhciBus>(cpu: &mut C, bus: &mut B, redirect: impl F
                 bus.ble().task_created = true;
                 bus.ble().status = 1;
             } else {
-                eprintln!("[ble] controller task creation failed: {arg:#x}");
+                bus.ble().note(format!("controller task creation failed: {arg:#x}"));
                 result = u32::MAX;
             }
         }
@@ -241,7 +263,7 @@ pub fn intercept<C: Core, B: VhciBus>(cpu: &mut C, bus: &mut B, redirect: impl F
                 || arg < abi.ram.start
                 || arg.checked_add(len as u32).is_none_or(|end| end > abi.ram.end)
             {
-                eprintln!("[ble] rejected invalid VHCI packet pointer, length or controller state");
+                bus.ble().note("rejected invalid VHCI packet pointer, length or controller state".into());
             } else {
                 let packet: Result<Vec<u8>, _> = (0..len).map(|i| bus.read8_unpriced(arg + i as u32)).collect();
                 if let Ok(packet) = packet {
@@ -270,7 +292,7 @@ pub fn intercept<C: Core, B: VhciBus>(cpu: &mut C, bus: &mut B, redirect: impl F
                         if bus.ble_debug() { eprintln!("[ble] rx {:02x?}", packet); }
                         bus.ble().yield_to_host = true;
                         result = bus.ble().callbacks[1];
-                    } else { eprintln!("[ble] rejected oversized or unmapped controller packet"); }
+                    } else { bus.ble().note("rejected oversized or unmapped controller packet".into()); }
                 } else if bus.ble().send_ready {
                     bus.ble().send_ready = false;
                     result = bus.ble().callbacks[0];

@@ -359,7 +359,9 @@ fn merged_c3(app: &str) -> Vec<u8> {
 }
 
 impl Emu {
-    fn boot_c3(app: &str) -> Emu {
+    fn boot_c3(app: &str) -> Emu { Emu::boot_c3_with(app, |_| {}) }
+    /// `boot_c3`, calling `setup` after the images are loaded and before boot.
+    fn boot_c3_with(app: &str, setup: impl FnOnce(*mut esp32sim_wasm::Emu)) -> Emu {
         let board = "esp32c3";
         // SAFETY: the board name is readable for the call; the pointer is checked for null.
         let e = unsafe { esp32sim_new(board.as_ptr(), board.len(), 4, 0) };
@@ -371,8 +373,10 @@ impl Emu {
             assert_eq!(esp32sim_jumperly_mode(e), 0);
             assert_eq!(esp32sim_load(e, 0, rom.as_ptr(), rom.len()), 0);
             assert_eq!(esp32sim_load(e, 5, flash.as_ptr(), flash.len()), 0);
-            assert_eq!(esp32sim_boot(e, 0), 0);
         }
+        setup(e);
+        // SAFETY: as above.
+        unsafe { assert_eq!(esp32sim_boot(e, 0), 0) };
         emu
     }
     /// The RMT frames since the last call: (cycle, pin, bits).
@@ -1106,3 +1110,64 @@ fn i2s_host_is_s3_only_and_bad_ports_need_nothing() {
     assert_eq!(unsafe { esp32sim_i2s_rx_need(c3, 0, 1000) }, 0);
     unsafe { esp32sim_delete(c3) };
 }
+
+/// Jumperly patch J23: the virtual BLE controller's log lines since the last call.
+fn ble_log(e: &mut Emu) -> Vec<String> {
+    let mut out = Vec::new();
+    loop {
+        let n = unsafe { esp32sim_ble_log_take(e.0) } as usize;
+        if n == 0 { return out }
+        out.push(String::from_utf8(e.buf(n)).unwrap());
+    }
+}
+fn ble_command(e: &mut Emu, cmd: &str) -> u32 { unsafe { esp32sim_ble_command(e.0, cmd.as_ptr(), cmd.len()) } }
+
+/// The ble-server fixture as a phone would use it: advertising, connect, discover, read, write,
+/// subscribe, notifications; the log of the virtual peer comes to the host, not to stderr.
+fn ble_server_through_the_virtual_peer(chip: &str, mhz: u64) {
+    let elf_name = if chip == "c3" { "fixtures/bin/c3-ble-server.elf" } else { "fixtures/bin/ble-server.elf" };
+    let elf = read(elf_name);
+    let enable = |e: *mut esp32sim_wasm::Emu| {
+        assert_eq!(unsafe { esp32sim_ble_virtual(e, b"junk".as_ptr(), 4) }, 1, "not an ELF");
+        assert_eq!(unsafe { esp32sim_ble_virtual(e, elf.as_ptr(), elf.len()) }, 0);
+    };
+    let mut e = if chip == "c3" { Emu::boot_c3_with("c3-ble-server", enable) } else { Emu::boot_with("ble-server", enable) };
+    let run = |e: &mut Emu, us: u64| {
+        let end = e.cycles() + us * mhz;
+        let mut text = String::new();
+        while e.cycles() < end {
+            let left = (end - e.cycles()).min(u32::MAX as u64) as u32;
+            assert_eq!(e.run(left), 0);
+            text += &e.uart(0);
+        }
+        text
+    };
+    let mut text = run(&mut e, 1_200_000);
+    let mut log = ble_log(&mut e);
+    assert!(text.contains("ble: advertising"), "{text}");
+    assert!(log.iter().any(|l| l.contains("advertising service=4fafc201-1fb5-459e-8fcc-c5c9c331914b name=\"Jumperly\"")), "{log:?}");
+    assert_eq!(ble_command(&mut e, "connect"), 0);
+    text += &run(&mut e, 200_000);
+    assert_eq!(ble_command(&mut e, "discover"), 0);
+    text += &run(&mut e, 400_000);
+    for cmd in ["read 0x0010", "write 0x0010 6869", "subscribe 0x0011"] { assert_eq!(ble_command(&mut e, cmd), 0); }
+    text += &run(&mut e, 2_500_000);
+    log.extend(ble_log(&mut e));
+    assert_eq!(ble_command(&mut e, "read nothing"), 1);
+    let last = ble_log(&mut e);
+    assert!(last.iter().any(|l| l.starts_with("error ")), "{last:?}");
+    let has = |s: &str| log.iter().any(|l| l.contains(s));
+    assert!(has("connected handle=0x0001 guest=peripheral"), "{log:?}");
+    assert!(has("characteristic declaration=0x000f handle=0x0010 properties=0x1a uuid=beb5483e-36e1-4688-b7f5-ea07361b26a8"), "{log:?}");
+    assert!(has("read handle=0x0010 value="), "{log:?}");
+    assert!(has("write complete handle=0x0010"), "{log:?}");
+    assert!(has("notification handle=0x0010 value="), "{log:?}");
+    assert!(log.iter().all(|l| l.starts_with("t=")), "{log:?}");
+    assert!(text.contains("ble: connected") && text.contains("ble: write hi"), "{text}");
+}
+
+#[test]
+fn ble_server_on_the_s3_through_the_virtual_peer() { ble_server_through_the_virtual_peer("s3", MHZ); }
+
+#[test]
+fn ble_server_on_the_c3_through_the_virtual_peer() { ble_server_through_the_virtual_peer("c3", C3_MHZ); }
