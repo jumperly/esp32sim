@@ -459,8 +459,13 @@ impl HciController for Controller {
                     e.push((-35i8) as u8);
                     self.event(0x3e, &e);
                     if active {
-                        e[2] = 4;
-                        self.event(0x3e, &e);
+                        // Jumperly patch J25: an empty scan response, not the advertising data again
+                        // (a scanner would merge both and list every field twice).
+                        let mut r = vec![2, 1, 4, 0];
+                        r.extend_from_slice(&PEER);
+                        r.push(0);
+                        r.push((-35i8) as u8);
+                        self.event(0x3e, &r);
                     }
                 }
                 LinkAction::Data(cid, pdu) if self.connected => self.l2cap(cid, &pdu),
