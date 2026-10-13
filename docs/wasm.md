@@ -290,7 +290,9 @@ controller or for bad data.
 `esp32sim_ble_air(e, addr)` (Jumperly patch J26): Bluetooth LE between the boards of a project.
 `addr` points to the board's public address (6 bytes, least significant first), which READ_BD_ADDR
 answers; after `esp32sim_ble_virtual`, before boot; 0, or 1 without the virtual controller. Then
-LE Create Connection to a public address other than the peer's is the host's to answer.
+LE Create Connection to an address other than the peer's is the host's to answer: public (another
+board) or, Jumperly patch J27, random (a device around the user that the host connects; LE
+Connection Complete carries the address type asked for).
 `esp32sim_ble_air_take(e)` puts the frames the board sent since the last call into the buffer and
 returns their count, each as `[len u16][frame]`; `esp32sim_ble_air_put(e, ptr, len)` gives the board
 one frame (0, or 1 for a bad frame, logged). Frames start with their kind:
@@ -301,7 +303,7 @@ one frame (0, or 1 for a bad frame, logged). Frames start with their kind:
 | 2 | `[2]` | it stopped advertising (or got connected) |
 | 3 | `[3][addr 6]` | its guest asks to connect to `addr` |
 | 4 | `[4][addr 6][central u8]` | to the board: connected to `addr`; `central` 1 for the guest that asked |
-| 5 | `[5][addr 6]` | to the board: the connection failed (LE Connection Complete, status 0x3e) |
+| 5 | `[5][addr 6]` | to the board: the connection failed (LE Connection Complete, status 0x02, as after LE Create Connection Cancel) |
 | 6 | `[6][cid u16][payload]` | L2CAP frame of the link, either way |
 | 7 | `[7]` | the link ended (either way) |
 

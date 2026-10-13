@@ -93,6 +93,9 @@ pub struct Controller {
     /// may connect to besides the peer (the boards of the project, through the host).
     address: [u8; 6],
     remote_connect: bool,
+    /// Jumperly patch J27: the address type of the device the guest asked the host for (0 public:
+    /// a board; 1 random: a device around the user, through the page).
+    remote_peer_type: u8,
     random: u64,
     local_name: [u8; 248],
     default_link_policy: u16,
@@ -113,6 +116,7 @@ impl Controller {
             fragments: Vec::new(),
             address: ADDRESS,
             remote_connect: false,
+            remote_peer_type: 0,
             random: 0x3253_5045_424c_4531,
             local_name: [0; 248],
             default_link_policy: 0,
@@ -152,11 +156,11 @@ impl Controller {
         self.address = address;
         self.remote_connect = true;
     }
-    fn connect(&mut self, guest_central: bool) { self.connect_with(guest_central, PEER); }
-    fn connect_with(&mut self, guest_central: bool, peer: [u8; 6]) {
+    fn connect(&mut self, guest_central: bool) { self.connect_with(guest_central, PEER, 0); }
+    fn connect_with(&mut self, guest_central: bool, peer: [u8; 6], peer_type: u8) {
         self.connected = true;
         self.advertising = false;
-        let mut e = vec![1, 0, HANDLE as u8, 0, if guest_central { 0 } else { 1 }, 0];
+        let mut e = vec![1, 0, HANDLE as u8, 0, if guest_central { 0 } else { 1 }, peer_type];
         e.extend_from_slice(&peer);
         e.extend_from_slice(&[24, 0, 0, 0, 0xf4, 1, 0]);
         self.event(0x3e, &e);
@@ -350,7 +354,10 @@ impl Controller {
             LE_CREATE_CONNECTION => {
                 // Jumperly patch J26: another board of the project (a public address), through
                 // the host; its answer comes as `RemoteConnected` or `ConnectFailed`.
-                if self.remote_connect && p[4] == 0 && p[5] == 0 && p[6..12] != PEER {
+                // Jumperly patch J27: a random address too (a device around the user, through the
+                // page).
+                if self.remote_connect && p[4] == 0 && p[5] <= 1 && p[6..12] != PEER {
+                    self.remote_peer_type = p[5];
                     self.status(op, if self.connected { 0x0c } else { 0 });
                     if !self.connected { self.emit(LinkEvent::ConnectTo(p[6..12].try_into().unwrap())); }
                     return;
@@ -539,12 +546,16 @@ impl HciController for Controller {
                     }
                 }
                 LinkAction::RemoteConnect(central) if self.advertising && !self.connected => {
-                    self.connect_with(false, central);
+                    self.connect_with(false, central, 0);
                 }
-                LinkAction::RemoteConnected(peripheral) if !self.connected => self.connect_with(true, peripheral),
+                LinkAction::RemoteConnected(peripheral) if !self.connected => {
+                    self.connect_with(true, peripheral, self.remote_peer_type);
+                }
                 LinkAction::ConnectFailed(addr) => {
-                    // LE Connection Complete: Connection Failed to be Established (0x3e).
-                    let mut e = vec![1, 0x3e, 0, 0, 0, 0];
+                    // LE Connection Complete with Unknown Connection Identifier (0x02), as after
+                    // LE Create Connection Cancel. Jumperly patch J27: not 0x3e (Connection Failed
+                    // to be Established), which the core's NimBLE does not expect and asserts on.
+                    let mut e = vec![1, 0x02, 0, 0, 0, self.remote_peer_type];
                     e.extend_from_slice(&addr);
                     e.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0]);
                     self.event(0x3e, &e);

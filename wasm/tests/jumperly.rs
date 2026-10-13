@@ -1318,3 +1318,44 @@ fn two_s3_boards_talk_ble() { two_boards_talk_ble("s3", "s3"); }
 
 #[test]
 fn an_s3_server_and_a_c3_client_talk_ble() { two_boards_talk_ble("s3", "c3"); }
+
+#[test]
+fn a_sketch_asks_the_host_for_a_device_around() {
+    // J27: a device around the user (a random address, the page found it) is the host's to connect.
+    let elf = read("fixtures/bin/ble-client.elf");
+    let mut e = Emu::boot_with("ble-client", |e| unsafe {
+        assert_eq!(esp32sim_ble_virtual(e, elf.as_ptr(), elf.len()), 0);
+        assert_eq!(esp32sim_ble_air(e, [0x02, 0x00, 0x00, 0x28, 0x6f, 0x24].as_ptr()), 0);
+    });
+    let device = [0x55, 0x44, 0x33, 0x22, 0x11, 0xc2];
+    // Flags, then the ble-server service (128-bit, least significant byte first).
+    let mut adv = vec![2, 1, 6, 17, 7];
+    adv.extend_from_slice(&[0x4b, 0x91, 0x31, 0xc3, 0xc9, 0xc5, 0xcc, 0x8f, 0x9e, 0x45, 0xb5, 0x1f, 0x01, 0xc2, 0xaf, 0x4f]);
+    let mut entry = device.to_vec();
+    entry.extend_from_slice(&[1, (-60i8) as u8, adv.len() as u8]);
+    entry.extend_from_slice(&adv);
+    entry.push(0);
+    assert_eq!(unsafe { esp32sim_ble_nearby(e.0, entry.as_ptr(), entry.len()) }, 0);
+    let mut text = String::new();
+    let mut asked = false;
+    for _ in 0..6000 {
+        let end = e.cycles() + 1000 * MHZ;
+        while e.cycles() < end {
+            let left = (end - e.cycles()) as u32;
+            assert_eq!(e.run(left), 0);
+        }
+        text += &e.uart(0);
+        for f in air_take(&mut e) {
+            if f[0] == 3 {
+                assert_eq!(&f[1..7], &device);
+                asked = true;
+                air_put(&mut e, &[&[5u8][..], &device].concat());
+            }
+        }
+        if text.contains("client: connect failed") { break; }
+    }
+    assert!(asked, "{text}");
+    assert!(text.contains("client: found c2:11:22:33:44:55"), "{text}");
+    assert!(text.contains("client: connect failed"), "{text}");
+    assert!(ble_log(&mut e).iter().any(|l| l.contains("remote connect failed addr=c2:11:22:33:44:55")));
+}
