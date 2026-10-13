@@ -284,7 +284,31 @@ heard by the guest's scans (not connectable), replacing the ones there were. Ent
 least significant byte first][addr_type u8: 0 public, 1 random][rssi i8][adv_len u8][adv][rsp_len
 u8][rsp]`, the data at most 31 bytes each, at most 64 devices (`len` 0: none). Each scan of the
 guest — and a running one when the list changes — gets an LE Advertising Report per device
-(ADV_IND; SCAN_RSP too for an active scan). 0, or 1 without the virtual controller or for bad data.
+(ADV_IND; SCAN_RSP too for an active scan, an empty one included). 0, or 1 without the virtual
+controller or for bad data.
+
+`esp32sim_ble_air(e, addr)` (Jumperly patch J26): Bluetooth LE between the boards of a project.
+`addr` points to the board's public address (6 bytes, least significant first), which READ_BD_ADDR
+answers; after `esp32sim_ble_virtual`, before boot; 0, or 1 without the virtual controller. Then
+LE Create Connection to a public address other than the peer's is the host's to answer.
+`esp32sim_ble_air_take(e)` puts the frames the board sent since the last call into the buffer and
+returns their count, each as `[len u16][frame]`; `esp32sim_ble_air_put(e, ptr, len)` gives the board
+one frame (0, or 1 for a bad frame, logged). Frames start with their kind:
+
+| Kind | Frame | Meaning |
+| --- | --- | --- |
+| 1 | `[1][n][adv n][m][scan response m]` | the board advertises (connectable) |
+| 2 | `[2]` | it stopped advertising (or got connected) |
+| 3 | `[3][addr 6]` | its guest asks to connect to `addr` |
+| 4 | `[4][addr 6][central u8]` | to the board: connected to `addr`; `central` 1 for the guest that asked |
+| 5 | `[5][addr 6]` | to the board: the connection failed (LE Connection Complete, status 0x3e) |
+| 6 | `[6][cid u16][payload]` | L2CAP frame of the link, either way |
+| 7 | `[7]` | the link ended (either way) |
+
+The host routes them: advertising goes into the other boards' `esp32sim_ble_nearby` lists (their
+scans hear it); a connect request to an advertising board answers both with kind 4, otherwise the
+asker with kind 5; data and the disconnection go to the other board of the link. The log has
+`remote connected guest=<central|peripheral> peer=<address>` and `remote connect failed addr=…`.
 
 ### C3 full BLE observation
 

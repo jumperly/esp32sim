@@ -58,3 +58,8 @@ pub const ESP_CLEAR_LEGACY_ADVERTISING: u16 = 0xfd0c;
 pub const ESP_ENABLE_CSA2: u16 = 0xfd12;
 pub const ESP_SET_LE_EVENT_MASK: u16 = 0xfd16;
 pub const VENDOR_FD82: u16 = 0xfd82;
+/// Jumperly patch J26: data length extension (Core Vol 4 Part E 7.8.33, 7.8.34, 7.8.35, 7.8.46).
+pub const LE_SET_DATA_LENGTH: u16 = 0x2022;
+pub const LE_READ_SUGGESTED_DEFAULT_DATA_LENGTH: u16 = 0x2023;
+pub const LE_WRITE_SUGGESTED_DEFAULT_DATA_LENGTH: u16 = 0x2024;
+pub const LE_READ_MAXIMUM_DATA_LENGTH: u16 = 0x202f;

@@ -37,6 +37,61 @@ pub struct Nearby { pub addr: [u8; 6], pub addr_type: u8, pub rssi: i8, pub adv:
 /// The most devices around the peer reports.
 pub const NEARBY_MAX: usize = 64;
 
+/// Jumperly patch J26: what crosses the "air" between the boards of a project, through the host.
+/// Out of an emulator: its advertising, connection requests, data and disconnections; into one:
+/// connections made, failed or ended, and the other board's data.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Air {
+    /// This board advertises (connectable) with this data and scan response.
+    Advertising(Vec<u8>, Vec<u8>),
+    AdvertisingStopped,
+    /// This board's guest wants to connect to the board with this address.
+    ConnectRequest([u8; 6]),
+    /// In: a board (this address) connected to this one, which advertised (this one is the
+    /// peripheral); or: the connection this one asked for (to this address) is there.
+    Connected { addr: [u8; 6], central: bool },
+    ConnectFailed([u8; 6]),
+    /// An L2CAP frame on the connection (both ways).
+    Data(u16, Vec<u8>),
+    /// The connection ended (both ways).
+    Disconnected,
+}
+
+impl Air {
+    /// `[kind][payload]`: 1 advertising `[adv_len][adv][rsp_len][rsp]`, 2 advertising stopped,
+    /// 3 connect request `[addr 6]`, 4 connected `[addr 6][central]`, 5 connect failed `[addr 6]`,
+    /// 6 data `[cid u16][frame]`, 7 disconnected.
+    pub fn encode(&self) -> Vec<u8> {
+        match self {
+            Air::Advertising(a, r) => [&[1, a.len() as u8][..], a, &[r.len() as u8], r].concat(),
+            Air::AdvertisingStopped => vec![2],
+            Air::ConnectRequest(addr) => [&[3u8][..], addr].concat(),
+            Air::Connected { addr, central } => [&[4u8][..], addr, &[*central as u8]].concat(),
+            Air::ConnectFailed(addr) => [&[5u8][..], addr].concat(),
+            Air::Data(cid, p) => [&[6u8][..], &cid.to_le_bytes(), p].concat(),
+            Air::Disconnected => vec![7],
+        }
+    }
+    pub fn decode(d: &[u8]) -> Result<Air, String> {
+        let addr = |d: &[u8]| -> Result<[u8; 6], String> { d.get(1..7).and_then(|a| a.try_into().ok()).ok_or_else(|| "a cut-short air frame".to_string()) };
+        Ok(match d.first() {
+            Some(1) => {
+                let n = *d.get(1).ok_or("a cut-short air frame")? as usize;
+                let m = *d.get(2 + n).ok_or("a cut-short air frame")? as usize;
+                let adv = d.get(2..2 + n).ok_or("a cut-short air frame")?.to_vec();
+                Air::Advertising(adv, d.get(3 + n..3 + n + m).ok_or("a cut-short air frame")?.to_vec())
+            }
+            Some(2) => Air::AdvertisingStopped,
+            Some(3) => Air::ConnectRequest(addr(d)?),
+            Some(4) => Air::Connected { addr: addr(d)?, central: *d.get(7).ok_or("a cut-short air frame")? != 0 },
+            Some(5) => Air::ConnectFailed(addr(d)?),
+            Some(6) if d.len() >= 3 => Air::Data(u16::from_le_bytes([d[1], d[2]]), d[3..].to_vec()),
+            Some(7) => Air::Disconnected,
+            _ => return Err("an unknown air frame".into()),
+        })
+    }
+}
+
 impl Nearby {
     /// `esp32sim_ble_nearby`'s list: entries of `[addr 6][addr_type u8][rssi i8][adv_len u8][adv]
     /// [rsp_len u8][rsp]`, the data at most 31 bytes each, at most `NEARBY_MAX`.
@@ -57,6 +112,8 @@ impl Nearby {
         Ok(out)
     }
 }
+/// An address as printed (most significant byte first), from its HCI order (least first).
+pub fn addr_text(a: &[u8; 6]) -> String { a.iter().rev().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(":") }
 pub fn hex(b: &[u8]) -> String { b.iter().map(|v| format!("{v:02x}")).collect() }
 fn uuid(b: &[u8]) -> String {
     let s = hex(&b.iter().rev().copied().collect::<Vec<_>>());
@@ -146,6 +203,12 @@ pub struct Peer {
     /// Jumperly patch J25: the devices around, and the guest's scan (active or passive) if it runs.
     nearby: Vec<Nearby>,
     scanning: Option<bool>,
+    /// Jumperly patch J26: the air between the boards is on; what goes out; the connection is to
+    /// another board (not the phone-like peer), at `remote_addr`.
+    air: bool,
+    air_out: VecDeque<Air>,
+    remote: bool,
+    remote_addr: [u8; 6],
 }
 impl Peer {
     fn new(link: Link) -> Self {
@@ -167,9 +230,43 @@ impl Peer {
             write_offset: 0,
             nearby: Vec::new(),
             scanning: None,
+            air: false,
+            air_out: VecDeque::new(),
+            remote: false,
+            remote_addr: [0; 6],
         }
     }
+    /// Jumperly patch J26: a frame from the air (the host took it from another board).
+    pub fn air_in(&mut self, frame: Air) {
+        match frame {
+            Air::Connected { addr, central: false } => {
+                // Another board connected to this advertising one.
+                (self.remote, self.remote_addr) = (true, addr);
+                self.link.borrow_mut().to_controller.push_back(LinkAction::RemoteConnect(addr));
+            }
+            Air::Connected { addr, central: true } => {
+                (self.remote, self.remote_addr) = (true, addr);
+                self.link.borrow_mut().to_controller.push_back(LinkAction::RemoteConnected(addr));
+            }
+            Air::ConnectFailed(addr) => {
+                self.log.push(format!("remote connect failed addr={}", addr_text(&addr)));
+                self.link.borrow_mut().to_controller.push_back(LinkAction::ConnectFailed(addr));
+            }
+            Air::Data(cid, p) => { if self.remote { self.link.borrow_mut().to_controller.push_back(LinkAction::Data(cid, p)); } }
+            Air::Disconnected => {
+                if self.remote {
+                    self.remote = false;
+                    // The other board ended it: this guest hears «remote user terminated».
+                    self.link.borrow_mut().to_controller.push_back(LinkAction::Disconnect);
+                }
+            }
+            Air::Advertising(..) | Air::AdvertisingStopped | Air::ConnectRequest(_) => {}
+        }
+    }
+    /// Jumperly patch J26: what this board sent into the air since the last call.
+    pub fn take_air(&mut self) -> Vec<Air> { self.air_out.drain(..).collect() }
     fn advertisement(&mut self, adv: Vec<u8>, scan_response: Vec<u8>) {
+        if self.air { self.air_out.push_back(Air::Advertising(adv.clone(), scan_response.clone())); }
         let fields: Vec<_> = [&adv, &scan_response].into_iter().flat_map(|data| advertising_fields(data)).collect();
         self.log.push(format!("advertising {} data={}", fields.join(" "), hex(&adv)));
     }
@@ -267,7 +364,17 @@ impl Peer {
                     self.advertising = true;
                     self.advertisement(adv, response);
                 }
-                LinkEvent::AdvertisingStopped => self.advertising = false,
+                LinkEvent::AdvertisingStopped => {
+                    self.advertising = false;
+                    if self.air { self.air_out.push_back(Air::AdvertisingStopped); }
+                }
+                LinkEvent::ConnectTo(addr) => {
+                    if self.air {
+                        self.air_out.push_back(Air::ConnectRequest(addr));
+                    } else {
+                        self.link.borrow_mut().to_controller.push_back(LinkAction::ConnectFailed(addr));
+                    }
+                }
                 LinkEvent::Scan(active) => {
                     self.link.borrow_mut().to_controller.push_back(LinkAction::Advertisement(ADV.to_vec(), active));
                     self.log.push("scan report name=esp32sim service=180f".into());
@@ -282,6 +389,16 @@ impl Peer {
                     self.mtu_done = false;
                     self.advertising = false;
                     self.guest_central = central;
+                    if self.remote {
+                        // Jumperly patch J26: a link between two boards: the guests talk to each other.
+                        if self.air && !central { self.air_out.push_back(Air::AdvertisingStopped); }
+                        self.log.push(format!(
+                            "remote connected guest={} peer={}",
+                            if central { "central" } else { "peripheral" },
+                            addr_text(&self.remote_addr)
+                        ));
+                        continue;
+                    }
                     // Jumperly patch J24: as a phone does, the MTU exchange right after connecting.
                     if !central {
                         self.mtu_done = true;
@@ -294,6 +411,11 @@ impl Peer {
                     ));
                 }
                 LinkEvent::Disconnected => {
+                    if self.remote {
+                        // Jumperly patch J26: this guest ended a link between two boards.
+                        self.remote = false;
+                        self.air_out.push_back(Air::Disconnected);
+                    }
                     self.connecting = false;
                     self.connected = false;
                     self.pending = None;
@@ -307,6 +429,7 @@ impl Peer {
                     self.advertising = false;
                     self.pending = None;
                 }
+                LinkEvent::Data(cid, p) if self.remote => self.air_out.push_back(Air::Data(cid, p)),
                 LinkEvent::Data(cid, p) => match cid {
                     4 => self.receive_att(&p),
                     5 if p.len() >= 4 && p[0] == 0x12 => self.l2cap(5, &[0x13, p[1], 2, 0, 0, 0]),
@@ -538,9 +661,27 @@ impl Session {
         self.controller.reset();
         // Jumperly patch J25: the devices around the user outlive a reboot of the guest.
         let nearby = std::mem::take(&mut self.peer.nearby);
+        let (air, remote) = (self.peer.air, self.peer.remote);
         self.peer = Peer::new(self.peer.link.clone());
         self.peer.nearby = nearby;
+        // Jumperly patch J26: the air stays on; a link to another board ends with the reboot.
+        self.peer.air = air;
+        if remote { self.peer.air_out.push_back(Air::Disconnected); }
         self.cycles = 0;
+    }
+    /// Jumperly patch J26: the air between the boards: this controller's address, the frames out
+    /// (`take_air`) and in (`air_in`).
+    pub fn enable_air(&mut self, address: [u8; 6]) {
+        self.controller.set_address(address);
+        self.peer.air = true;
+    }
+    pub fn air_in(&mut self, frame: Air) {
+        self.peer.air_in(frame);
+        self.advance_to(self.cycles);
+    }
+    pub fn take_air(&mut self) -> Vec<Air> {
+        self.advance_to(self.cycles);
+        self.peer.take_air()
     }
     /// Jumperly patch J25: `Peer::set_nearby`, then what it sent goes out.
     pub fn set_nearby(&mut self, list: Vec<Nearby>) {

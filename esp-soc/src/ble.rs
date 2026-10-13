@@ -18,6 +18,9 @@ pub trait HciController {
     fn reset(&mut self);
     fn advance_to(&mut self, cycles: u64);
     fn next_deadline(&self) -> Option<u64>;
+    /// Jumperly patch J26: this controller's address, and connections to other boards through the
+    /// host. Controllers that cannot do it ignore it.
+    fn set_address(&mut self, _address: [u8; 6]) {}
 }
 
 /// Packet-level link boundary. A replacement controller bridges its radio/link to these queues.
@@ -33,6 +36,9 @@ pub enum LinkEvent {
     Scan(bool),
     /// Jumperly patch J25: the guest stopped scanning.
     ScanStopped,
+    /// Jumperly patch J26: the guest asks to connect to a device that is not the peer (another
+    /// board of the project, by its address).
+    ConnectTo([u8; 6]),
     Connected(bool),
     Disconnected,
     Reset,
@@ -50,6 +56,13 @@ pub enum LinkAction {
     Connect,
     /// Jumperly patch J24: the peer ends the connection (remote user terminated).
     Disconnect,
+    /// Jumperly patch J26: a board of the project connects to this one (advertising): this guest is
+    /// the peripheral, the central's address given.
+    RemoteConnect([u8; 6]),
+    /// Jumperly patch J26: the connection this guest asked for (`ConnectTo`) is there.
+    RemoteConnected([u8; 6]),
+    /// Jumperly patch J26: the connection this guest asked for failed.
+    ConnectFailed([u8; 6]),
     /// Jumperly patch J25: an advertising report of a device around the user (not the peer):
     /// its address, advertising data, scan response (sent to an active scan) and RSSI.
     Report { addr: [u8; 6], addr_type: u8, data: Vec<u8>, scan_response: Vec<u8>, rssi: i8, active: bool },
@@ -76,6 +89,10 @@ pub struct Controller {
     connected: bool,
     active_scan: bool,
     fragments: Vec<u8>,
+    /// Jumperly patch J26: this controller's public address (READ_BD_ADDR), and the devices it
+    /// may connect to besides the peer (the boards of the project, through the host).
+    address: [u8; 6],
+    remote_connect: bool,
     random: u64,
     local_name: [u8; 248],
     default_link_policy: u16,
@@ -94,6 +111,8 @@ impl Controller {
             connected: false,
             active_scan: false,
             fragments: Vec::new(),
+            address: ADDRESS,
+            remote_connect: false,
             random: 0x3253_5045_424c_4531,
             local_name: [0; 248],
             default_link_policy: 0,
@@ -127,11 +146,18 @@ impl Controller {
             self.packets.push_back(p);
         }
     }
-    fn connect(&mut self, guest_central: bool) {
+    /// Jumperly patch J26: the address READ_BD_ADDR answers; connections to other addresses go to
+    /// the host (`LinkEvent::ConnectTo`) instead of being refused.
+    pub fn set_address(&mut self, address: [u8; 6]) {
+        self.address = address;
+        self.remote_connect = true;
+    }
+    fn connect(&mut self, guest_central: bool) { self.connect_with(guest_central, PEER); }
+    fn connect_with(&mut self, guest_central: bool, peer: [u8; 6]) {
         self.connected = true;
         self.advertising = false;
         let mut e = vec![1, 0, HANDLE as u8, 0, if guest_central { 0 } else { 1 }, 0];
-        e.extend_from_slice(&PEER);
+        e.extend_from_slice(&peer);
         e.extend_from_slice(&[24, 0, 0, 0, 0xf4, 1, 0]);
         self.event(0x3e, &e);
         self.emit(LinkEvent::Connected(guest_central));
@@ -198,6 +224,9 @@ impl Controller {
             LE_SET_ADVERTISING_DATA | LE_SET_SCAN_RESPONSE_DATA | LE_ENCRYPT => Some(32),
             LE_SET_SCAN_PARAMETERS | HOST_BUFFER_SIZE | LE_ADD_FILTER_ACCEPT_LIST | LE_REMOVE_FILTER_ACCEPT_LIST => { Some(7) }
             LE_CREATE_CONNECTION => Some(25),
+            LE_SET_DATA_LENGTH => Some(6),
+            LE_WRITE_SUGGESTED_DEFAULT_DATA_LENGTH => Some(4),
+            LE_READ_SUGGESTED_DEFAULT_DATA_LENGTH | LE_READ_MAXIMUM_DATA_LENGTH => Some(0),
             LE_CONNECTION_UPDATE => Some(14),
             WRITE_LOCAL_NAME => Some(248),
             ESP_SET_ADV_REPORT_FLOW_CONTROL | LE_SET_HOST_CHANNEL_CLASSIFICATION => Some(5),
@@ -271,7 +300,7 @@ impl Controller {
             READ_BUFFER_SIZE => self.complete(op, &[0, 0xfb, 0, 0, 8, 0, 0, 0]),
             READ_BD_ADDR => {
                 let mut v = vec![0];
-                v.extend_from_slice(&ADDRESS);
+                v.extend_from_slice(&self.address);
                 self.complete(op, &v);
             }
             LE_READ_BUFFER_SIZE => self.complete(op, &[0, 0xfb, 0, 8]),
@@ -319,6 +348,13 @@ impl Controller {
                 if p[0] == 1 { self.emit(LinkEvent::Scan(self.active_scan)); } else { self.emit(LinkEvent::ScanStopped); }
             }
             LE_CREATE_CONNECTION => {
+                // Jumperly patch J26: another board of the project (a public address), through
+                // the host; its answer comes as `RemoteConnected` or `ConnectFailed`.
+                if self.remote_connect && p[4] == 0 && p[5] == 0 && p[6..12] != PEER {
+                    self.status(op, if self.connected { 0x0c } else { 0 });
+                    if !self.connected { self.emit(LinkEvent::ConnectTo(p[6..12].try_into().unwrap())); }
+                    return;
+                }
                 if p[4] != 0 || p[5] != 0 || p[6..12] != PEER {
                     self.status(op, 0x12);
                     return;
@@ -338,6 +374,21 @@ impl Controller {
                 self.emit(LinkEvent::Disconnected);
             }
             LE_READ_CHANNEL_MAP => self.complete(op, &[0, p[0], p[1], 0xff, 0xff, 0xff, 0xff, 0x1f]),
+            // Jumperly patch J26: data length extension. The core's NimBLE peripheral asks for it
+            // right after connecting. The link takes 251-byte PDUs (the ACL buffer), at once.
+            LE_SET_DATA_LENGTH => {
+                if !self.connected || word(p) != HANDLE {
+                    self.complete(op, &[2, p[0], p[1]]);
+                    return;
+                }
+                self.complete(op, &[0, p[0], p[1]]);
+                let mut e = vec![7, HANDLE as u8, 0];
+                for v in [0xfbu16, 0x4290, 0xfb, 0x4290] { e.extend_from_slice(&v.to_le_bytes()); }
+                self.event(0x3e, &e);
+            }
+            LE_READ_SUGGESTED_DEFAULT_DATA_LENGTH => self.complete(op, &[0, 0xfb, 0, 0x90, 0x42]),
+            LE_WRITE_SUGGESTED_DEFAULT_DATA_LENGTH => self.complete(op, &[0]),
+            LE_READ_MAXIMUM_DATA_LENGTH => self.complete(op, &[0, 0xfb, 0, 0x90, 0x42, 0xfb, 0, 0x90, 0x42]),
             LE_READ_REMOTE_FEATURES => {
                 self.status(op, 0);
                 self.event(0x3e, &[4, 0, HANDLE as u8, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
@@ -442,7 +493,11 @@ impl HciController for Controller {
     fn poll_h4(&mut self) -> Option<Vec<u8>> { self.pop_packet() }
     fn reset(&mut self) {
         *self.link.borrow_mut() = LinkQueues::default();
+        // Jumperly patch J26: the board's address and its links to other boards outlive a reboot.
+        let (address, remote_connect) = (self.address, self.remote_connect);
         *self = Self::new(self.link.clone());
+        self.address = address;
+        self.remote_connect = remote_connect;
     }
     fn advance_to(&mut self, cycles: u64) {
         self.cycles = cycles;
@@ -470,9 +525,11 @@ impl HciController for Controller {
                 }
                 LinkAction::Data(cid, pdu) if self.connected => self.l2cap(cid, &pdu),
                 LinkAction::Report { addr, addr_type, data, scan_response, rssi, active } => {
-                    // LE Advertising Report: ADV_IND, then SCAN_RSP for an active scan.
+                    // LE Advertising Report: ADV_IND, then SCAN_RSP for an active scan. Jumperly
+                    // patch J26: an empty one too, as a scannable advertiser answers every scan
+                    // request (a scanner waiting for it reports the device only at the scan's end).
                     for (kind, payload) in [(0u8, &data), (4u8, &scan_response)] {
-                        if kind == 4 && (!active || scan_response.is_empty()) { continue; }
+                        if kind == 4 && !active { continue; }
                         let mut e = vec![2, 1, kind, addr_type];
                         e.extend_from_slice(&addr);
                         e.push(payload.len() as u8);
@@ -480,6 +537,17 @@ impl HciController for Controller {
                         e.push(rssi as u8);
                         self.event(0x3e, &e);
                     }
+                }
+                LinkAction::RemoteConnect(central) if self.advertising && !self.connected => {
+                    self.connect_with(false, central);
+                }
+                LinkAction::RemoteConnected(peripheral) if !self.connected => self.connect_with(true, peripheral),
+                LinkAction::ConnectFailed(addr) => {
+                    // LE Connection Complete: Connection Failed to be Established (0x3e).
+                    let mut e = vec![1, 0x3e, 0, 0, 0, 0];
+                    e.extend_from_slice(&addr);
+                    e.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0]);
+                    self.event(0x3e, &e);
                 }
                 LinkAction::Disconnect if self.connected => {
                     self.event(5, &[0, HANDLE as u8, 0, 0x13]);
@@ -492,4 +560,5 @@ impl HciController for Controller {
         }
     }
     fn next_deadline(&self) -> Option<u64> { (!self.link.borrow().to_controller.is_empty()).then_some(self.cycles) }
+    fn set_address(&mut self, address: [u8; 6]) { Controller::set_address(self, address); }
 }

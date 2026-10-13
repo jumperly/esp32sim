@@ -144,6 +144,26 @@ impl Ble {
         Ok(())
     }
 
+    /// Jumperly patch J26: the air between the boards of a project, with this board's address.
+    pub fn enable_air(&mut self, address: [u8; 6]) -> Result<(), String> {
+        if self.hooks.is_empty() { return Err("BLE requires --ble and the application ELF".into()); }
+        self.session.enable_air(address);
+        Ok(())
+    }
+    /// Jumperly patch J26: a frame from another board.
+    pub fn air_in(&mut self, frame: crate::ble::peer::Air, cycles: u64, hz: u64) {
+        self.session.advance_to(cycles);
+        self.session.air_in(frame);
+        self.log(cycles, hz);
+    }
+    /// Jumperly patch J26: the frames this board sent into the air.
+    pub fn take_air(&mut self, cycles: u64, hz: u64) -> Vec<crate::ble::peer::Air> {
+        self.session.advance_to(cycles);
+        let out = self.session.take_air();
+        self.log(cycles, hz);
+        out
+    }
+
     /// Jumperly patch J23: one log line — kept for the host when it captures, else to stderr.
     pub fn note(&mut self, line: String) {
         match self.capture.as_mut() {

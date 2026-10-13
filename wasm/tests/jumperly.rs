@@ -1222,3 +1222,99 @@ fn ble_scan_on_the_s3_hears_the_devices_around() { ble_scan_hears_the_devices_ar
 
 #[test]
 fn ble_scan_on_the_c3_hears_the_devices_around() { ble_scan_hears_the_devices_around("c3", C3_MHZ); }
+
+/// Jumperly patch J26: the frames a board sent into the air.
+fn air_take(e: &mut Emu) -> Vec<Vec<u8>> {
+    let n = unsafe { esp32sim_ble_air_take(e.0) } as usize;
+    let len = unsafe { esp32sim_buf_len(e.0) };
+    let b = e.buf(len);
+    let (mut at, mut out) = (0, Vec::new());
+    for _ in 0..n {
+        let l = u16::from_le_bytes([b[at], b[at + 1]]) as usize;
+        out.push(b[at + 2..at + 2 + l].to_vec());
+        at += 2 + l;
+    }
+    out
+}
+fn air_put(e: &mut Emu, f: &[u8]) { assert_eq!(unsafe { esp32sim_ble_air_put(e.0, f.as_ptr(), f.len()) }, 0); }
+
+/// Two boards: ble-server advertises, ble-client finds it, connects, reads, subscribes, writes;
+/// the host (this test) carries the air between them as the web simulator's worker does.
+fn two_boards_talk_ble(server_chip: &str, client_chip: &str) {
+    let addr_server = [0x01, 0x00, 0x00, 0x28, 0x6f, 0x24];
+    let addr_client = [0x02, 0x00, 0x00, 0x28, 0x6f, 0x24];
+    let boot = |chip: &str, app: &str, addr: [u8; 6]| {
+        let name = if chip == "c3" { format!("c3-{app}") } else { app.to_string() };
+        let elf = read(&format!("fixtures/bin/{name}.elf"));
+        let setup = |e: *mut esp32sim_wasm::Emu| unsafe {
+            assert_eq!(esp32sim_ble_virtual(e, elf.as_ptr(), elf.len()), 0);
+            assert_eq!(esp32sim_ble_air(e, addr.as_ptr()), 0);
+        };
+        if chip == "c3" { Emu::boot_c3_with(&name, setup) } else { Emu::boot_with(&name, setup) }
+    };
+    let mhz = |chip: &str| if chip == "c3" { C3_MHZ } else { MHZ };
+    let mut boards = [boot(server_chip, "ble-server", addr_server), boot(client_chip, "ble-client", addr_client)];
+    let (mhzs, addrs) = ([mhz(server_chip), mhz(client_chip)], [addr_server, addr_client]);
+    let mut texts = [String::new(), String::new()];
+    let mut adv: Option<(Vec<u8>, Vec<u8>)> = None;
+    let mut linked = false;
+    for _ in 0..9000 {
+        for i in 0..2 {
+            let end = boards[i].cycles() + 1000 * mhzs[i];
+            while boards[i].cycles() < end {
+                let left = (end - boards[i].cycles()) as u32;
+                assert_eq!(boards[i].run(left), 0);
+            }
+            texts[i] += &boards[i].uart(0);
+            for f in air_take(&mut boards[i]) {
+                let other = 1 - i;
+                match f[0] {
+                    1 if i == 0 => {
+                        let n = f[1] as usize;
+                        adv = Some((f[2..2 + n].to_vec(), f[3 + n..].to_vec()));
+                        let (a, r) = adv.clone().unwrap();
+                        let mut entry = addr_server.to_vec();
+                        entry.extend_from_slice(&[0, (-50i8) as u8, a.len() as u8]);
+                        entry.extend_from_slice(&a);
+                        entry.push(r.len() as u8);
+                        entry.extend_from_slice(&r);
+                        assert_eq!(unsafe { esp32sim_ble_nearby(boards[1].0, entry.as_ptr(), entry.len()) }, 0);
+                    }
+                    2 if i == 0 => {
+                        adv = None;
+                        assert_eq!(unsafe { esp32sim_ble_nearby(boards[1].0, [].as_ptr(), 0) }, 0);
+                    }
+                    3 if i == 1 => {
+                        assert_eq!(&f[1..7], &addr_server);
+                        if adv.is_some() && !linked {
+                            linked = true;
+                            air_put(&mut boards[0], &[&[4u8][..], &addrs[1], &[0]].concat());
+                            air_put(&mut boards[1], &[&[4u8][..], &addrs[0], &[1]].concat());
+                        } else {
+                            air_put(&mut boards[1], &[&[5u8][..], &addrs[0]].concat());
+                        }
+                    }
+                    6 => air_put(&mut boards[other], &f),
+                    7 => { linked = false; air_put(&mut boards[other], &f); }
+                    _ => {}
+                }
+            }
+        }
+        if texts[1].matches("client: notify").count() >= 2 && texts[0].contains("ble: write hello from client") { break; }
+    }
+    let log = ble_log(&mut boards[1]).join("\n");
+    assert!(log.contains("remote connected guest=central peer=24:6f:28:00:00:01"), "{log}");
+    let (server, client) = (&texts[0], &texts[1]);
+    assert!(client.contains("client: found 24:6f:28:00:00:01"), "{client}");
+    assert!(client.contains("client: connected"), "{client}\n---\n{server}");
+    assert!(client.contains("client: read hello") || client.contains("client: read n="), "{client}");
+    assert!(server.contains("ble: connected"), "{server}");
+    assert!(server.contains("ble: write hello from client"), "{server}");
+    assert!(client.matches("client: notify n=").count() >= 2, "{client}");
+}
+
+#[test]
+fn two_s3_boards_talk_ble() { two_boards_talk_ble("s3", "s3"); }
+
+#[test]
+fn an_s3_server_and_a_c3_client_talk_ble() { two_boards_talk_ble("s3", "c3"); }

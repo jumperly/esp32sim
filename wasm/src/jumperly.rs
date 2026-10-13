@@ -721,6 +721,91 @@ pub unsafe extern "C" fn esp32sim_ble_nearby(e: *mut Emu, data: *const u8, len: 
     }
 }
 
+/// Jumperly patch J26: the air between the boards of a project: this board's public address
+/// (`addr`: 6 bytes, least significant first; READ_BD_ADDR answers it) and connections to other
+/// boards through the host (`esp32sim_ble_air_take` / `esp32sim_ble_air_put`). After
+/// `esp32sim_ble_virtual`, before boot. Returns 0, or 1 (no virtual controller; logged).
+///
+/// # Safety
+/// `e` must point to a live emulator to which the caller has exclusive access; `addr` must be
+/// readable for 6 bytes throughout this call.
+#[no_mangle]
+pub unsafe extern "C" fn esp32sim_ble_air(e: *mut Emu, addr: *const u8) -> u32 {
+    // SAFETY: the caller provides exclusive access to a live emulator.
+    let e = unsafe { &mut *e };
+    // SAFETY: the caller provides 6 readable bytes for this call.
+    let Ok(address) = <[u8; 6]>::try_from(unsafe { bytes(addr, 6) }) else { return 1 };
+    let result = if let Some(m) = e.m.c3_mut() {
+        m.bus.ble.enable_air(address)
+    } else if let Some(m) = e.m.s3_mut() {
+        m.bus.ble.enable_air(address)
+    } else {
+        Err("BLE needs an ESP32-S3 or ESP32-C3".into())
+    };
+    match result {
+        Ok(()) => 0,
+        Err(reason) => { log(&format!("[emu] ble air: {reason}")); 1 }
+    }
+}
+
+/// Jumperly patch J26: the frames this board sent into the air since the last call, into the
+/// buffer: their count; each `[len u16][frame]` (`Air::encode`).
+///
+/// # Safety
+/// `e` must point to a live emulator to which the caller has exclusive access.
+#[no_mangle]
+pub unsafe extern "C" fn esp32sim_ble_air_take(e: *mut Emu) -> u32 {
+    // SAFETY: the caller provides exclusive access to a live emulator.
+    let e = unsafe { &mut *e };
+    let frames = if let Some(m) = e.m.c3_mut() {
+        esp_soc::SocBus::flush_ticks(&mut m.bus);
+        let cycles = m.bus.cycles;
+        m.bus.ble.take_air(cycles, esp32c3::periph::CPU_HZ)
+    } else if let Some(m) = e.m.s3_mut() {
+        m.bus.flush_ticks();
+        let cycles = m.bus.cycles;
+        m.bus.ble.take_air(cycles, esp32s3::periph::CPU_HZ)
+    } else {
+        Vec::new()
+    };
+    e.buf.clear();
+    for f in &frames {
+        let b = f.encode();
+        e.buf.extend_from_slice(&(b.len() as u16).to_le_bytes());
+        e.buf.extend_from_slice(&b);
+    }
+    frames.len() as u32
+}
+
+/// Jumperly patch J26: one frame from another board (`Air::encode`). Returns 0, or 1 (a bad frame;
+/// logged).
+///
+/// # Safety
+/// `e` must point to a live emulator to which the caller has exclusive access; for a nonzero `len`,
+/// `ptr` must be readable for `len` bytes throughout this call.
+#[no_mangle]
+pub unsafe extern "C" fn esp32sim_ble_air_put(e: *mut Emu, ptr: *const u8, len: usize) -> u32 {
+    // SAFETY: the caller provides exclusive access to a live emulator.
+    let e = unsafe { &mut *e };
+    // SAFETY: the caller provides a readable buffer for this call.
+    let frame = match esp_soc::ble::peer::Air::decode(unsafe { bytes(ptr, len) }) {
+        Ok(f) => f,
+        Err(reason) => { log(&format!("[emu] ble air: {reason}")); return 1; }
+    };
+    if let Some(m) = e.m.c3_mut() {
+        esp_soc::SocBus::flush_ticks(&mut m.bus);
+        let cycles = m.bus.cycles;
+        m.bus.ble.air_in(frame, cycles, esp32c3::periph::CPU_HZ);
+    } else if let Some(m) = e.m.s3_mut() {
+        m.bus.flush_ticks();
+        let cycles = m.bus.cycles;
+        m.bus.ble.air_in(frame, cycles, esp32s3::periph::CPU_HZ);
+    } else {
+        return 1;
+    }
+    0
+}
+
 /// Jumperly patch J23: the oldest log line of the virtual BLE controller, into the buffer: its
 /// length, 0 when there is none.
 ///
