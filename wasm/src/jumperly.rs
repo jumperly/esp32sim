@@ -685,6 +685,42 @@ pub unsafe extern "C" fn esp32sim_ble_command(e: *mut Emu, cmd: *const u8, len: 
     }
 }
 
+/// Jumperly patch J25: the Bluetooth devices around the user (the web page found them), heard by
+/// the guest's scans and not connectable, replacing the ones there were. `data`: entries of
+/// `[addr 6][addr_type u8 (0 public, 1 random)][rssi i8][adv_len u8][adv][rsp_len u8][rsp]`, the
+/// data at most 31 bytes each, at most 64 devices (empty: none). Returns 0, or 1 (no virtual
+/// controller, bad data; logged).
+///
+/// # Safety
+/// `e` must point to a live emulator to which the caller has exclusive access; for a nonzero `len`,
+/// `data` must be readable for `len` bytes throughout this call.
+#[no_mangle]
+pub unsafe extern "C" fn esp32sim_ble_nearby(e: *mut Emu, data: *const u8, len: usize) -> u32 {
+    // SAFETY: the caller provides exclusive access to a live emulator.
+    let e = unsafe { &mut *e };
+    // SAFETY: the caller provides a readable buffer for this call.
+    let data = unsafe { bytes(data, len) };
+    let list = match esp_soc::ble::peer::Nearby::parse_list(data) {
+        Ok(list) => list,
+        Err(reason) => { log(&format!("[emu] ble: {reason}")); return 1; }
+    };
+    let result = if let Some(m) = e.m.c3_mut() {
+        esp_soc::SocBus::flush_ticks(&mut m.bus);
+        let cycles = m.bus.cycles;
+        m.bus.ble.set_nearby(list, cycles, esp32c3::periph::CPU_HZ)
+    } else if let Some(m) = e.m.s3_mut() {
+        m.bus.flush_ticks();
+        let cycles = m.bus.cycles;
+        m.bus.ble.set_nearby(list, cycles, esp32s3::periph::CPU_HZ)
+    } else {
+        Err("BLE needs an ESP32-S3 or ESP32-C3".into())
+    };
+    match result {
+        Ok(()) => 0,
+        Err(reason) => { log(&format!("[emu] ble: {reason}")); 1 }
+    }
+}
+
 /// Jumperly patch J23: the oldest log line of the virtual BLE controller, into the buffer: its
 /// length, 0 when there is none.
 ///

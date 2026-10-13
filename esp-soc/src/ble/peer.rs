@@ -27,6 +27,36 @@ pub fn advertising_fields(data: &[u8]) -> Vec<String> {
 }
 
 const ADV: &[u8] = b"\x02\x01\x06\x03\x03\x0f\x18\x09\x09esp32sim";
+
+/// Jumperly patch J25: a Bluetooth device around the user (the web page found it): the guest's
+/// scans report it with its address, advertising data, scan response and signal; it cannot be
+/// connected to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Nearby { pub addr: [u8; 6], pub addr_type: u8, pub rssi: i8, pub adv: Vec<u8>, pub scan_response: Vec<u8> }
+
+/// The most devices around the peer reports.
+pub const NEARBY_MAX: usize = 64;
+
+impl Nearby {
+    /// `esp32sim_ble_nearby`'s list: entries of `[addr 6][addr_type u8][rssi i8][adv_len u8][adv]
+    /// [rsp_len u8][rsp]`, the data at most 31 bytes each, at most `NEARBY_MAX`.
+    pub fn parse_list(mut d: &[u8]) -> Result<Vec<Nearby>, String> {
+        let mut out = Vec::new();
+        while !d.is_empty() {
+            if d.len() < 9 { return Err("a device entry is cut short".into()); }
+            let addr: [u8; 6] = d[..6].try_into().unwrap();
+            let (addr_type, rssi, n) = (d[6], d[7] as i8, d[8] as usize);
+            if addr_type > 1 || n > 31 || d.len() < 9 + n + 1 { return Err("a device entry is cut short or too long".into()); }
+            let adv = d[9..9 + n].to_vec();
+            let m = d[9 + n] as usize;
+            if m > 31 || d.len() < 10 + n + m { return Err("a device scan response is cut short or too long".into()); }
+            out.push(Nearby { addr, addr_type, rssi, adv, scan_response: d[10 + n..10 + n + m].to_vec() });
+            if out.len() > NEARBY_MAX { return Err(format!("more than {NEARBY_MAX} devices")); }
+            d = &d[10 + n + m..];
+        }
+        Ok(out)
+    }
+}
 pub fn hex(b: &[u8]) -> String { b.iter().map(|v| format!("{v:02x}")).collect() }
 fn uuid(b: &[u8]) -> String {
     let s = hex(&b.iter().rev().copied().collect::<Vec<_>>());
@@ -113,6 +143,9 @@ pub struct Peer {
     read_acc: Vec<u8>,
     write_rest: Vec<u8>,
     write_offset: u16,
+    /// Jumperly patch J25: the devices around, and the guest's scan (active or passive) if it runs.
+    nearby: Vec<Nearby>,
+    scanning: Option<bool>,
 }
 impl Peer {
     fn new(link: Link) -> Self {
@@ -132,11 +165,31 @@ impl Peer {
             read_acc: Vec::new(),
             write_rest: Vec::new(),
             write_offset: 0,
+            nearby: Vec::new(),
+            scanning: None,
         }
     }
     fn advertisement(&mut self, adv: Vec<u8>, scan_response: Vec<u8>) {
         let fields: Vec<_> = [&adv, &scan_response].into_iter().flat_map(|data| advertising_fields(data)).collect();
         self.log.push(format!("advertising {} data={}", fields.join(" "), hex(&adv)));
+    }
+    /// Jumperly patch J25: the devices around, replacing the ones there were; a running scan hears
+    /// the new list at once.
+    pub fn set_nearby(&mut self, list: Vec<Nearby>) {
+        self.nearby = list;
+        if let Some(active) = self.scanning { self.report_nearby(active); }
+    }
+    fn report_nearby(&mut self, active: bool) {
+        for n in &self.nearby {
+            self.link.borrow_mut().to_controller.push_back(LinkAction::Report {
+                addr: n.addr,
+                addr_type: n.addr_type,
+                data: n.adv.clone(),
+                scan_response: n.scan_response.clone(),
+                rssi: n.rssi,
+                active,
+            });
+        }
     }
     pub fn command(&mut self, command: &str) -> Result<(), String> {
         self.commands.push_back(command.parse()?);
@@ -218,7 +271,10 @@ impl Peer {
                 LinkEvent::Scan(active) => {
                     self.link.borrow_mut().to_controller.push_back(LinkAction::Advertisement(ADV.to_vec(), active));
                     self.log.push("scan report name=esp32sim service=180f".into());
+                    self.scanning = Some(active);
+                    self.report_nearby(active);
                 }
+                LinkEvent::ScanStopped => self.scanning = None,
                 LinkEvent::Connected(central) => {
                     self.connecting = false;
                     self.connected = true;
@@ -480,8 +536,16 @@ impl Session {
     pub fn new(controller: Box<dyn HciController>, link: Link) -> Self { Self { controller, peer: Peer::new(link), cycles: 0 } }
     pub fn reset(&mut self) {
         self.controller.reset();
+        // Jumperly patch J25: the devices around the user outlive a reboot of the guest.
+        let nearby = std::mem::take(&mut self.peer.nearby);
         self.peer = Peer::new(self.peer.link.clone());
+        self.peer.nearby = nearby;
         self.cycles = 0;
+    }
+    /// Jumperly patch J25: `Peer::set_nearby`, then what it sent goes out.
+    pub fn set_nearby(&mut self, list: Vec<Nearby>) {
+        self.peer.set_nearby(list);
+        self.advance_to(self.cycles);
     }
     pub fn advance_to(&mut self, cycles: u64) {
         self.cycles = cycles;

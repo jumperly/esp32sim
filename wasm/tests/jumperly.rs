@@ -1171,3 +1171,54 @@ fn ble_server_on_the_s3_through_the_virtual_peer() { ble_server_through_the_virt
 
 #[test]
 fn ble_server_on_the_c3_through_the_virtual_peer() { ble_server_through_the_virtual_peer("c3", C3_MHZ); }
+
+/// Jumperly patch J25: one entry of `esp32sim_ble_nearby`'s list.
+fn nearby(addr_le: [u8; 6], rssi: i8, adv: &[u8], rsp: &[u8]) -> Vec<u8> {
+    let mut v = addr_le.to_vec();
+    v.extend_from_slice(&[1, rssi as u8, adv.len() as u8]);
+    v.extend_from_slice(adv);
+    v.push(rsp.len() as u8);
+    v.extend_from_slice(rsp);
+    v
+}
+
+/// A scanning sketch hears the devices around the user (and the virtual `esp32sim`), with their
+/// names (also from a scan response), services and signal; a new list reaches a running scan.
+fn ble_scan_hears_the_devices_around(chip: &str, mhz: u64) {
+    let elf = read(if chip == "c3" { "fixtures/bin/c3-ble-scan.elf" } else { "fixtures/bin/ble-scan.elf" });
+    let enable = |e: *mut esp32sim_wasm::Emu| assert_eq!(unsafe { esp32sim_ble_virtual(e, elf.as_ptr(), elf.len()) }, 0);
+    let mut e = if chip == "c3" { Emu::boot_c3_with("c3-ble-scan", enable) } else { Emu::boot_with("ble-scan", enable) };
+    // Heart rate: flags, the 0x180d service, a complete name; Tag: its name only in the scan response.
+    let hr = nearby([0x55, 0x44, 0x33, 0x22, 0x11, 0xc2], -60, &[[2, 1, 6, 3, 3, 0x0d, 0x18, 10, 9].as_slice(), b"HeartRate"].concat(), b"");
+    let tag = nearby([0x66, 0x55, 0x44, 0x33, 0x22, 0xd1], -80, &[2, 1, 6], &[[4u8, 9].as_slice(), b"Tag"].concat());
+    let list = [hr, tag].concat();
+    assert_eq!(unsafe { esp32sim_ble_nearby(e.0, [1u8, 2].as_ptr(), 2) }, 1, "cut short");
+    assert_eq!(unsafe { esp32sim_ble_nearby(e.0, list.as_ptr(), list.len()) }, 0);
+    let run = |e: &mut Emu, us: u64| {
+        let end = e.cycles() + us * mhz;
+        let mut text = String::new();
+        while e.cycles() < end {
+            let left = (end - e.cycles()).min(u32::MAX as u64) as u32;
+            assert_eq!(e.run(left), 0);
+            text += &e.uart(0);
+        }
+        text
+    };
+    let text = run(&mut e, 4_000_000);
+    assert!(text.contains("found name=esp32sim"), "{text}");
+    assert!(text.contains("found name=HeartRate addr=c2:11:22:33:44:55 rssi=-60 uuid=0000180d-0000-1000-8000-00805f9b34fb"), "{text}");
+    assert!(text.contains("found name=Tag addr=d1:22:33:44:55:66 rssi=-80"), "{text}");
+    assert!(text.contains("scan done n=3"), "{text}");
+    // An empty list: only the virtual peripheral is left.
+    assert_eq!(unsafe { esp32sim_ble_nearby(e.0, [].as_ptr(), 0) }, 0);
+    // The scan running then still had them; the next one does not.
+    let later = run(&mut e, 7_000_000);
+    let last = later.lines().filter(|l| l.starts_with("scan done")).last();
+    assert_eq!(last, Some("scan done n=1"), "{later}");
+}
+
+#[test]
+fn ble_scan_on_the_s3_hears_the_devices_around() { ble_scan_hears_the_devices_around("s3", MHZ); }
+
+#[test]
+fn ble_scan_on_the_c3_hears_the_devices_around() { ble_scan_hears_the_devices_around("c3", C3_MHZ); }

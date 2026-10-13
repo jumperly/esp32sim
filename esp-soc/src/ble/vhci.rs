@@ -135,6 +135,15 @@ impl Ble {
         for line in self.session.drain_log() { self.note(format!("t={:.6}s {line}", cycles as f64 / hz as f64)); }
     }
 
+    /// Jumperly patch J25: the devices around the user for the guest's scans.
+    pub fn set_nearby(&mut self, list: Vec<crate::ble::peer::Nearby>, cycles: u64, hz: u64) -> Result<(), String> {
+        if self.hooks.is_empty() { return Err("BLE requires --ble and the application ELF".into()); }
+        self.session.advance_to(cycles);
+        self.session.set_nearby(list);
+        self.log(cycles, hz);
+        Ok(())
+    }
+
     /// Jumperly patch J23: one log line — kept for the host when it captures, else to stderr.
     pub fn note(&mut self, line: String) {
         match self.capture.as_mut() {
