@@ -92,7 +92,8 @@ impl MachineKind {
         match self {
             Self::S3(m) => Some(m.as_mut()),
             Self::C3(m) => Some(m.as_mut()),
-            Self::C6(_) | Self::Esp32(_) => None,
+            Self::Esp32(m) => Some(m.as_mut()),
+            Self::C6(_) => None,
         }
     }
 }

@@ -588,7 +588,8 @@ pub struct ClassicEfuse {
     cmd: u32,
 }
 impl ClassicEfuse {
-    fn new(mac: [u8; 6]) -> Self {
+    /// Jumperly patch J28: public, so the host's `esp32sim_set_mac` rebuilds BLK0 for a new MAC.
+    pub fn new(mac: [u8; 6]) -> Self {
         let mut r = RegRam::new();
         r.write(0x04, u32::from_be_bytes([mac[2], mac[3], mac[4], mac[5]]));
         let mut crc = 0u8;

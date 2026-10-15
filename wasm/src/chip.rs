@@ -2,7 +2,7 @@
 //! `net_host.rs` dispatch once (`MachineKind::chip_mut`) and call `JumperlyChip`; `chips/*.rs`
 //! implement it for each chip with a host ABI. Also the host imports of the bus bridges (J6/J7/J18).
 
-/// One PWM output change as the host sees it (the S3 and C3 `PwmOut` have these fields).
+/// One PWM output change as the host sees it (the S3, C3 and classic `PwmOut` have these fields).
 pub(crate) struct PwmEvent { pub cycle: u64, pub signal: u32, pub enabled: bool, pub idle_high: bool, pub freq: f64, pub duty: f64 }
 
 /// Jumperly patch J28: what every chip with a host ABI provides; `wasm/src/chips/*.rs` implement it.
@@ -67,6 +67,11 @@ pub(crate) trait JumperlyChip {
     fn enable_ble(&mut self, elf: &esp_soc::elf::Elf) -> Result<(), String>;
     /// Octal SPI flash (J16) when `on`; false when the chip has no octal flash.
     fn flash_octal(&mut self, on: bool) -> bool { let _ = on; false }
+    /// The DAC output changes since the last call: (GPIO, mV) for an enabled output, (GPIO,
+    /// `u32::MAX`) once when it turns off; empty for a chip without a DAC.
+    fn take_dac(&mut self) -> Vec<(u8, u32)> { Vec::new() }
+    /// Whether the finger is on touch pad `gpio`; false for another pin or a chip without touch pads.
+    fn touch_set(&mut self, gpio: u32, touched: bool) -> bool { let _ = (gpio, touched); false }
 }
 
 /// The station's MAC in efuse BLK1 words 0 and 1, as `Efuse::new` lays them out; the rest of
@@ -147,7 +152,7 @@ mod tests {
     }
 
     /// Jumperly patch J28: the chips with a host ABI and what each has; the defaults hold for what a
-    /// chip lacks (the C3: no host I2S, no octal flash).
+    /// chip lacks (the C3: no host I2S, no octal flash, no DAC or touch; the classic: no octal flash).
     #[test]
     fn chips_report_their_shape_and_keep_the_defaults_for_what_they_lack() {
         let s3 = new("none");
@@ -169,13 +174,23 @@ mod tests {
         assert!(!c.flash_octal(true));
         assert_eq!(c.uart_in(2, b"x"), None, "the C3 has two UARTs");
         assert_eq!(c.gpio_in_pin(9999), 255);
+        assert!(!c.touch_set(4, true) && c.take_dac().is_empty(), "no touch pads, no DAC");
         unsafe { esp32sim_delete(c3) };
 
-        for board in ["esp32c6", "esp32"] {
-            let e = new(board);
-            // SAFETY: the test owns the live emulator until it deletes it.
-            assert!(unsafe { &mut *e }.m.chip_mut().is_none(), "{board} has no host ABI yet");
-            unsafe { esp32sim_delete(e) };
-        }
+        let classic = new("esp32");
+        // SAFETY: the test owns the live emulator until it deletes it.
+        let c = unsafe { &mut *classic }.m.chip_mut().expect("the classic ESP32 has a host ABI");
+        assert_eq!((c.pins(), c.console_ports(), c.cpu_hz()), (40, 3, 240_000_000));
+        assert!(c.i2s(0).is_some() && c.i2s(1).is_some() && c.i2s(2).is_none());
+        assert!(!c.flash_octal(true));
+        assert_eq!(c.uart_in(3, b"x"), None, "the classic has no USB-Serial/JTAG");
+        assert!(c.touch_set(4, true) && !c.touch_set(5, true));
+        assert!(c.take_dac().is_empty());
+        unsafe { esp32sim_delete(classic) };
+
+        let c6 = new("esp32c6");
+        // SAFETY: the test owns the live emulator until it deletes it.
+        assert!(unsafe { &mut *c6 }.m.chip_mut().is_none(), "the C6 has no host ABI");
+        unsafe { esp32sim_delete(c6) };
     }
 }

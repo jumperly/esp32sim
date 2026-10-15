@@ -7,7 +7,7 @@ use super::{bytes, log, Emu};
 use esp_soc::nat::{HostEvent, Nat, QueueTransport};
 use esp_soc::wifi::{StaState, StationLink, WpaState};
 
-/// The station's link (S3 and C3), with the bus's deferred device time delivered first.
+/// The station's link (S3, C3 and the classic ESP32), with the bus's deferred device time delivered first.
 pub(crate) fn link(e: &mut Emu) -> Option<&mut StationLink> {
     let c = e.m.chip_mut()?;   // Jumperly patch J28
     c.flush_ticks();
@@ -130,7 +130,8 @@ pub unsafe extern "C" fn esp32sim_wifi_stat(e: *mut Emu, which: u32) -> f64 {
 // ------------------------------------------------------------------ Jumperly patch J14: the station and the LAN
 
 /// Jumperly patch J14: the station's MAC (efuse BLK1 and the machine's), so boards of one network
-/// differ. Before boot only; S3 and C3. Returns 1 otherwise.
+/// differ. Before boot only; S3, C3 and (J28) the classic ESP32 (eFuse BLK0 with its CRC8).
+/// Returns 1 otherwise.
 ///
 /// # Safety
 /// `e` must point to a live emulator to which the caller has exclusive access; `mac` must be
@@ -142,8 +143,9 @@ pub unsafe extern "C" fn esp32sim_set_mac(e: *mut Emu, mac: *const u8) -> u32 {
     if e.booted || mac.is_null() { return 1; }
     // SAFETY: the caller provides six readable bytes.
     let mac: [u8; 6] = unsafe { bytes(mac, 6) }.try_into().unwrap();
-    // Jumperly patch J28: the chip writes it (`chip::write_efuse_mac` on the S3 and the C3)
-    if !e.m.chip_mut().is_some_and(|c| c.set_mac(mac)) { log("[emu] set mac: ESP32-S3 and ESP32-C3 only"); return 1; }
+    // Jumperly patch J28: the chip writes it (`chip::write_efuse_mac` on the S3 and the C3,
+    // `ClassicEfuse::new` on the classic)
+    if !e.m.chip_mut().is_some_and(|c| c.set_mac(mac)) { log("[emu] set mac: ESP32-S3, ESP32-C3 and ESP32 only"); return 1; }
     0
 }
 

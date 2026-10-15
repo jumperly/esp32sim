@@ -1,8 +1,9 @@
 //! Jumperly patch J3: the ABI `@jumperly/mcu-esp32` drives — pin states with cycles, GPIO inputs,
-//! raw console bytes per port, RMT frames. ESP32-S3 and (patch J9) ESP32-C3; PWM and the bus
-//! bridges are S3 only, the ADC is both. Variable-size results go to `Emu::buf`, read through `esp32sim_buf_ptr` until
-//! the next `*_take` call. Jumperly patch J28: every export dispatches once (`MachineKind::chip_mut`)
-//! to the chip's `JumperlyChip` (`chip.rs`, `chips/*.rs`); what differs between chips lives there.
+//! raw console bytes per port, RMT frames, PWM, the ADC and the bus bridges. ESP32-S3, (patch J9)
+//! ESP32-C3 and (patch J28) the classic ESP32, which adds the DAC outputs and the touch pads.
+//! Variable-size results go to `Emu::buf`, read through `esp32sim_buf_ptr` until the next `*_take`
+//! call. Jumperly patch J28: every export dispatches once (`MachineKind::chip_mut`) to the chip's
+//! `JumperlyChip` (`chip.rs`, `chips/*.rs`); what differs between chips lives there.
 use super::{bytes, log, Emu};
 #[cfg(not(target_arch = "wasm32"))]
 pub use crate::chip::set_native_bus_host;
@@ -10,9 +11,9 @@ pub use crate::chip::set_native_bus_host;
 /// USB-Serial/JTAG as a fourth console "port" after UART0..2.
 pub(crate) const USB_PORT: u32 = 3;
 
-/// Switch an S3 emulator to Jumperly mode before boot: no JSON outbox, raw console bytes, every pin
-/// watched, RMT frames recorded. Returns 1 for other chips or after boot. (J9: the C3 gets the same
-/// minus PWM, plus the linear ADC.)
+/// Switch an emulator to Jumperly mode before boot: no JSON outbox, raw console bytes, every pin
+/// watched, RMT frames and PWM changes recorded, the linear ADC. ESP32-S3, ESP32-C3 and (J28) the
+/// classic ESP32; returns 1 for other chips or after boot.
 ///
 /// # Safety
 /// `e` must point to a live emulator to which the caller has exclusive access.
@@ -21,14 +22,15 @@ pub unsafe extern "C" fn esp32sim_jumperly_mode(e: *mut Emu) -> u32 {
     // SAFETY: the caller provides exclusive access to a live emulator.
     let e = unsafe { &mut *e };
     if e.booted { return 1; }
-    let Some(c) = e.m.chip_mut() else { log("[emu] jumperly mode: ESP32-S3 and ESP32-C3 only"); return 1; };
+    let Some(c) = e.m.chip_mut() else { log("[emu] jumperly mode: ESP32-S3, ESP32-C3 and ESP32 only"); return 1; };
     c.jumperly_mode();
     0
 }
 
 /// Set the voltage (millivolts) the circuit puts on an ADC pad. On the S3, GPIO1..10 = ADC1
 /// CH0..9 and GPIO11..20 = ADC2 CH0..9. On the C3, GPIO0..4 = ADC1 CH0..4 and GPIO5 = ADC2 CH0.
-/// Returns 1 for other pins or outside Jumperly mode.
+/// On the classic ESP32 (J28), ADC1 = GPIO36..39, 32..35 and ADC2 = GPIO4, 0, 2, 15, 13, 12, 14,
+/// 27, 25, 26. Returns 1 for other pins or outside Jumperly mode.
 ///
 /// # Safety
 /// `e` must point to a live emulator to which the caller has exclusive access.
@@ -40,7 +42,7 @@ pub unsafe extern "C" fn esp32sim_adc_set(e: *mut Emu, gpio: u32, mv: u32) -> u3
     u32::from(!c.adc_set(gpio, mv))
 }
 
-/// Watch only the pins in `lo | hi << 32` (default: all 49).
+/// Watch only the pins in `lo | hi << 32` (default: all of the chip's: S3 49, C3 22, classic 40).
 ///
 /// # Safety
 /// `e` must point to a live emulator to which the caller has exclusive access.
@@ -101,7 +103,8 @@ pub unsafe extern "C" fn esp32sim_gpio_set_input(e: *mut Emu, pin: u32, level: u
     0
 }
 
-/// Take the bytes the guest wrote to console `port` (0..2 UART, 3 USB-Serial/JTAG): length; bytes in the buffer.
+/// Take the bytes the guest wrote to console `port` (0..2 UART, 3 USB-Serial/JTAG — not on the
+/// classic ESP32): length; bytes in the buffer.
 ///
 /// # Safety
 /// `e` must point to a live emulator to which the caller has exclusive access.
@@ -124,7 +127,8 @@ pub unsafe extern "C" fn esp32sim_uart_take(e: *mut Emu, port: u32) -> u32 {
 /// Bytes from the host into console `port`'s receive side (0..2 UART FIFO, 3 USB-Serial/JTAG):
 /// the number of leading bytes accepted. A UART takes what fits in its 128-byte receive FIFO and
 /// never overflows it — the host keeps the rest and offers it again after the guest has read; the
-/// USB-Serial/JTAG port queues everything. An invalid port (or a chip other than the S3) takes 0.
+/// USB-Serial/JTAG port queues everything. An invalid port (the C3 has UART0..1, the classic ESP32
+/// no USB-Serial/JTAG) or a chip without the ABI takes 0.
 ///
 /// # Safety
 /// `e` must point to a live emulator to which the caller has exclusive access. For nonzero `len`,
@@ -135,7 +139,7 @@ pub unsafe extern "C" fn esp32sim_uart_in(e: *mut Emu, port: u32, ptr: *const u8
     let e = unsafe { &mut *e };
     // SAFETY: the caller provides a readable input buffer for this call.
     let data = unsafe { bytes(ptr, len) };
-    let Some(c) = e.m.chip_mut() else { log("[emu] uart in: ESP32-S3 and ESP32-C3 only"); return 0 };
+    let Some(c) = e.m.chip_mut() else { log("[emu] uart in: ESP32-S3, ESP32-C3 and ESP32 only"); return 0 };
     match c.uart_in(port, data) {
         Some(n) => n,
         None => { log(&format!("[emu] uart in: no console port {port}")); 0 }
@@ -198,7 +202,7 @@ pub unsafe extern "C" fn esp32sim_reset(e: *mut Emu) -> u32 {
     // SAFETY: the caller provides exclusive access to a live emulator.
     let e = unsafe { &mut *e };
     if !e.booted { return 1; }
-    let Some(c) = e.m.chip_mut() else { log("[emu] reset: ESP32-S3 and ESP32-C3 only"); return 1 };
+    let Some(c) = e.m.chip_mut() else { log("[emu] reset: ESP32-S3, ESP32-C3 and ESP32 only"); return 1 };
     c.reset();
     0
 }
@@ -216,6 +220,41 @@ pub unsafe extern "C" fn esp32sim_flash_octal(e: *mut Emu, on: u32) -> u32 {
     if e.booted { return 1; }
     if !e.m.chip_mut().is_some_and(|c| c.flash_octal(on != 0)) { log("[emu] flash octal: ESP32-S3 only"); return 1; }
     0
+}
+
+/// Jumperly patch J28: take the DAC output changes since the last call (the classic ESP32's
+/// GPIO25 = DAC1, GPIO26 = DAC2): count; the buffer holds 8 bytes per change, u32 GPIO and u32
+/// millivolts LE, `u32::MAX` millivolts when the output turned off (reported once). In Jumperly
+/// mode a changed output ends the slice. 0 for a chip without a DAC.
+///
+/// # Safety
+/// `e` must point to a live emulator to which the caller has exclusive access.
+#[no_mangle]
+pub unsafe extern "C" fn esp32sim_dac_take(e: *mut Emu) -> u32 {
+    // SAFETY: the caller provides exclusive access to a live emulator.
+    let e = unsafe { &mut *e };
+    e.buf.clear();
+    let Some(c) = e.m.chip_mut() else { return 0 };
+    let changes = c.take_dac();
+    for (gpio, mv) in &changes {
+        e.buf.extend_from_slice(&u32::from(*gpio).to_le_bytes());
+        e.buf.extend_from_slice(&mv.to_le_bytes());
+    }
+    changes.len() as u32
+}
+
+/// Jumperly patch J28: a finger on (`touched` nonzero) or off touch pad `gpio` (the classic ESP32:
+/// T0..T9 = GPIO4, 0, 2, 15, 13, 12, 14, 27, 33, 32); the touch sensor then counts a touched pad
+/// lower. It survives a chip reset. Returns 0, or 1 for another pin or a chip without touch pads.
+///
+/// # Safety
+/// `e` must point to a live emulator to which the caller has exclusive access.
+#[no_mangle]
+pub unsafe extern "C" fn esp32sim_touch_set(e: *mut Emu, gpio: u32, touched: u32) -> u32 {
+    // SAFETY: the caller provides exclusive access to a live emulator.
+    let e = unsafe { &mut *e };
+    let Some(c) = e.m.chip_mut() else { return 1 };
+    u32::from(!c.touch_set(gpio, touched != 0))
 }
 
 /// Start of the result buffer of the last `*_take` call.
@@ -242,8 +281,9 @@ pub unsafe extern "C" fn esp32sim_buf_len(e: *mut Emu) -> usize {
 // The host imports (`host_i2c`, `host_spi_bus`) and their native stand-ins are in `chip.rs` (J28).
 
 /// Turn the I2C / SPI host bridges on or off (they survive chip resets); `spi` covers SPI2 and,
-/// on the S3, SPI3 (Jumperly patch J18). Turning a bridge off finishes what still waits for the
-/// host without it: an I2C transaction NACKs unknown addresses, a SPI transfer reads 0xFF.
+/// on the S3, SPI3 (Jumperly patch J18), on the classic ESP32 HSPI and VSPI (J28). Turning a
+/// bridge off finishes what still waits for the host without it: an I2C transaction NACKs unknown
+/// addresses, a SPI transfer reads 0xFF.
 ///
 /// # Safety
 /// `e` must point to a live emulator to which the caller has exclusive access.
@@ -257,8 +297,9 @@ pub unsafe extern "C" fn esp32sim_bus_host(e: *mut Emu, i2c: u32, spi: u32) -> u
 }
 
 /// Run the I2C / SPI transactions the guest started since the last call, through `host_i2c` /
-/// `host_spi_bus` (SPI2, then SPI3 on the S3), and raise their completion interrupts. Returns how
-/// many ran. Call it between runs, never from inside a host import.
+/// `host_spi_bus` (SPI2, then SPI3 on the S3; on the classic ESP32 HSPI = host 2 and VSPI = host
+/// 3, one waiting transfer at a time, then the other), and raise their completion interrupts.
+/// Returns how many ran. Call it between runs, never from inside a host import.
 ///
 /// # Safety
 /// `e` must point to a live emulator to which the caller has exclusive access.
@@ -281,7 +322,8 @@ pub unsafe extern "C" fn esp32sim_gpio_in_pin(e: *mut Emu, signal: u32) -> u32 {
 }
 
 /// Jumperly patch J19: the pads UART `port` is on, through the GPIO matrix or on its IO_MUX pads, as
-/// `tx | rx << 8` with 255 for none (S3: ports 0..2; C3: 0..1; other ports and chips: none).
+/// `tx | rx << 8` with 255 for none (S3 and classic ESP32: ports 0..2; C3: 0..1; other ports and
+/// chips: none).
 ///
 /// # Safety
 /// `e` must point to a live emulator to which the caller has exclusive access.
@@ -295,7 +337,7 @@ pub unsafe extern "C" fn esp32sim_uart_pins(e: *mut Emu, port: u32) -> u32 {
 }
 
 /// Jumperly patch J21: the baud UART `port` is set to (its clock source and dividers), 0 when it is
-/// not configured or there is no such port (S3: 0..2; C3: 0, 1).
+/// not configured or there is no such port (S3 and classic ESP32: 0..2; C3: 0, 1).
 ///
 /// # Safety
 /// `e` must point to a live emulator to which the caller has exclusive access.
@@ -315,7 +357,7 @@ pub const I2S_RX_INFO_BYTES: usize = 32;
 /// Jumperly patch J17: the host supplies what I2S RX receives (`esp32sim_i2s_rx_push`) when `on` is
 /// nonzero; otherwise a running receiver reads upstream's inputs (silence in the browser). A frame
 /// falling due with no host word queued is silence and ends the slice once, so the host can queue
-/// more. Survives a chip reset. ESP32-S3 only; returns 1 otherwise.
+/// more. Survives a chip reset. ESP32-S3 and (J28) the classic ESP32; returns 1 otherwise.
 ///
 /// # Safety
 /// `e` must point to a live emulator to which the caller has exclusive access.
@@ -355,7 +397,7 @@ pub unsafe extern "C" fn esp32sim_i2s_rx_need(e: *mut Emu, port: u32, cycles: u3
 /// Jumperly patch J17: queue `frames` frames for I2S controller `port`'s receiver: 8 bytes each,
 /// the left (WS low) then the right (WS high) slot word, u32 LE, MSB-aligned (bit 31 is the first
 /// bit after the WS edge and the I2S one-BCK delay; the receiver takes its data bits from the top).
-/// Returns how many it took (at most 65536 wait). ESP32-S3 only; 0 otherwise.
+/// Returns how many it took (at most 65536 wait). ESP32-S3 and the classic ESP32; 0 otherwise.
 ///
 /// # Safety
 /// `e` must point to a live emulator to which the caller has exclusive access. For nonzero
@@ -424,7 +466,8 @@ pub unsafe extern "C" fn esp32sim_wifi_beacons(e: *mut Emu, data: *const u8, len
     if set { 0 } else { log("[emu] wifi: beacons need the virtual access point (esp32sim_wifi_ap)"); 1 }
 }
 
-/// Jumperly patch J23: the virtual BLE controller (`--ble` of the CLI) on the S3 or the C3. `elf`
+/// Jumperly patch J23: the virtual BLE controller (`--ble` of the CLI) on the S3, the C3 or (J28)
+/// the classic ESP32. `elf`
 /// is the application ELF with its symbols (the guest's controller functions are found by name);
 /// before boot. Its log lines (`t=<s>s <line>`, the CLI's `[ble]` output) are kept for
 /// `esp32sim_ble_log_take`. Returns 0, or 1 (another chip, after boot, a bad or unsuitable ELF;
@@ -449,7 +492,7 @@ pub unsafe extern "C" fn esp32sim_ble_virtual(e: *mut Emu, elf: *const u8, len: 
             c.ble().capture = Some(Default::default());
             c.enable_ble(&elf)
         }
-        None => Err("the virtual BLE controller needs an ESP32-S3 or ESP32-C3".into()),
+        None => Err("the virtual BLE controller needs an ESP32-S3, ESP32-C3 or ESP32".into()),
     };
     match result {
         Ok(()) => 0,
@@ -502,7 +545,7 @@ pub unsafe extern "C" fn esp32sim_ble_nearby(e: *mut Emu, data: *const u8, len: 
             let hz = c.cpu_hz();
             c.ble().set_nearby(list, cycles, hz)
         }
-        None => Err("BLE needs an ESP32-S3 or ESP32-C3".into()),
+        None => Err("BLE needs an ESP32-S3, ESP32-C3 or ESP32".into()),
     };
     match result {
         Ok(()) => 0,
@@ -526,7 +569,7 @@ pub unsafe extern "C" fn esp32sim_ble_air(e: *mut Emu, addr: *const u8) -> u32 {
     let Ok(address) = <[u8; 6]>::try_from(unsafe { bytes(addr, 6) }) else { return 1 };
     let result = match e.m.chip_mut() {
         Some(c) => c.ble().enable_air(address),
-        None => Err("BLE needs an ESP32-S3 or ESP32-C3".into()),
+        None => Err("BLE needs an ESP32-S3, ESP32-C3 or ESP32".into()),
     };
     match result {
         Ok(()) => 0,
