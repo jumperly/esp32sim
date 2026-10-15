@@ -135,6 +135,9 @@ pub trait SocBus: Bus {
     /// transmission starting): `Machine::run_until_cycle` stops its round there and returns
     /// `RunUntil::Yield`. Reading it clears it.
     fn take_host_event(&mut self) -> bool { false }
+    /// Jumperly patch J1: the bus asks `Machine::run` to end the current slice at the next round
+    /// boundary, so the host sees a pin change before the guest runs on. Reading it clears it.
+    fn take_slice_yield(&mut self) -> bool { false }
     fn misc(&mut self) -> &mut Misc;
     fn load_bytes(&mut self, addr: u32, data: &[u8]) -> Result<(), String>;
     fn write_flash(&mut self, offset: usize, data: &[u8]) -> Result<(), String>;

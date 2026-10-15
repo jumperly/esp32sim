@@ -18,7 +18,10 @@ pub struct RtcCntl { pub ram: RegRam, pub slow_ticks: u64, pub time_latch: u64, 
                      wdt_base: u32, wdt_count: u64, wdt_stage: usize, wdt_unlocked: bool,
                      /// S3 only: the SENS block at +0x800 converts on SAR_MEAS1_START (see `sens_meas`); the chip refreshes
                      /// `now_cycles` before each access so a waveform source is sampled at the right emulated time.
-                     pub sens_adc: bool, pub analog: crate::analog::AnalogInputs, pub now_cycles: u64 }
+                     pub sens_adc: bool, pub analog: crate::analog::AnalogInputs, pub now_cycles: u64,
+                     /// Jumperly patch J5: convert pad voltages linearly against the attenuation's full scale instead of
+                     /// upstream's calibrated curve, so a potentiometer swept 0..3.3 V reads 0..4095 (see `linear_adc_code`).
+                     pub adc_linear: bool }
 impl RtcCntl {
     pub fn preset_after_bootloader(&mut self) { self.ram.write(0xc0, 0xFFD7_0028); self.ram.write(0xc4, 0xFF0F_00F0); }
     fn request_reset(&mut self, cause: u32) { if !self.sw_reset { self.sw_reset = true; self.reset_cause = cause; } }
@@ -48,7 +51,7 @@ impl RtcCntl {
     pub fn new_c3() -> Self { Self::with_wdt_base(0x90) }
     pub fn with_wdt_base(wdt_base: u32) -> Self {
         let mut r = RtcCntl { ram: RegRam::new(), slow_ticks: 0, time_latch: 0, sw_reset: false, reset_cause: RST_POWERON, wdt_base, wdt_count: 0, wdt_stage: 0, wdt_unlocked: false,
-                              sens_adc: false, analog: crate::analog::AnalogInputs::new(240_000_000), now_cycles: 0 };
+                              sens_adc: false, analog: crate::analog::AnalogInputs::new(240_000_000), now_cycles: 0, adc_linear: false };
         r.ram.write(0x38, 1 | (1 << 6));           // RESET_STATE: reset cause POWERON for both CPUs
         r.ram.write(0x74, 0);                        // CLK_CONF
         r
@@ -84,6 +87,14 @@ impl RtcCntl {
     pub fn s3_adc_code(volts: f32, atten: u32) -> u32 {
         crate::sar_adc::voltage_code(volts, atten, crate::sar_adc::Calibration::S3Adc1)
     }
+    /// Jumperly patch J5: the code for `volts` at attenuation code `atten` (0, 2.5, 6, 11 dB) as a straight
+    /// line to the ESP32-S3 datasheet full scale (950, 1250, 1750, 3100 mV), clamped to 4095, with the
+    /// millivolts truncated to whole numbers.
+    pub fn linear_adc_code(volts: f32, atten: u32) -> u32 {
+        const FULL_SCALE_MV: [u32; 4] = [950, 1250, 1750, 3100];
+        let mv = (volts * 1000.0).round().clamp(0.0, 65535.0) as u32;
+        (mv * 4095 / FULL_SCALE_MV[(atten & 3) as usize]).min(4095)
+    }
     /// SENS_SAR_MEAS1_CTRL2 (IDF adc_ll_rtc_start_convert / _convert_is_done / _get_convert_value):
     /// EN_PAD [30:19] picks the ADC1 channel, START [17] rising runs one conversion, DONE [16]
     /// and DATA [15:0] carry the result. ADC1 channel n is GPIO n+1 on the S3; the channel's
@@ -98,8 +109,10 @@ impl RtcCntl {
                 let adc2 = off == 0x830;
                 let atten = (self.ram.read(if adc2 { 0x838 } else { 0x814 }) >> (2 * ch)) & 3;
                 if ch >= 10 { 0 } else {
+                    let linear = self.adc_linear;   // Jumperly patch J5
                     self.analog.convert(ch as u8 + if adc2 { 11 } else { 1 }, self.now_cycles, |v| {
-                        if adc2 { crate::sar_adc::voltage_code(v, atten, crate::sar_adc::Calibration::S3Adc2) }
+                        if linear { Self::linear_adc_code(v, atten) }
+                        else if adc2 { crate::sar_adc::voltage_code(v, atten, crate::sar_adc::Calibration::S3Adc2) }
                         else { Self::s3_adc_code(v, atten) }
                     })
                 }
@@ -117,4 +130,44 @@ impl Device for RtcCntl {
     fn write(&mut self, off: u32, v: u32) -> WriteEffect { RtcCntl::write(self, off, v); WriteEffect::NONE }
     fn clock(&self) -> Option<ClockDomain> { Some(ClockDomain::RtcSlow) }
     fn tick(&mut self, ticks: u64) { self.slow_ticks += ticks; self.wdt_tick(ticks); }
+}
+
+#[cfg(test)]
+mod linear_adc_tests {
+    use super::*;
+
+    /// Jumperly patch J5: with `adc_linear` the SENS one-shot reads the pad as a straight line to the
+    /// attenuation's full scale; without it upstream's calibrated curve applies.
+    fn read_ch0(r: &mut RtcCntl) -> u32 {
+        r.write(0x80c, 1 << 19);                              // EN_PAD = ADC1 CH0, START = 0
+        r.write(0x80c, (1 << 19) | (1 << 17));                // START = 1: convert
+        let v = r.read(0x80c);
+        assert_ne!(v & (1 << 16), 0, "DONE not set");
+        v & 0xffff
+    }
+
+    #[test]
+    fn linear_transfer_clamps_at_full_scale() {
+        let mut r = RtcCntl::new();
+        r.adc_linear = true;
+        r.write(0x814, 3);                                    // ADC1 CH0: 11 dB (3100 mV)
+        r.analog.set(1, crate::analog::AnalogSource::Const(1.55));
+        assert_eq!(read_ch0(&mut r), 1550 * 4095 / 3100);
+        r.write(0x80c, 0);
+        r.analog.set(1, crate::analog::AnalogSource::Const(3.3));
+        assert_eq!(read_ch0(&mut r), 4095);                   // above full scale
+        r.write(0x80c, 0);
+        r.write(0x814, 0);                                    // 0 dB (950 mV)
+        r.analog.set(1, crate::analog::AnalogSource::Const(0.475));
+        assert_eq!(read_ch0(&mut r), 475 * 4095 / 950);
+    }
+
+    #[test]
+    fn upstream_curve_is_used_without_the_flag() {
+        let mut r = RtcCntl::new();
+        r.write(0x814, 3);
+        r.analog.set(1, crate::analog::AnalogSource::Const(1.55));
+        assert_eq!(read_ch0(&mut r), RtcCntl::s3_adc_code(1.55, 3));
+        assert_ne!(read_ch0(&mut r), 1550 * 4095 / 3100);
+    }
 }

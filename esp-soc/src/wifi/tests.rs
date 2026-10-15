@@ -360,3 +360,60 @@ fn nearby_specs_parse_with_defaults_and_the_access_points_own_ssid_is_left_out()
     assert!(link.set_beacons(list));
     assert_eq!(link.ap().unwrap().beacons.len(), 2, "the access point's own SSID is that access point");
 }
+/// A probe request from the station to `a1` with these SSID elements (Jumperly patch J11).
+fn probe(a1: [u8; 6], ssids: &[&[u8]]) -> Vec<u8> {
+    let mut frame = station_frame(4 << 4, &[]);
+    frame[4..10].copy_from_slice(&a1);
+    for ssid in ssids { frame.push(0); frame.push(ssid.len() as u8); frame.extend_from_slice(ssid); }
+    frame
+}
+
+#[test]
+fn a_directed_probe_for_another_network_is_remembered_until_taken() {
+    let mut ap = VirtualAp::new(config(), false);
+    assert!(ap.on_station_tx(&probe([0xff; 6], &[b"Home"]), 0).is_none());
+    assert!(ap.queue.is_empty(), "no probe response for another network");
+    assert_eq!(ap.take_probed().as_deref(), Some(&b"Home"[..]));
+    assert_eq!(ap.take_probed(), None, "taken once");
+    ap.on_station_tx(&probe([0xff; 6], &[b"Home"]), 10);
+    ap.on_station_tx(&probe(config().bssid, &[b"Office \xd0\x96"]), 20);
+    assert_eq!(ap.take_probed().as_deref(), Some(&b"Office \xd0\x96"[..]), "the last one, as bytes");
+}
+
+#[test]
+fn a_scan_or_a_probe_for_this_network_leaves_nothing_to_report() {
+    let mut ap = VirtualAp::new(config(), false);
+    ap.on_station_tx(&probe([0xff; 6], &[b""]), 0);                 // wildcard: a scan
+    ap.on_station_tx(&probe(config().bssid, &[b"esp32sim"]), 10);  // this access point
+    ap.on_station_tx(&probe([2, 9, 9, 9, 9, 9], &[b"Home"]), 20);   // addressed to another BSSID
+    assert_eq!(ap.take_probed(), None);
+    assert_eq!(ap.stats.1, 2, "the scan and the directed probe for esp32sim are answered");
+}
+
+#[test]
+fn the_link_hands_over_the_probed_ssid_and_keeps_it_over_a_reboot() {
+    let mut l = StationLink::default();
+    assert_eq!(l.take_probed_ssid(), None, "no access point");
+    l.attach(Some(VirtualAp::new(config(), false)), None);
+    l.station_tx(&probe([0xff; 6], &[b"Home"]), 0);
+    let mut l = l.surviving_reboot();
+    assert_eq!(l.take_probed_ssid().as_deref(), Some(&b"Home"[..]));
+    assert_eq!(l.take_probed_ssid(), None);
+}
+
+#[test]
+fn ap_from_fields_takes_any_bytes_and_checks_the_lengths() {
+    let cfg = ApConfig::from_fields("a,b=c", Some("pass,word=1"), 11).unwrap();
+    assert_eq!((cfg.ssid.as_str(), cfg.psk.as_deref(), cfg.channel), ("a,b=c", Some("pass,word=1"), 11));
+    assert_eq!(cfg.bssid, ApConfig::parse("").unwrap().bssid);
+    let open = ApConfig::from_fields("Jumperly", None, 6).unwrap();
+    assert!(open.psk.is_none());
+    assert!(ApConfig::from_fields(&"x".repeat(32), Some(&"p".repeat(63)), 1).is_ok());
+    assert!(ApConfig::from_fields("x", Some("12345678"), 14).is_ok());
+    for (ssid, psk, ch) in [
+        ("", None, 6), (&*"x".repeat(33), None, 6), ("x", Some("1234567"), 6),
+        ("x", Some(&*"p".repeat(64)), 6), ("x", Some(""), 6), ("x", None, 0), ("x", None, 15),
+    ] {
+        assert!(ApConfig::from_fields(ssid, psk, ch).is_err(), "accepted {ssid:?} {psk:?} {ch}");
+    }
+}

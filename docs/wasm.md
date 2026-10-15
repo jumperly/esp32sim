@@ -179,10 +179,11 @@ Normal builds contain neither the sampling code nor the clock import.
 
 ## Limits
 
-- **No NAT.** The browser has no sockets. With a `wifi=` spec the firmware still associates,
+- **No sockets.** The browser has none. With a `wifi=` spec the firmware still associates,
   gets a DHCP lease, resolves names and syncs time against the emulated subnet, but connections
-  past the gateway are refused (the `--net none` behaviour). The [host Ethernet relay](#host-ethernet-relay)
-  below lets a page carry the guest's frames to a host helper instead.
+  past the gateway are refused (the `--net none` behaviour) — unless the page carries them itself
+  over the [host network](#host-network). The [host Ethernet relay](#host-ethernet-relay) below lets a page
+  carry the guest's frames to a host helper instead.
 - **No file outputs**: `--wav`, `--tft-png`, register traces — the page is the output.
 - **Emulator log lines** (`[emu] …`) that the native build prints to stderr do not exist here,
   except the ones the wasm glue forwards (stubs, resets, load errors) to the console tab and the
@@ -266,6 +267,51 @@ The receiver copies the message before returning and applies it at the next run
 boundary. Sensor SCCB settings select output format and geometry. A board without
 a camera emits `{"t":"camera-error","message":"no camera on this board"}`.
 
+### Virtual BLE controller (Jumperly patch J23)
+
+The CLI's `--ble` in the browser, on the S3 and the C3. `esp32sim_ble_virtual(e, elf, len)` before
+boot: the application ELF (its symbols; debug info is not needed) — 0, or 1 for another chip, after
+boot, or an ELF without the controller symbols (logged). `esp32sim_ble_virtual_command(e, cmd, len)`: a
+command for the virtual peer now — `connect`, `disconnect`, `discover`, `read HANDLE`, `write HANDLE
+HEX` (at most 512 bytes; long values as prepared writes, J24), `subscribe CCC_HANDLE`; 0, or 1 (no virtual controller, a bad command: the reason is the
+next log line, `error …`). `esp32sim_ble_log_take(e)`: the oldest log line into the buffer (its
+length, 0 = none) — `t=<seconds>s <text>`, the lines the CLI prints as `[ble]` (advertising, the
+connection and its MTU (`mtu N`, J24), discovered services / characteristics / attributes, reads, writes, notifications, ATT
+errors, unsupported HCI opcodes); at most 1024 wait, older ones are dropped.
+
+`esp32sim_ble_nearby(e, ptr, len)` (Jumperly patch J25): the Bluetooth devices around the user,
+heard by the guest's scans (not connectable), replacing the ones there were. Entries of `[addr 6,
+least significant byte first][addr_type u8: 0 public, 1 random][rssi i8][adv_len u8][adv][rsp_len
+u8][rsp]`, the data at most 31 bytes each, at most 64 devices (`len` 0: none). Each scan of the
+guest — and a running one when the list changes — gets an LE Advertising Report per device
+(ADV_IND; SCAN_RSP too for an active scan, an empty one included). 0, or 1 without the virtual
+controller or for bad data.
+
+`esp32sim_ble_air(e, addr)` (Jumperly patch J26): Bluetooth LE between the boards of a project.
+`addr` points to the board's public address (6 bytes, least significant first), which READ_BD_ADDR
+answers; after `esp32sim_ble_virtual`, before boot; 0, or 1 without the virtual controller. Then
+LE Create Connection to an address other than the peer's is the host's to answer: public (another
+board) or, Jumperly patch J27, random (a device around the user that the host connects; LE
+Connection Complete carries the address type asked for).
+`esp32sim_ble_air_take(e)` puts the frames the board sent since the last call into the buffer and
+returns their count, each as `[len u16][frame]`; `esp32sim_ble_air_put(e, ptr, len)` gives the board
+one frame (0, or 1 for a bad frame, logged). Frames start with their kind:
+
+| Kind | Frame | Meaning |
+| --- | --- | --- |
+| 1 | `[1][n][adv n][m][scan response m]` | the board advertises (connectable) |
+| 2 | `[2]` | it stopped advertising (or got connected) |
+| 3 | `[3][addr 6]` | its guest asks to connect to `addr` |
+| 4 | `[4][addr 6][central u8]` | to the board: connected to `addr`; `central` 1 for the guest that asked |
+| 5 | `[5][addr 6]` | to the board: the connection failed (LE Connection Complete, status 0x02, as after LE Create Connection Cancel) |
+| 6 | `[6][cid u16][payload]` | L2CAP frame of the link, either way |
+| 7 | `[7]` | the link ended (either way) |
+
+The host routes them: advertising goes into the other boards' `esp32sim_ble_nearby` lists (their
+scans hear it); a connect request to an advertising board answers both with kind 4, otherwise the
+asker with kind 5; data and the disconnection go to the other board of the link. The log has
+`remote connected guest=<central|peripheral> peer=<address>` and `remote connect failed addr=…`.
+
 ### C3 full BLE observation
 
 Call `esp32sim_ble_full(emu)` before boot (0 = enabled, 1 = wrong chip or already
@@ -285,3 +331,189 @@ success or 1 for invalid commands/state/chip. Reads use the guest ATT server.
 The central models one unencrypted 1M CSA#1 connection with a 30 ms interval,
 2 s supervision timeout and ATT MTU 23. See [EX213](evidence/ble-c3-connection/README.md)
 for model limits and the production-module reconnect test.
+
+## Host network
+
+Jumperly patch J13. The page can carry the station's traffic itself: the user-mode NAT runs in
+the module as natively, but over a `QueueTransport` (`esp-soc/src/nat/queue.rs`) instead of
+sockets. The guest's socket operations queue up as records the page takes after every run, and
+the page answers with events before the next one — the deferred-bridge pattern of the I2C / SPI
+bridges, without threads.
+
+| Export | Contract |
+| --- | --- |
+| `esp32sim_net_host(e, flags)` | bit 0 host transport, bit 1 the host resolves A / AAAA (`RESOLVE`), bit 2 SNTP answered locally. After `esp32sim_wifi_ap` (a new access point drops it), before or after boot; survives a chip reset. Flags without bit 0 restore the stage-1 subnet. 1 without an access point. |
+| `esp32sim_net_take(e)` | The records queued since the last call: their count; bytes in the buffer (`esp32sim_buf_ptr`, `esp32sim_buf_len`). |
+| `esp32sim_buf_len(e)` | Length of the buffer of the last `*_take` call. |
+| `esp32sim_net_event(e, kind, id, arg, ptr, len)` | One event (below). `TCP_DATA` returns the bytes taken, `UDP_DATA` 1 taken / 0 dropped, the rest 1 applied / 0 not waited for. |
+| `esp32sim_wifi_stat(e, which)` | 0 associated (keys installed), 1 DHCP lease given, 2 TCP flows open through the host, 3 bytes to the host, 4 bytes from the host, 5 TCP flows the host could not open, 6 DNS answers from the host, 7 / 8 LAN packets out / in. |
+
+Records, little-endian, each padded to a multiple of 4 bytes:
+`u8 op, u8 flags, u16 port, u32 id, u32 len, len bytes`.
+
+| op | Record | Fields |
+| --- | --- | --- |
+| 1 | TCP_CONNECT | `id` = flow, `port`, data = IPv4[4] |
+| 2 | TCP_DATA | the guest's bytes, never more than the host's credit |
+| 3 | TCP_SHUTDOWN | the guest finished sending (FIN, every byte before it written) |
+| 4 | TCP_CLOSE | the NAT forgot the flow; flags bit 0 = abort (guest RST, reboot) |
+| 5 | UDP_OPEN | `port`, data = IPv4[4] |
+| 6 | UDP_DATA | one datagram |
+| 7 | UDP_CLOSE | |
+| 8 | RESOLVE | `id` = query, `port` = qtype (1 A, 28 AAAA), data = the name (UTF-8) |
+| 9 | INCOMING_RESULT | J15: `id` = the host's incoming flow, flags bit 0 = the guest accepted it |
+
+| kind | Event | `arg` / data |
+| --- | --- | --- |
+| 1 | CONNECTED | `arg` = bytes the host takes before its first credit |
+| 2 | FAILED | `arg` 1 refused, 2 unreachable / timed out, 3 policy, 4 offline; the guest gets RST\|ACK. On an open flow it is a reset |
+| 3 | TCP_DATA | the host's bytes; at most 64 KiB wait per flow, the rest is offered again later |
+| 4 | TCP_EOF | the remote side finished sending |
+| 5 | TCP_RESET | after the bytes already taken |
+| 6 | TX_CREDIT | `arg` more bytes |
+| 7 | UDP_DATA | one datagram; 16 wait per flow |
+| 8 | RESOLVED | `id` = query, `arg` = TTL, data = n × IPv4[4] (none: an empty answer) |
+| 9 | UNRESOLVED | `arg` = rcode 2 SERVFAIL or 3 NXDOMAIN |
+| 10 | INCOMING | J15: the host opens flow `id` to the guest's port `arg`; data = the peer's IPv4[4] + port u16 LE |
+
+Limits per board: 16 TCP flows (the 17th SYN is dropped and retried by the guest), 64 KiB waiting
+for the guest per TCP flow, 256 KiB of data in untaken records (`tcp_write` blocks, a datagram is
+dropped), 16 datagrams per UDP flow. Flow ids grow and are not reused while a flow lives. No
+TCP_CLOSE follows FAILED or TCP_RESET: the host has forgotten the flow already. Data for a flow
+the guest has forgotten is taken and dropped. With bit 1 the host sees no DNS datagrams: A and AAAA
+go as `RESOLVE`, any other query is answered here, empty (NOERROR). With bit 2 SNTP is answered
+from `esp32sim_run`'s `unix_ms`; without it the guest's NTP goes to the host as UDP. ICMP echo
+is answered locally for any address.
+
+A host loop:
+
+```js
+for (;;) {
+  for (const ev of dueEvents()) {                                  // in arrival order
+    const taken = deliver(ev);                                     // esp32sim_net_event
+    if (ev.kind === 3 && taken < ev.bytes.length) keep(ev, taken); // offer the rest next time
+  }
+  exports.esp32sim_run(e, cycles, Date.now());
+  const n = exports.esp32sim_net_take(e);
+  const records = new DataView(memory.buffer, exports.esp32sim_buf_ptr(e), exports.esp32sim_buf_len(e));
+  forward(records, n);                                             // to the gateway
+}
+```
+
+`wasm/tests/jumperly.rs` (`wifi_net_reaches_a_scripted_internet_through_the_host`) runs the
+`wifi-net` fixture against a scripted host: `dns: example.com -> 93.184.215.14`, SNTP time,
+`http GET http://example.com/ -> 200`, then TCP_SHUTDOWN and TCP_CLOSE.
+
+### Connections to the guest
+
+Jumperly patch J15. The host can also open a TCP connection to a server on the board (a page
+served by `WebServer`, a local helper polling the device): `INCOMING` with an id of the host's
+own, the guest's port in `arg` and the real peer (IPv4[4] + port u16 little-endian) as data. The
+id must be nonzero and not a live flow's; the guest's ids grow from 1, so the host takes high
+ones (bit 31 set). The NAT sends the station a SYN from the gateway, `10.0.2.2:<port>` (49152 and
+up, the peer's address appears only in the log), once it has heard the station; then exactly one
+`INCOMING_RESULT` comes:
+
+- accepted (flags bit 0, the guest's SYN-ACK): the flow runs like an outbound one — the host's
+  `TCP_DATA` / `TCP_EOF` / `TCP_RESET`, the guest's `TCP_DATA` / `TCP_SHUTDOWN` / `TCP_CLOSE`. The
+  guest's side sends up to 64 KiB before the host's first `TX_CREDIT` (there is no `CONNECTED`);
+- refused (the guest's RST: nobody listens; no answer within 5 s of device time; the station not
+  heard yet; no free flow): the flow is gone, no `TCP_CLOSE` follows.
+
+The host may send `TCP_DATA`, `TCP_EOF` and `TX_CREDIT` right after `INCOMING`; the bytes wait for
+the handshake. `TCP_RESET` or `FAILED` before the answer gives the flow up: the guest is reset and
+no record follows. `INCOMING` returns 0 for a taken id, port 0, short data, or when 16 TCP flows
+(both directions) are open. `wasm/tests/jumperly.rs`
+(`the_host_connects_to_a_guest_server_and_a_closed_port_refuses`) connects to `lan-server`'s port
+7000 (`ping` → `pong`, the guest prints `lan: client 10.0.2.2`), then TCP_EOF, the guest's
+TCP_SHUTDOWN and TCP_CLOSE; port 81 is refused.
+
+## LAN between boards
+
+Jumperly patch J14. Boards of one Wi-Fi network (one emulator each) reach each other at the IP
+level: a packet for a peer's address, and a UDP broadcast or multicast other than DHCP
+(`10.0.2.255`, `255.255.255.255`, `224.0.0.0/4`), leaves the station's virtual network before the
+gateway's services and the NAT see it. The page stamps it with the sender's device time and
+hands it to each peer when that peer's clock reaches the stamp plus its latency (Jumperly: 500 µs,
+longer than a multi-board slice, so delivery is exact however the run is sliced). Every address
+of the subnet resolves to the gateway's MAC (proxy ARP), so the router needs no ARP of its own;
+a delivered packet comes from the gateway's MAC to the station's MAC, also a broadcast or
+multicast one. Both ends run real lwIP: `WiFiServer` on one board accepts `WiFiClient` of
+another. mDNS works over it ([notes](jumperly/mdns-lan-2026-10-07/README.md)).
+
+| Export | Contract |
+| --- | --- |
+| `esp32sim_set_mac(e, ptr6)` | The station's MAC (efuse BLK1 and the machine's), S3 and C3, before boot; 1 otherwise. |
+| `esp32sim_net_station(e, ptr4)` | The address DHCP gives the station (default 10.0.2.15). After `esp32sim_wifi_ap`, before boot; 1 otherwise. |
+| `esp32sim_lan_peers(e, ptr, count)` | The other boards' addresses (`count` × IPv4[4]); 0 turns the LAN off. After `esp32sim_wifi_ap` (a new access point drops it); 1 without one. |
+| `esp32sim_lan_take(e)` | The packets sent to peers since the last call: their count; per packet `f64` device µs (cycles over the CPU MHz), `u32` length, the IPv4 packet padded to 4 bytes. At most 256 wait; more are dropped. |
+| `esp32sim_lan_receive(e, ptr, len)` | An IPv4 packet for the station, queued for its receive ring at once: 0 accepted; 1 without a LAN, before the station's first frame, or for a malformed packet, one over 1500 bytes or one for another address. |
+
+A packet for a subnet address that is neither a peer nor a service goes on as before: refused
+with RST without the host transport, to the host with it. `wasm/tests/jumperly.rs`
+(`two_boards_talk_tcp_and_udp_over_the_lan`) runs `lan-server` (10.0.2.15) and `lan-client`
+(10.0.2.16, its names through a scripted host, CPI 3) in lockstep: `lan: pong from 10.0.2.15` by
+name and by address, `udp: hello from 10.0.2.16` on the server.
+
+## Octal flash (ESP32-S3-WROOM-2)
+
+Jumperly patch J16. A module with octal SPI flash (ESP32-S3-WROOM-2: N16R8V, N32R8V, N32R16V)
+runs its firmware (core `FlashMode=opi`, `PSRAM=opi`) on the octal path of real silicon: efuse
+FLASH_TYPE says octal, so the ROM resets the flash out of OPI mode at every boot ("Octal Flash
+Mode Enabled"), the bootloader and the app find a Macronix octal chip (JEDEC C2 80, log2(size) +
+0x20) and switch it to DTR OPI with WRCR2; from then on the flash takes the 16-bit commands
+(8DTRD, PP4B, SE4B, BE4B, RDSR, RDCR2, ...). The octal PSRAM's MR2 reports the PSRAM size, so a
+16 MB module maps 16 MB (ESP-IDF sizes it from MR2 alone).
+
+| Export | Contract |
+| --- | --- |
+| `esp32sim_flash_octal(e, on)` | The flash is octal (`on` nonzero) or quad (0, the default). Before boot, ESP32-S3 only; 1 otherwise. It survives a chip reset. |
+
+The same firmware on the quad model still runs: ESP-IDF's flash mode auto-detection falls back to
+DIO when efuse FLASH_TYPE is quad. `wasm/tests/jumperly.rs` (`octal_flash_modules_run_opi_firmware`)
+runs the `octal16` / `octal32` fixtures on 16 MB flash + 8 MB PSRAM and 32 MB + 16 MB.
+
+## I2S receive (microphones)
+
+Jumperly patch J17, on upstream's receiver (`esp-periph/src/i2s/rx.rs`: PCM at the DMA boundary,
+the RX clock tree for the frame rate, the RX registers for the data bits, received slots and byte
+layout, the samples written into the GDMA IN ring at the frame rate with IN_SUC_EOF every
+RX_EOF_NUM bytes, so each DMA buffer reaches `i2s_channel_read` through the driver's EOF
+callback). Without a host a receiver reads what upstream gives it: silence, `--i2s-tone` or the
+pin-routed PCM sources. With one, the host supplies the slot words of the frames before each run:
+the emulator does not shift SD bit by bit.
+
+| Export | Contract |
+| --- | --- |
+| `esp32sim_i2s_host(e, on)` | The host supplies what the receivers get (`on` nonzero); a frame falling due with no word queued is silence and ends the slice once, until the host pushes again. Survives a chip reset. ESP32-S3 only; 1 otherwise. |
+| `esp32sim_i2s_rx_need(e, port, cycles)` | Frames controller `port` (0, 1) should get now so the next `cycles` find them queued (those falling due, less the queued); 0 while its receiver is stopped or in a mode the model does not receive. The buffer: eight u32 LE — frame rate Hz, BCK per slot, data bits, received slot mask, slots per frame, flags (bit 0 running, bit 1 Philips), queued frames, BCK Hz. |
+| `esp32sim_i2s_rx_push(e, port, ptr, frames)` | Queue `frames` × 8 bytes: the left (WS low) and right (WS high) slot word, u32 LE, MSB-aligned (bit 31 = the first bit after the WS edge and the one-BCK delay). Returns how many it took (at most 65536 wait). |
+
+The receiver takes RX_BITS_MOD + 1 (16, 24 or 32) bits from the top of each slot word into 2, 3
+(4 with RX_24_FILL_EN) or 4 little-endian bytes, one or two slots per frame; the modes upstream
+does not model (slave clocks, right alignment, big-endian, LSB first, more than two slots)
+receive nothing. Turning the host off drops its queue. The web simulator's adapter routes the
+request to the part on the pads of the RX BCK / WS outputs and the SD input.
+`wasm/tests/jumperly.rs` (`i2s_mic_reports_the_level_of_the_host_sine_on_the_left_slot`) runs the
+`i2s-mic` fixture (16 kHz, 32-bit mono left) on a −26 dBFS host sine: the sketch reports −26.0 dBFS
+and the peak 420 426.
+
+## UART pads
+
+Jumperly patch J19. The UARTs move bytes straight between the console and the FIFOs; which pads
+carry them is the host's business (the web simulator routes the bytes along the wires of the pads).
+A UART reaches its pads either through the GPIO matrix (any pad: TXD_OUT on the pad's output, RXD_IN
+reading it) or on its own IO_MUX pads with the matrix bypassed (S3: UART0 on 43 / 44, UART1 on
+17 / 18; C3: UART0 on 21 / 20; ESP-IDF picks them when the sketch asks for exactly those pins).
+
+| Export | Contract |
+| --- | --- |
+| `esp32sim_uart_pins(e, port)` | The pads of UART `port` as `tx \| rx << 8`, 255 for none: TX is the pad routed to TXD_OUT through the matrix, else the IO_MUX TX pad in its UART function; RX the pad the matrix routes to RXD_IN, else (matrix bypassed) the IO_MUX RX pad in its UART function with input enabled. S3: ports 0..2; C3: 0, 1. |
+| `esp32sim_wifi_beacons(e, ptr, len)` | Jumperly patch J22: the networks around (beacon-only, not joinable), replacing the ones there were. Entries `[ssid_len u8][ssid][channel u8][rssi i8][secure u8][bssid 6]`, SSID 1..=32 bytes of UTF-8, channel 1..=14, at most 32; `len` 0 clears them. They answer wildcard or matching probe requests from their own BSSID with their channel, signal and security; a network with the access point's SSID is left out. After `esp32sim_wifi_ap` (a new access point drops them), before or after boot. 0 ok; 1 without an access point or for bad data (logged). |
+| `esp32sim_uart_baud(e, port)` | Jumperly patch J21: the baud UART `port` is set to (its clock source and dividers, upstream's `uart_route`), 0 when not configured or no such port. |
+| `esp32sim_gpio_in_pin(e, signal)` | The pad a matrix input signal reads, 255 if none. On the C3 it now decodes the C3 layout (SIG_IN_SEL at bit 6, pad in bits 0..4; the S3: bit 7, 0..5). |
+
+`wasm/tests/jumperly.rs` (`serial1_and_serial2_on_matrix_pins`, `c3_serial1_on_matrix_pins`) runs
+the `serial12` fixture (Serial1 RX 16 / TX 17, Serial2 RX 4 / TX 5) and `c3-serial1` (Serial1 RX 3 /
+TX 4): the bytes come out of console ports 1 and 2, the pads are found, and lines fed to the ports
+come back on UART0.

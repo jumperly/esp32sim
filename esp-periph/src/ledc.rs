@@ -43,6 +43,21 @@ impl Ledc {
         if matrix & (1 << bits) != 0 { duty = 65535 - duty; }
         Some((hz, duty))
     }
+    /// Jumperly patch J4: frequency and exact duty fraction (0..1) of one channel, before any matrix
+    /// inversion; `None` while the channel is off. The host tap reads it per matrix signal. A duty
+    /// update that PARA_UP has queued counts at once instead of at the next timer overflow, so the
+    /// circuit sees a `tone()` or `analogWrite()` when the firmware calls it (`output` is unchanged).
+    pub fn tap_output(&self, channel: usize) -> Option<(f64, f64)> {
+        let (period, divider) = self.channel_timer_settings(channel)?;
+        let hz = self.source_hz();
+        if hz == 0 { return None; }
+        let full = period * 16;
+        let duty = if self.pending[channel] { self.regs.read(channel as u32 * 0x14 + 8) } else { self.duty[channel] };
+        let high = (duty as u64).min(full);
+        Some((hz as f64 * 256.0 / divider as f64 / period as f64, high as f64 / full as f64))
+    }
+    /// Jumperly patch J4: CHn_CONF0 IDLE_LV, the level of a disabled channel.
+    pub fn channel_idle_high(&self, channel: usize) -> bool { self.regs.read(channel as u32 * 0x14) & (1 << 3) != 0 }
 }
 
 /// Classic speed groups: their source clock and matrix signals are chosen by the classic adapter.

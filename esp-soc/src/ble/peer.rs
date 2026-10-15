@@ -27,6 +27,93 @@ pub fn advertising_fields(data: &[u8]) -> Vec<String> {
 }
 
 const ADV: &[u8] = b"\x02\x01\x06\x03\x03\x0f\x18\x09\x09esp32sim";
+
+/// Jumperly patch J25: a Bluetooth device around the user (the web page found it): the guest's
+/// scans report it with its address, advertising data, scan response and signal; it cannot be
+/// connected to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Nearby { pub addr: [u8; 6], pub addr_type: u8, pub rssi: i8, pub adv: Vec<u8>, pub scan_response: Vec<u8> }
+
+/// The most devices around the peer reports.
+pub const NEARBY_MAX: usize = 64;
+
+/// Jumperly patch J26: what crosses the "air" between the boards of a project, through the host.
+/// Out of an emulator: its advertising, connection requests, data and disconnections; into one:
+/// connections made, failed or ended, and the other board's data.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Air {
+    /// This board advertises (connectable) with this data and scan response.
+    Advertising(Vec<u8>, Vec<u8>),
+    AdvertisingStopped,
+    /// This board's guest wants to connect to the board with this address.
+    ConnectRequest([u8; 6]),
+    /// In: a board (this address) connected to this one, which advertised (this one is the
+    /// peripheral); or: the connection this one asked for (to this address) is there.
+    Connected { addr: [u8; 6], central: bool },
+    ConnectFailed([u8; 6]),
+    /// An L2CAP frame on the connection (both ways).
+    Data(u16, Vec<u8>),
+    /// The connection ended (both ways).
+    Disconnected,
+}
+
+impl Air {
+    /// `[kind][payload]`: 1 advertising `[adv_len][adv][rsp_len][rsp]`, 2 advertising stopped,
+    /// 3 connect request `[addr 6]`, 4 connected `[addr 6][central]`, 5 connect failed `[addr 6]`,
+    /// 6 data `[cid u16][frame]`, 7 disconnected.
+    pub fn encode(&self) -> Vec<u8> {
+        match self {
+            Air::Advertising(a, r) => [&[1, a.len() as u8][..], a, &[r.len() as u8], r].concat(),
+            Air::AdvertisingStopped => vec![2],
+            Air::ConnectRequest(addr) => [&[3u8][..], addr].concat(),
+            Air::Connected { addr, central } => [&[4u8][..], addr, &[*central as u8]].concat(),
+            Air::ConnectFailed(addr) => [&[5u8][..], addr].concat(),
+            Air::Data(cid, p) => [&[6u8][..], &cid.to_le_bytes(), p].concat(),
+            Air::Disconnected => vec![7],
+        }
+    }
+    pub fn decode(d: &[u8]) -> Result<Air, String> {
+        let addr = |d: &[u8]| -> Result<[u8; 6], String> { d.get(1..7).and_then(|a| a.try_into().ok()).ok_or_else(|| "a cut-short air frame".to_string()) };
+        Ok(match d.first() {
+            Some(1) => {
+                let n = *d.get(1).ok_or("a cut-short air frame")? as usize;
+                let m = *d.get(2 + n).ok_or("a cut-short air frame")? as usize;
+                let adv = d.get(2..2 + n).ok_or("a cut-short air frame")?.to_vec();
+                Air::Advertising(adv, d.get(3 + n..3 + n + m).ok_or("a cut-short air frame")?.to_vec())
+            }
+            Some(2) => Air::AdvertisingStopped,
+            Some(3) => Air::ConnectRequest(addr(d)?),
+            Some(4) => Air::Connected { addr: addr(d)?, central: *d.get(7).ok_or("a cut-short air frame")? != 0 },
+            Some(5) => Air::ConnectFailed(addr(d)?),
+            Some(6) if d.len() >= 3 => Air::Data(u16::from_le_bytes([d[1], d[2]]), d[3..].to_vec()),
+            Some(7) => Air::Disconnected,
+            _ => return Err("an unknown air frame".into()),
+        })
+    }
+}
+
+impl Nearby {
+    /// `esp32sim_ble_nearby`'s list: entries of `[addr 6][addr_type u8][rssi i8][adv_len u8][adv]
+    /// [rsp_len u8][rsp]`, the data at most 31 bytes each, at most `NEARBY_MAX`.
+    pub fn parse_list(mut d: &[u8]) -> Result<Vec<Nearby>, String> {
+        let mut out = Vec::new();
+        while !d.is_empty() {
+            if d.len() < 9 { return Err("a device entry is cut short".into()); }
+            let addr: [u8; 6] = d[..6].try_into().unwrap();
+            let (addr_type, rssi, n) = (d[6], d[7] as i8, d[8] as usize);
+            if addr_type > 1 || n > 31 || d.len() < 9 + n + 1 { return Err("a device entry is cut short or too long".into()); }
+            let adv = d[9..9 + n].to_vec();
+            let m = d[9 + n] as usize;
+            if m > 31 || d.len() < 10 + n + m { return Err("a device scan response is cut short or too long".into()); }
+            out.push(Nearby { addr, addr_type, rssi, adv, scan_response: d[10 + n..10 + n + m].to_vec() });
+            if out.len() > NEARBY_MAX { return Err(format!("more than {NEARBY_MAX} devices")); }
+            d = &d[10 + n + m..];
+        }
+        Ok(out)
+    }
+}
+/// An address as printed (most significant byte first), from its HCI order (least first).
+pub fn addr_text(a: &[u8; 6]) -> String { a.iter().rev().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(":") }
 pub fn hex(b: &[u8]) -> String { b.iter().map(|v| format!("{v:02x}")).collect() }
 fn uuid(b: &[u8]) -> String {
     let s = hex(&b.iter().rev().copied().collect::<Vec<_>>());
@@ -42,12 +129,23 @@ enum Request {
     Descriptors,
     Read(u16),
     Write(u16),
+    /// Jumperly patch J24: the MTU exchange before the first request of a connection.
+    Mtu,
+    /// Jumperly patch J24: a long write, its prepared parts (`write_rest`), then the execute.
+    Prepare(u16),
+    Execute(u16),
 }
+
+/// Jumperly patch J24: the MTU the peer asks for (the guest's may be smaller).
+const PEER_MTU: u16 = 247;
+/// The longest attribute value (Core Vol 3 Part F 3.2.9).
+const VALUE_MAX: usize = 512;
 
 #[derive(Debug, PartialEq)]
 pub enum Command {
     Connect,
     CentralStop,
+    /// Jumperly patch J24.
     Disconnect,
     Discover,
     Read(u16),
@@ -77,8 +175,8 @@ impl std::str::FromStr for Command {
             "subscribe" => Self::Write(handle, vec![1, 0]),
             _ => {
                 let value = parts[2];
-                let bytes = hex_bytes(value).filter(|b| b.len() <= 20)
-                    .ok_or("BLE write requires at most 20 bytes of hexadecimal data")?;
+                let bytes = hex_bytes(value).filter(|b| b.len() <= VALUE_MAX)
+                    .ok_or_else(|| format!("BLE write requires at most {VALUE_MAX} bytes of hexadecimal data"))?;
                 Self::Write(handle, bytes)
             }
         })
@@ -162,6 +260,22 @@ pub struct Peer {
     pending: Option<Request>,
     discovery_start: u16,
     value: Vec<u8>,
+    /// Jumperly patch J24: the ATT MTU of the connection, whether it was exchanged, the value a
+    /// long read gathers, and what a long write still has to send.
+    mtu: u16,
+    mtu_done: bool,
+    read_acc: Vec<u8>,
+    write_rest: Vec<u8>,
+    write_offset: u16,
+    /// Jumperly patch J25: the devices around, and the guest's scan (active or passive) if it runs.
+    nearby: Vec<Nearby>,
+    scanning: Option<bool>,
+    /// Jumperly patch J26: the air between the boards is on; what goes out; the connection is to
+    /// another board (not the phone-like peer), at `remote_addr`.
+    air: bool,
+    air_out: VecDeque<Air>,
+    remote: bool,
+    remote_addr: [u8; 6],
 }
 impl Peer {
     fn new(link: Link) -> Self {
@@ -176,15 +290,75 @@ impl Peer {
             pending: None,
             discovery_start: 1,
             value: vec![100],
+            mtu: 23,
+            mtu_done: false,
+            read_acc: Vec::new(),
+            write_rest: Vec::new(),
+            write_offset: 0,
+            nearby: Vec::new(),
+            scanning: None,
+            air: false,
+            air_out: VecDeque::new(),
+            remote: false,
+            remote_addr: [0; 6],
         }
     }
+    /// Jumperly patch J26: a frame from the air (the host took it from another board).
+    pub fn air_in(&mut self, frame: Air) {
+        match frame {
+            Air::Connected { addr, central: false } => {
+                // Another board connected to this advertising one.
+                (self.remote, self.remote_addr) = (true, addr);
+                self.link.borrow_mut().to_controller.push_back(LinkAction::RemoteConnect(addr));
+            }
+            Air::Connected { addr, central: true } => {
+                (self.remote, self.remote_addr) = (true, addr);
+                self.link.borrow_mut().to_controller.push_back(LinkAction::RemoteConnected(addr));
+            }
+            Air::ConnectFailed(addr) => {
+                self.log.push(format!("remote connect failed addr={}", addr_text(&addr)));
+                self.link.borrow_mut().to_controller.push_back(LinkAction::ConnectFailed(addr));
+            }
+            Air::Data(cid, p) => { if self.remote { self.link.borrow_mut().to_controller.push_back(LinkAction::Data(cid, p)); } }
+            Air::Disconnected => {
+                if self.remote {
+                    self.remote = false;
+                    // The other board ended it: this guest hears «remote user terminated».
+                    self.link.borrow_mut().to_controller.push_back(LinkAction::Disconnect);
+                }
+            }
+            Air::Advertising(..) | Air::AdvertisingStopped | Air::ConnectRequest(_) => {}
+        }
+    }
+    /// Jumperly patch J26: what this board sent into the air since the last call.
+    pub fn take_air(&mut self) -> Vec<Air> { self.air_out.drain(..).collect() }
     fn advertisement(&mut self, adv: Vec<u8>, scan_response: Vec<u8>) {
+        if self.air { self.air_out.push_back(Air::Advertising(adv.clone(), scan_response.clone())); }
         let fields: Vec<_> = [&adv, &scan_response].into_iter().flat_map(|data| advertising_fields(data)).collect();
         self.log.push(format!("advertising {} data={}", fields.join(" "), hex(&adv)));
     }
+    /// Jumperly patch J25: the devices around, replacing the ones there were; a running scan hears
+    /// the new list at once.
+    pub fn set_nearby(&mut self, list: Vec<Nearby>) {
+        self.nearby = list;
+        if let Some(active) = self.scanning { self.report_nearby(active); }
+    }
+    fn report_nearby(&mut self, active: bool) {
+        for n in &self.nearby {
+            self.link.borrow_mut().to_controller.push_back(LinkAction::Report {
+                addr: n.addr,
+                addr_type: n.addr_type,
+                data: n.adv.clone(),
+                scan_response: n.scan_response.clone(),
+                rssi: n.rssi,
+                active,
+            });
+        }
+    }
     pub fn command(&mut self, command: &str) -> Result<(), String> {
         let command = command.parse()?;
-        if matches!(command, Command::CentralStop | Command::Disconnect | Command::ReadUuid(..)) { return Err("central-stop/disconnect/read-uuid requires full BLE".into()) }
+        // Jumperly patch J24: `disconnect` is the virtual peer's too
+        if matches!(command, Command::CentralStop | Command::ReadUuid(..)) { return Err("central-stop/read-uuid requires full BLE".into()) }
         self.commands.push_back(command);
         self.run_commands();
         Ok(())
@@ -200,24 +374,56 @@ impl Peer {
                 self.commands.pop_front();
                 break;
             }
+            if matches!(command, Command::Disconnect) {
+                self.commands.pop_front();
+                if self.connected { self.link.borrow_mut().to_controller.push_back(LinkAction::Disconnect); }
+                else { self.log.push("not connected".into()); }
+                continue;
+            }
             if !self.connected || self.guest_central { break; }
             match self.commands.pop_front().unwrap() {
                 Command::Connect | Command::CentralStop | Command::Disconnect | Command::ReadUuid(..) => unreachable!(),
                 Command::Discover => self.discover(Request::Services, 1),
                 Command::Read(handle) => {
                     self.pending = Some(Request::Read(handle));
+                    self.read_acc.clear();
                     self.att(&att_read(handle));
                 }
-                Command::Write(handle, value) => {
+                Command::Write(handle, value) if value.len() <= self.mtu as usize - 3 => {
                     self.pending = Some(Request::Write(handle));
                     let mut p = vec![0x12, handle as u8, (handle >> 8) as u8];
                     p.extend(value);
                     self.att(&p);
                 }
+                Command::Write(handle, value) => {
+                    // Jumperly patch J24: longer than one write: prepared parts, then execute.
+                    self.write_rest = value;
+                    self.write_offset = 0;
+                    self.prepare_next(handle);
+                }
             }
         }
     }
     fn att(&mut self, pdu: &[u8]) { self.l2cap(4, pdu); }
+    /// Jumperly patch J24: the next Prepare Write of a long write, or its Execute Write.
+    fn prepare_next(&mut self, handle: u16) {
+        if self.write_rest.is_empty() {
+            self.pending = Some(Request::Execute(handle));
+            self.att(&[0x18, 1]);
+            return;
+        }
+        let n = self.write_rest.len().min(self.mtu as usize - 5);
+        let part: Vec<u8> = self.write_rest.drain(..n).collect();
+        let mut p = vec![0x16, handle as u8, (handle >> 8) as u8, self.write_offset as u8, (self.write_offset >> 8) as u8];
+        p.extend_from_slice(&part);
+        self.write_offset += n as u16;
+        self.pending = Some(Request::Prepare(handle));
+        self.att(&p);
+    }
+    fn log_read(&mut self, handle: u16) {
+        let value = std::mem::take(&mut self.read_acc);
+        self.log.push(format!("read handle=0x{handle:04x} value={} text={:?}", hex(&value), String::from_utf8_lossy(&value)));
+    }
     fn l2cap(&mut self, cid: u16, pdu: &[u8]) { self.link.borrow_mut().to_controller.push_back(LinkAction::Data(cid, pdu.to_vec())); }
     fn poll(&mut self) {
         loop {
@@ -228,25 +434,63 @@ impl Peer {
                     self.advertising = true;
                     self.advertisement(adv, response);
                 }
-                LinkEvent::AdvertisingStopped => self.advertising = false,
+                LinkEvent::AdvertisingStopped => {
+                    self.advertising = false;
+                    if self.air { self.air_out.push_back(Air::AdvertisingStopped); }
+                }
+                LinkEvent::ConnectTo(addr) => {
+                    if self.air {
+                        self.air_out.push_back(Air::ConnectRequest(addr));
+                    } else {
+                        self.link.borrow_mut().to_controller.push_back(LinkAction::ConnectFailed(addr));
+                    }
+                }
                 LinkEvent::Scan(active) => {
                     self.link.borrow_mut().to_controller.push_back(LinkAction::Advertisement(ADV.to_vec(), active));
                     self.log.push("scan report name=esp32sim service=180f".into());
+                    self.scanning = Some(active);
+                    self.report_nearby(active);
                 }
+                LinkEvent::ScanStopped => self.scanning = None,
                 LinkEvent::Connected(central) => {
                     self.connecting = false;
                     self.connected = true;
+                    self.mtu = 23;
+                    self.mtu_done = false;
                     self.advertising = false;
                     self.guest_central = central;
+                    if self.remote {
+                        // Jumperly patch J26: a link between two boards: the guests talk to each other.
+                        if self.air && !central { self.air_out.push_back(Air::AdvertisingStopped); }
+                        self.log.push(format!(
+                            "remote connected guest={} peer={}",
+                            if central { "central" } else { "peripheral" },
+                            addr_text(&self.remote_addr)
+                        ));
+                        continue;
+                    }
+                    // Jumperly patch J24: as a phone does, the MTU exchange right after connecting.
+                    if !central {
+                        self.mtu_done = true;
+                        self.pending = Some(Request::Mtu);
+                        self.att(&[2, PEER_MTU as u8, (PEER_MTU >> 8) as u8]);
+                    }
                     self.log.push(format!(
                         "connected handle=0x{HANDLE:04x} guest={}",
                         if central { "central" } else { "peripheral" }
                     ));
                 }
                 LinkEvent::Disconnected => {
+                    if self.remote {
+                        // Jumperly patch J26: this guest ended a link between two boards.
+                        self.remote = false;
+                        self.air_out.push_back(Air::Disconnected);
+                    }
                     self.connecting = false;
                     self.connected = false;
                     self.pending = None;
+                    self.mtu = 23;
+                    self.mtu_done = false;
                     self.log.push("disconnected".into());
                 }
                 LinkEvent::Reset => {
@@ -255,6 +499,7 @@ impl Peer {
                     self.advertising = false;
                     self.pending = None;
                 }
+                LinkEvent::Data(cid, p) if self.remote => self.air_out.push_back(Air::Data(cid, p)),
                 LinkEvent::Data(cid, p) => match cid {
                     4 => self.receive_att(&p),
                     5 if p.len() >= 4 && p[0] == 0x12 => self.l2cap(5, &[0x13, p[1], 2, 0, 0, 0]),
@@ -325,6 +570,12 @@ impl Peer {
         if p[0] == 1 && p.len() == 5 {
             if p[4] == 0x0a && matches!(kind, Request::Services | Request::Characteristics | Request::Descriptors) {
                 self.discovery_next(kind);
+            } else if let (Request::Read(handle), 0x0c) = (kind, p[1]) {
+                // Jumperly patch J24: a read blob past the end (or of a value that is not long)
+                // ends the long read with what it has.
+                self.log_read(handle);
+            } else if kind == Request::Mtu {
+                self.log.push(format!("mtu {}", self.mtu));
             } else {
                 self.log.push(format!(
                     "ATT error request=0x{:02x} handle=0x{:04x} error=0x{:02x}",
@@ -336,12 +587,22 @@ impl Peer {
             return;
         }
         match kind {
-            Request::Read(handle) if p[0] == 0x0b => self.log.push(format!(
-                "read handle=0x{handle:04x} value={} text={:?}",
-                hex(&p[1..]),
-                String::from_utf8_lossy(&p[1..])
-            )),
+            Request::Read(handle) if p[0] == 0x0b || p[0] == 0x0d => {
+                // Jumperly patch J24: a full response may have more: read blob from there.
+                self.read_acc.extend_from_slice(&p[1..]);
+                if p.len() - 1 == self.mtu as usize - 1 && self.read_acc.len() < VALUE_MAX {
+                    let off = self.read_acc.len() as u16;
+                    self.pending = Some(Request::Read(handle));
+                    self.att(&[0x0c, handle as u8, (handle >> 8) as u8, off as u8, (off >> 8) as u8]);
+                } else { self.log_read(handle); }
+            }
             Request::Write(handle) if p == [0x13] => self.log.push(format!("write complete handle=0x{handle:04x}")),
+            Request::Mtu if p[0] == 3 && p.len() == 3 => {
+                self.mtu = word(&p[1..]).clamp(23, PEER_MTU);
+                self.log.push(format!("mtu {}", self.mtu));
+            }
+            Request::Prepare(handle) if p[0] == 0x17 => self.prepare_next(handle),
+            Request::Execute(handle) if p == [0x19] => self.log.push(format!("write complete handle=0x{handle:04x}")),
             Request::Services | Request::Characteristics | Request::Descriptors => {
                 let expected = match kind {
                     Request::Services => 0x11,
@@ -461,8 +722,34 @@ impl Session {
     pub fn new(controller: Box<dyn HciController>, link: Link) -> Self { Self { controller, peer: Peer::new(link), cycles: 0 } }
     pub fn reset(&mut self) {
         self.controller.reset();
+        // Jumperly patch J25: the devices around the user outlive a reboot of the guest.
+        let nearby = std::mem::take(&mut self.peer.nearby);
+        let (air, remote) = (self.peer.air, self.peer.remote);
         self.peer = Peer::new(self.peer.link.clone());
+        self.peer.nearby = nearby;
+        // Jumperly patch J26: the air stays on; a link to another board ends with the reboot.
+        self.peer.air = air;
+        if remote { self.peer.air_out.push_back(Air::Disconnected); }
         self.cycles = 0;
+    }
+    /// Jumperly patch J26: the air between the boards: this controller's address, the frames out
+    /// (`take_air`) and in (`air_in`).
+    pub fn enable_air(&mut self, address: [u8; 6]) {
+        self.controller.set_address(address);
+        self.peer.air = true;
+    }
+    pub fn air_in(&mut self, frame: Air) {
+        self.peer.air_in(frame);
+        self.advance_to(self.cycles);
+    }
+    pub fn take_air(&mut self) -> Vec<Air> {
+        self.advance_to(self.cycles);
+        self.peer.take_air()
+    }
+    /// Jumperly patch J25: `Peer::set_nearby`, then what it sent goes out.
+    pub fn set_nearby(&mut self, list: Vec<Nearby>) {
+        self.peer.set_nearby(list);
+        self.advance_to(self.cycles);
     }
     pub fn advance_to(&mut self, cycles: u64) {
         self.cycles = cycles;
@@ -508,11 +795,15 @@ mod tests {
         cmd(c, 0x200a, &[1]);
         c.command("connect").unwrap();
         while c.pop_packet().is_some() {}
+        // Jumperly patch J24: the guest answers the peer's MTU exchange (the default MTU).
+        acl(c, &[3, 23, 0]);
+        while c.pop_packet().is_some() {}
+        c.drain_log();
     }
     #[test]
     fn full_controller_commands_do_not_queue_in_hci_mode() {
         let mut session = Session::default();
-        for command in ["central-stop", "disconnect", "read-uuid 4fafc201-1fb5-459e-8fcc-c5c9c331914b beb5483e-36e1-4688-b7f5-ea07361b26a8"] {
+        for command in ["central-stop", "read-uuid 4fafc201-1fb5-459e-8fcc-c5c9c331914b beb5483e-36e1-4688-b7f5-ea07361b26a8"] {
             assert!(session.command(command).unwrap_err().contains("requires full BLE"));
             assert_eq!(session.pending_commands(), 0);
         }
@@ -523,7 +814,8 @@ mod tests {
         assert_eq!(hex_bytes("00aAFF"), Some(vec![0,170,255]));
         for bad in ["0", "0g", "é0"] { assert_eq!(hex_bytes(bad), None); }
         assert_eq!("write 1 00aAFF".parse::<Command>().unwrap(), Command::Write(1, vec![0,170,255]));
-        for bad in ["write 1 0", "write 1 zz", "write 1 é0", "write 1 000000000000000000000000000000000000000000"] { assert!(bad.parse::<Command>().is_err()); }
+        let long = format!("write 1 {}", "00".repeat(VALUE_MAX + 1));   // Jumperly patch J24: up to 512 bytes
+        for bad in ["write 1 0", "write 1 zz", "write 1 é0", long.as_str()] { assert!(bad.parse::<Command>().is_err()); }
         assert_eq!(read_by_type(0x1234, 0x5678), [8,0x34,0x12,0x78,0x56,3,0x28]);
     }
 
@@ -593,6 +885,11 @@ mod tests {
         assert_eq!(calls.get(), 64);
         assert_eq!(c.pending_commands(), 1);
         assert_eq!(link.borrow().to_controller.len(), 1);
+        c.advance_to(100);
+        // Jumperly patch J24: the MTU exchange after connecting is one request in flight.
+        assert_eq!(c.pending_commands(), 1);
+        link.borrow_mut().to_controller.clear();
+        link.borrow_mut().to_peer.push_back(LinkEvent::Data(4, vec![3, 23, 0]));
         c.advance_to(100);
         assert_eq!(c.pending_commands(), 0);
         c.command("read 3").unwrap();
@@ -718,6 +1015,11 @@ mod tests {
         cmd(&mut c, 0x200a, &[1]);
         c.pop_packet(); // command complete
         assert_eq!(c.pop_packet().unwrap()[1], 0x3e);
+        // Jumperly patch J24: the MTU exchange first; the queued commands follow its answer.
+        assert_eq!(&c.pop_packet().unwrap()[9..], &[2, 247, 0]);
+        assert!(c.pop_packet().is_none());
+        acl(&mut c, &[3, 23, 0]);
+        c.pop_packet(); // ACL credit
         assert_eq!(&c.pop_packet().unwrap()[9..], &[0x0a, 3, 0]);
         assert!(c.pop_packet().is_none());
         acl(&mut c, &[0x0b, 100]);
@@ -756,6 +1058,7 @@ mod tests {
                     let Some(action) = action else { break };
                     let event = match action {
                         LinkAction::Connect => LinkEvent::Connected(false),
+                        LinkAction::Data(4, p) if p[0] == 2 => LinkEvent::Data(4, vec![3, 23, 0]),
                         LinkAction::Data(4, p) => {
                             assert_eq!(p, [0x0a, 3, 0]);
                             LinkEvent::Data(4, vec![0x0b, 42])
@@ -780,5 +1083,67 @@ mod tests {
         assert_eq!(c.controller.next_deadline(), Some(100));
         assert!(!c.peer.connected);
         assert!(c.peer.commands.is_empty());
+    }
+
+    /// Jumperly patch J24: a phone-like MTU, long reads (read blob) and writes (prepare /
+    /// execute), and the peer ending the connection.
+    #[test]
+    fn mtu_long_values_and_disconnect() {
+        let mut c = Session::default();
+        cmd(&mut c, 0x200a, &[1]);
+        c.command("connect").unwrap();
+        while c.pop_packet().is_some() {}
+        acl(&mut c, &[3, 100, 0]);
+        while c.pop_packet().is_some() {}
+        assert!(c.drain_log().iter().any(|l| l == "mtu 100"));
+        // A long read: a full response (MTU - 1 = 99 bytes) asks for the rest.
+        c.command("read 3").unwrap();
+        while c.pop_packet().is_some() {}
+        let mut full = vec![0x0b];
+        full.extend(std::iter::repeat_n(b'a', 99));
+        acl(&mut c, &full);
+        let blob: Vec<_> = std::iter::from_fn(|| c.pop_packet()).filter(|p| p[0] == 2).collect();
+        assert_eq!(&blob[0][9..], &[0x0c, 3, 0, 99, 0]);
+        acl(&mut c, &[0x0d, b'b', b'c']);
+        while c.pop_packet().is_some() {}
+        let log = c.drain_log();
+        assert!(log.iter().any(|l| l.contains("read handle=0x0003") && l.contains(&format!("text=\"{}bc\"", "a".repeat(99)))), "{log:?}");
+        // A long write: 200 bytes in parts of MTU - 5 = 95, then execute.
+        c.command(&format!("write 3 {}", "41".repeat(200))).unwrap();
+        let parts: Vec<_> = std::iter::from_fn(|| c.pop_packet()).filter(|p| p[0] == 2).collect();
+        assert_eq!(&parts[0][9..14], &[0x16, 3, 0, 0, 0]);
+        assert_eq!(parts[0].len() - 14, 95);
+        acl(&mut c, &[0x17]);
+        let p: Vec<_> = std::iter::from_fn(|| c.pop_packet()).filter(|p| p[0] == 2).collect();
+        assert_eq!(&p[0][9..14], &[0x16, 3, 0, 95, 0]);
+        acl(&mut c, &[0x17]);
+        let p: Vec<_> = std::iter::from_fn(|| c.pop_packet()).filter(|p| p[0] == 2).collect();
+        assert_eq!(&p[0][9..14], &[0x16, 3, 0, 190, 0]);
+        assert_eq!(p[0].len() - 14, 10);
+        acl(&mut c, &[0x17]);
+        let p: Vec<_> = std::iter::from_fn(|| c.pop_packet()).filter(|p| p[0] == 2).collect();
+        assert_eq!(&p[0][9..], &[0x18, 1]);
+        acl(&mut c, &[0x19]);
+        while c.pop_packet().is_some() {}
+        assert!(c.drain_log().iter().any(|l| l == "write complete handle=0x0003"));
+        // The peer ends the connection: the guest gets Disconnection Complete (remote user).
+        c.command("disconnect").unwrap();
+        let events: Vec<_> = std::iter::from_fn(|| c.pop_packet()).collect();
+        assert!(events.iter().any(|e| e == &[4, 5, 4, 0, 1, 0, 0x13]), "{events:?}");
+        assert!(c.drain_log().iter().any(|l| l == "disconnected"));
+        c.command("disconnect").unwrap();
+        assert!(c.drain_log().iter().any(|l| l == "not connected"));
+    }
+
+    /// Jumperly patch J24: a frame longer than the ACL buffer reaches the guest in fragments.
+    #[test]
+    fn long_frames_are_fragmented() {
+        let mut ctl = Controller { connected: true, ..Default::default() };
+        ctl.l2cap(4, &[7u8; 300]);
+        let a = ctl.pop_packet().unwrap();
+        let b = ctl.pop_packet().unwrap();
+        assert_eq!(&a[..5], &[2, 1, 0x20, 0xfb, 0]);
+        assert_eq!(&b[..3], &[2, 1, 0x10]);
+        assert_eq!(a.len() - 5 + b.len() - 5, 304);
     }
 }

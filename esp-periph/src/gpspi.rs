@@ -34,18 +34,20 @@ pub struct GpSpi { pub regs: RegRam, pub w: [u32; 16], pub int_raw: u32, pub int
                    /// the controller's number in log lines: 2 (SPI2 / FSPI, the default) or 3 (the S3's SPI3 / HSPI)
                    pub host: u8,
                    /// bit length of a MOSI phase that DMA must supply, until the bus completes it
-                   pub dma_tx_pending: Option<u32>, pending: Option<GpSpiTransfer> }
+                   pub dma_tx_pending: Option<u32>, pending: Option<GpSpiTransfer>,
+                   /// Jumperly patch J7: a transfer waiting for the host (USR stays busy)
+                   pub host_wait: Option<GpSpiTransfer> }
 impl Default for GpSpi { fn default() -> Self { Self::new() } }
 
 impl GpSpi {
-    pub fn new() -> Self { GpSpi { regs: RegRam::new(), w: [0; 16], int_raw: 0, int_ena: 0, transfers: 0, log: false, host: 2, dma_tx_pending: None, pending: None } }
+    pub fn new() -> Self { GpSpi { regs: RegRam::new(), w: [0; 16], int_raw: 0, int_ena: 0, transfers: 0, log: false, host: 2, dma_tx_pending: None, pending: None, host_wait: None } }
     /// The same block as GP-SPI `host` (2 or 3), for its log lines.
     pub fn with_host(host: u8) -> Self { GpSpi { host, ..Self::new() } }
     pub fn irq(&self) -> bool { self.int_raw & self.int_ena != 0 }
     pub fn read(&self, off: u32) -> u32 {
         match off {
             0x00 => (self.regs.read(0) & !((1 << 23) | (1 << 24)))
-                | if self.pending.is_some() { 1 << 24 } else { 0 }, // USR stays busy until completion
+                | if self.pending.is_some() || self.host_wait.is_some() { 1 << 24 } else { 0 }, // USR stays busy until completion (Jumperly patch J7: also for the host)
             0x34 => self.int_ena, 0x3c => self.int_raw, 0x40 => self.int_raw & self.int_ena,
             0x98..=0xd4 => self.w[((off - 0x98) / 4) as usize],
             0xf0 => 0x2101_0100,
@@ -54,7 +56,7 @@ impl GpSpi {
     }
     pub fn write(&mut self, off: u32, v: u32) {
         match off {
-            0x00 => { self.regs.write(0, v & !((1 << 23) | (1 << 24))); if v & (1 << 24) != 0 && self.pending.is_none() { self.transfer(); } }
+            0x00 => { self.regs.write(0, v & !((1 << 23) | (1 << 24))); if v & (1 << 24) != 0 && self.pending.is_none() && self.host_wait.is_none() { self.transfer(); } }   // Jumperly patch J7
             0x34 => self.int_ena = v, 0x38 => self.int_raw &= !v,
             0x98..=0xd4 => self.w[((off - 0x98) / 4) as usize] = v,
             _ => self.regs.write(off, v),

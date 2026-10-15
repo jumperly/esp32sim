@@ -6,6 +6,10 @@ export function createJitHost(exports) {
   return {
     stats,
     imports: {
+      // Jumperly patch J6 / J7: the bus bridges' imports (`esp32sim_bus_host` turns them on; nothing
+      // here does), so the module links without a host for them: NACK, MISO 0xFF.
+      host_i2c() { return 0; },
+      host_spi_bus() {},
       host_jit_compile(ptr, len) {
         const start = performance.now();
         try {

@@ -10,6 +10,10 @@
 // left alignment inside a 24/32-bit container is inferred, matching the TX pump's read
 // of the top two bytes of each sample (esp32s3/src/bus/dma.rs, dma_i2s_one).
 use super::{I2s, PcmInput, PcmSources};
+use std::collections::VecDeque;
+
+/// Jumperly patch J17: the most frames the host may queue ahead of the receiver.
+pub const HOST_FRAMES_MAX: usize = 1 << 16;
 
 /// Cold receiver state behind one pointer, so an idle controller embeds no queue.
 /// Controller 0 also holds the chip's pin-routed source bank, shared by every receiver.
@@ -19,9 +23,70 @@ pub(super) struct RxState {
     acc: u64,
     buffer: Vec<u8>,
     sources: Option<Box<PcmSources>>,
+    /// Jumperly patch J17: the host supplies the slot words (`host_push`); `host_short` once a due
+    /// frame found none, reported once (`host_asked`) until the host pushes again.
+    host_on: bool,
+    host_frames: VecDeque<[u32; 2]>,
+    host_short: bool,
+    host_asked: bool,
 }
 
 impl I2s {
+    /// Jumperly patch J17: the host supplies the slot words this receiver gets (`host_push`) when
+    /// `on`; a due frame with none queued is silence and `take_host_short` reports it. Off, the
+    /// receiver reads its per-controller input or the pin-routed sources. Survives a chip reset
+    /// with the rest of the receiver state (`keep_rx_input`).
+    pub fn set_host(&mut self, on: bool) {
+        let rx = self.rx.get_or_insert_with(Box::default);
+        rx.host_on = on;
+        if !on { rx.host_frames.clear(); rx.host_short = false; rx.host_asked = false; }
+    }
+    pub fn host_on(&self) -> bool { self.rx.as_ref().is_some_and(|rx| rx.host_on) }
+    /// Jumperly patch J17: queue the host's slot words for the frames to come, the left (WS low) then
+    /// the right (WS high) slot, MSB-aligned: bit 31 is the first bit after the WS edge and the
+    /// one-BCK delay, and the receiver takes its data bits from the top. How many fit.
+    pub fn host_push(&mut self, frames: &[[u32; 2]]) -> usize {
+        let rx = self.rx.get_or_insert_with(Box::default);
+        let n = frames.len().min(HOST_FRAMES_MAX.saturating_sub(rx.host_frames.len()));
+        rx.host_frames.extend(&frames[..n]);
+        if n > 0 { rx.host_asked = false; }
+        n
+    }
+    pub fn host_queued(&self) -> usize { self.rx.as_ref().map_or(0, |rx| rx.host_frames.len()) }
+    /// Jumperly patch J17: how many frames the host should queue so the next `cycles` CPU cycles
+    /// find them (those falling due, less the queued); 0 while the receiver is stopped or clocked
+    /// by nothing the model knows.
+    pub fn host_frames_needed(&self, cycles: u64) -> u32 {
+        if !self.rx_running() { return 0; }
+        let Some(rate) = self.rx_rate() else { return 0 };
+        let (acc, queued) = self.rx.as_ref().map_or((0, 0), |rx| (rx.acc, rx.host_frames.len() as u64));
+        ((acc + cycles * u64::from(rate)) / self.cpu_hz).saturating_sub(queued).min(HOST_FRAMES_MAX as u64) as u32
+    }
+    /// Jumperly patch J17: whether a due frame found no host word since the last call (once, until
+    /// the host pushes again).
+    pub fn take_host_short(&mut self) -> bool { self.rx.as_mut().is_some_and(|rx| std::mem::take(&mut rx.host_short)) }
+    /// Jumperly patch J17: the RX format for the host, eight u32: frame rate Hz, BCK cycles per
+    /// slot, data bits per slot, received slot mask, slots per frame, flags (bit 0 running, bit 1
+    /// Philips one-BCK delay), frames queued, BCK Hz.
+    pub fn host_format(&self) -> [u32; 8] {
+        let (conf1, tdm) = (self.ram.read(0x28), self.ram.read(0x50));
+        let rate = self.rx_rate().unwrap_or(0);
+        let (slot_bits, slots) = (((conf1 >> 24) & 0x1f) + 1, ((tdm >> 16) & 0xf) + 1);
+        [rate, slot_bits, ((conf1 >> 13) & 0x1f) + 1, tdm & 0xffff, slots, u32::from(self.rx_running()) | (((conf1 >> 29) & 1) << 1),
+            self.host_queued() as u32, rate.saturating_mul(slots * slot_bits)]
+    }
+    /// Jumperly patch J17: the host's slot words, silence where it queued none.
+    fn receive_host(&mut self, cycles: u64, pdm2pcm: bool) -> Vec<u8> {
+        let mut frames = self.rx.as_mut().map(|rx| std::mem::take(&mut rx.host_frames)).unwrap_or_default();
+        let mut short = false;
+        let bytes = self.rx_words(cycles, pdm2pcm, |_| frames.pop_front().map_or_else(|| { short = true; [0; 2] }, |[l, r]| [l as i32, r as i32]));
+        if let Some(rx) = &mut self.rx {
+            rx.host_frames = frames;
+            if short && !rx.host_asked { rx.host_asked = true; rx.host_short = true; }
+        }
+        bytes
+    }
+
     #[inline(always)]
     pub fn rx_running(&self) -> bool {
         self.rx_conf & 4 != 0
@@ -93,6 +158,7 @@ impl I2s {
     pub fn receive(&mut self, cycles: u64, now: u64, pdm2pcm: bool,
         gpio: &crate::Gpio, signals: super::RxSignals, sources: Option<&mut super::PcmSources>) -> Vec<u8> {
         let cpu_hz = self.cpu_hz;
+        if self.host_on() { return self.receive_host(cycles, pdm2pcm); }   // Jumperly patch J17
         if let Some(sources) = sources {
             sources.advance_to(now.saturating_sub(cycles), cpu_hz);
             let selected = if sources.active() { sources.select(gpio, signals, self.rx_conf & (1 << 20) != 0) } else { None };
@@ -111,6 +177,12 @@ impl I2s {
     }
 
     pub fn rx_data(&mut self, cycles: u64, pdm2pcm: bool, mut next_frame: impl FnMut(u64) -> [i16; 2]) -> Vec<u8> {
+        self.rx_words(cycles, pdm2pcm, |offset| next_frame(offset).map(|s| i32::from(s) << 16))
+    }
+
+    /// Jumperly patch J17: `rx_data` over left-aligned 32-bit slot words (a 16-bit sample in the
+    /// top half); a container keeps their top bits, so the host's 24 / 32-bit samples arrive whole.
+    fn rx_words(&mut self, cycles: u64, pdm2pcm: bool, mut next_frame: impl FnMut(u64) -> [i32; 2]) -> Vec<u8> {
         let bits = ((self.ram.read(0x28) >> 13) & 31) + 1;
         let tdm = self.ram.read(0x50);
         let mask = tdm & 0xffff;
@@ -147,13 +219,13 @@ impl I2s {
                 if mask & (1 << lane) == 0 {
                     continue;
                 }
-                // Left-aligned: the sample is the top 16 bits of every container.
+                // Left-aligned: the container holds the top bits of the word.
                 if bits == 16 {
-                    bytes.extend_from_slice(&sample.to_le_bytes());
+                    bytes.extend_from_slice(&((sample >> 16) as i16).to_le_bytes());
                 } else if packed24 {
-                    bytes.extend_from_slice(&(i32::from(sample) << 8).to_le_bytes()[..3]);
+                    bytes.extend_from_slice(&sample.to_le_bytes()[1..]);
                 } else {
-                    bytes.extend_from_slice(&(i32::from(sample) << 16).to_le_bytes());
+                    bytes.extend_from_slice(&sample.to_le_bytes());
                 }
                 if self.rx_conf & (1 << 5) != 0 {
                     break;
@@ -284,6 +356,41 @@ mod tests {
         i.write(0x24, 4);
         assert!(i.poll_active());
         assert_eq!(i.frames_due(1000), 0);
+    }
+
+    /// Jumperly patch J17
+    #[test]
+    fn host_words_feed_the_receiver_from_the_top_and_a_shortfall_asks_once() {
+        let mut i = receiver();
+        assert!(!i.host_on());
+        assert_eq!(i.host_frames_needed(40000), 2);
+        i.set_host(true);
+        assert_eq!(i.host_push(&[[0x1234_5678, 0x8765_4321]]), 1);
+        assert_eq!(i.host_frames_needed(40000), 1);
+        assert_eq!(i.host_format(), [8000, 16, 16, 3, 2, 1, 1, 256_000]);
+        // 16-bit: the top 16 bits of each slot; the second frame has no word yet and is silence
+        assert_eq!(i.receive(40000, 40000, true, &crate::Gpio::new(), SIG, None), [0x34, 0x12, 0x65, 0x87, 0, 0, 0, 0]);
+        assert!(i.take_host_short());
+        assert!(!i.take_host_short());
+        assert_eq!(i.receive(20000, 60000, true, &crate::Gpio::new(), SIG, None), [0; 4]);
+        assert!(!i.take_host_short(), "asked once until the host pushes");
+        // 32-bit and packed 24-bit mono left: the whole word, then its top three bytes
+        i.write(0x50, (1 << 16) | 1);
+        i.write(0x28, (24 << 7) | (31 << 13) | (15 << 18) | (31 << 24));
+        assert_eq!(i.host_push(&[[0x0001_0200, 0xffff_ffff], [0x0001_0200, 0xffff_ffff]]), 2);
+        assert_eq!(i.receive(20000, 80000, true, &crate::Gpio::new(), SIG, None), [0x00, 0x02, 0x01, 0x00]);
+        i.write(0x28, (24 << 7) | (23 << 13) | (15 << 18) | (31 << 24));
+        assert_eq!(i.receive(20000, 100000, true, &crate::Gpio::new(), SIG, None), [0x02, 0x01, 0x00]);
+        assert!(!i.take_host_short());
+        assert_eq!(i.host_format()[..5], [8000, 32, 24, 1, 2]);
+        assert_eq!(i.host_push(&vec![[0; 2]; HOST_FRAMES_MAX + 1]), HOST_FRAMES_MAX);
+        // off again: the queue is dropped and the per-controller input is read
+        i.set_host(false);
+        assert_eq!(i.host_queued(), 0);
+        i.rx_input().push(&[[0x0102, 0]]);
+        assert_eq!(i.receive(20000, 120000, true, &crate::Gpio::new(), SIG, None), [0x00, 0x02, 0x01]);
+        i.write(0x20, 0);
+        assert_eq!(i.host_frames_needed(40000), 0, "stopped");
     }
 
     #[test]

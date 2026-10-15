@@ -53,6 +53,17 @@ pub struct SocBus {
     /// GPIO edges for observers, while one wants them: (cycle, pin, level)
     pub gpio_events: Option<Vec<(u64, u8, bool)>>,
     pub debug: esp_soc::DebugFlags,
+    /// Jumperly patch J9: pin states with cycles (`crate::jumperly`), RMT frames with cycles, and the
+    /// request to end the slice (`SocBus::take_slice_yield`).
+    pub pin_watch: Option<crate::jumperly::PinWatch>,
+    /// Jumperly patch J9: RMT frames (cycle, pin, bits), pin 255 when the channel is not routed.
+    pub rmt_tap: Option<Vec<(u64, u8, Vec<bool>)>>,
+    /// Jumperly patch J4: LEDC output changes for the host.
+    pub pwm_tap: Option<crate::pwm::PwmTap>,
+    /// Jumperly patches J6/J7: Wire and SPI2 transactions wait for the host instead of the board.
+    pub i2c_host: bool,
+    pub spi_host: bool,
+    pub(crate) slice_yield: bool,
 }
 
 impl SocBus {
@@ -67,6 +78,21 @@ impl SocBus {
             mmu: [MMU_INVALID; MMU_ENTRIES],
             periph: Peripherals::new(mac), board: Box::new(esp_soc::NoBoard), uart_pins: false, board_edges: false, pins_active: false,
             cycles: 0, last_fault: None, irq_dirty: true, gpio_events: None, debug: Default::default(),
+            pin_watch: None, rmt_tap: None, pwm_tap: None, i2c_host: false, spi_host: false, slice_yield: false,
+        }
+    }
+
+    /// Jumperly patch J4: hand LEDC output changes to the host.
+    pub(crate) fn note_pwm(&mut self) {
+        if let Some(tap) = &mut self.pwm_tap {
+            if tap.check(&self.periph, self.cycles) { self.slice_yield = true; }
+        }
+    }
+
+    /// Jumperly patch J9: a GPIO or IO_MUX register changed — record pin states, end the slice.
+    pub(crate) fn note_pin_write(&mut self) {
+        if let Some(w) = &mut self.pin_watch {
+            if w.check(&self.periph, self.cycles) { self.slice_yield = true; }
         }
     }
 
@@ -134,6 +160,9 @@ impl SocBus {
         if drive != (self.periph.gpio.enable, self.periph.gpio.out) {
             self.deliver_gpio_output();
         }
+        if matches!(a >> 12, 0x60004 | 0x60009) { self.note_pin_write(); }   // Jumperly patch J9: GPIO, IO_MUX
+        if self.pwm_tap.is_some() && pwm_commit(a, v) { self.note_pwm(); }   // Jumperly patch J4
+        if self.periph.i2c.deferred { self.slice_yield = true; }             // Jumperly patch J6
         if let Some(port) = match a { 0x60000000 => Some(0), 0x60010000 => Some(1), _ => None } {
             if self.uart_pins { self.board.uart_tx(self.cycles, self.periph.uart_route(port), v as u8); }
         }
@@ -177,6 +206,11 @@ impl SocBus {
 
     fn deliver_spi2_transfer(&mut self) {
         let Some(transfer) = self.periph.spi2.take_transfer() else { return };
+        if self.spi_host {
+            self.periph.spi2.host_wait = Some(transfer);
+            self.slice_yield = true;
+            return;
+        }   // Jumperly patch J7
         let rx = if self.board.uses_spi_pins() {
             self.board.spi_transfer_pins(2, self.periph.spi2_pins(), &transfer.tx, transfer.rx_len)
         } else {
@@ -392,7 +426,11 @@ impl SocBus {
     #[inline(never)]
     fn deliver_rmt_frames(&mut self) {
         for (ch, bits) in std::mem::take(&mut self.periph.rmt.rmt.done) {
-            for pin in esp_soc::pins::ChipPins::C3.routes(&self.periph.gpio, &self.periph.io_mux).output_pins(51 + ch as u32) { self.board.rmt_frame(pin, &bits); }
+            let pins: Vec<u8> = esp_soc::pins::ChipPins::C3.routes(&self.periph.gpio, &self.periph.io_mux).output_pins(51 + ch as u32).collect();
+            for pin in pins {
+                if let Some(tap) = &mut self.rmt_tap { tap.push((self.cycles, pin, bits.clone())); self.slice_yield = true; }   // Jumperly patch J9
+                self.board.rmt_frame(pin, &bits);
+            }
             self.irq_dirty = true;
         }
     }
@@ -412,6 +450,16 @@ impl SocBus {
         self.periph.gpio.input_changes.clear();
         if self.uart_pins { self.receive_uart_input(); }
         1
+    }
+}
+
+/// Jumperly patch J4: a LEDC channel or timer update with PARA_UP, or a SYSTEM write (clock / reset).
+fn pwm_commit(a: u32, v: u32) -> bool {
+    let off = a & 0xfff;
+    match a >> 12 {
+        0x60019 => (off < 0xa0 && off.is_multiple_of(0x14) && v & (1 << 4) != 0) || ((0xa0..0xc0).contains(&off) && off.is_multiple_of(8) && v & (1 << 25) != 0),
+        0x600c0 => true,
+        _ => false,
     }
 }
 

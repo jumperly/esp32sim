@@ -68,6 +68,16 @@ pub struct SocBus {
     pub irq_dirty: bool,
     /// GPIO edges for observers, while one wants them: (cycle, pin, level)
     pub gpio_events: Option<Vec<(u64, u8, bool)>>,
+    /// Jumperly patch J2: pin states with cycles (`crate::jumperly`), RMT frames with cycles, and the
+    /// request to end the slice (`SocBus::take_slice_yield`).
+    pub pin_watch: Option<crate::jumperly::PinWatch>,
+    pub rmt_tap: Option<Vec<(u64, u8, Vec<bool>)>>,
+    /// Jumperly patch J4: PWM outputs (LEDC, MCPWM) with cycles.
+    pub pwm_tap: Option<crate::pwm::PwmTap>,
+    /// Jumperly patch J6/J7/J18: I2C and SPI2 / SPI3 transactions wait for the host (`esp32sim_bus_service`).
+    pub i2c_host: bool,
+    pub spi_host: bool,
+    pub(crate) slice_yield: bool,
     pub debug: esp_soc::DebugFlags,
     /// Software TLB: the last resolved mapping per 64 KiB page, so loads, stores and fetches skip
     /// the address-range walk and the flash MMU. Cleared whenever the MMU changes.
@@ -151,7 +161,7 @@ impl SocBus {
             ble: Default::default(),
             sram: vec![0; SRAM_SIZE], irom: vec![0; (IROM_MASK_HIGH - IROM_MASK_LOW) as usize], drom: vec![0; (DROM_MASK_HIGH - DROM_MASK_LOW) as usize],
             rtc_fast: vec![0; 8192], rtc_slow: vec![0; 8192], flash: vec![0xff; flash_size], psram: vec![0; psram_size],
-            mmu: [MMU_INVALID; MMU_ENTRIES], periph: Peripherals::new(mac), board: Box::new(crate::board::Atech14::new()), uart_pins: false, cycles: 0, last_fault: None, spi2_dma_fault: None, irq_dirty: false, gpio_events: None, debug: Default::default(), board_edges: true,
+            mmu: [MMU_INVALID; MMU_ENTRIES], periph: Peripherals::new(mac), board: Box::new(crate::board::Atech14::new()), uart_pins: false, cycles: 0, last_fault: None, spi2_dma_fault: None, irq_dirty: false, pin_watch: None, rmt_tap: None, pwm_tap: None, i2c_host: false, spi_host: false, slice_yield: false, gpio_events: None, debug: Default::default(), board_edges: true,
             spi2_timing: false, spi2_scheduled: None, spi2_pins: None, spi3_dma_fault: None, spi3_pins: None,
             tlb: vec![TlbEntry::EMPTY; TLB_SIZE], page_ver: Vec::new(), ver_base: [0; 7], flash_epoch: BUS_EPOCHS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) << 32, code_blk: Vec::new(), tick_pending: 0, tick_budget: 0, defer_mmio: false, mmio_deferred: false, vq_violations: 0,
             approximate_cache: None, approximate_cache_pending: 0, approximate_cache_fast_internal: false, approximate_cache_inline: false,
@@ -536,6 +546,9 @@ impl SocBus {
         if let Some(port) = match a { 0x60000000 => Some(0), 0x60010000 => Some(1), 0x6002e000 => Some(2), _ => None } {
             if self.uart_pins { self.board.uart_tx(self.cycles, self.periph.uart_route(port), v as u8); }
         }
+        if matches!(a >> 12, 0x60004 | 0x60009) { self.note_pin_write(); }   // Jumperly patch J2: GPIO, IO_MUX
+        if self.pwm_tap.is_some() && pwm_commit(a, v) { self.note_pwm(); }   // Jumperly patch J4
+        if self.periph.i2c.iter().any(|c| c.deferred) { self.slice_yield = true; }   // Jumperly patch J6
         self.complete_spi2_dma();
         self.deliver_spi2_transfer();
         self.complete_spi3_dma();
@@ -801,6 +814,21 @@ impl Bus for SocBus {
 }
 
 impl SocBus {
+    /// Jumperly patch J2: a GPIO or IO_MUX register changed — record pin states, end the slice.
+    pub(crate) fn note_pin_write(&mut self) {
+        if let Some(w) = &mut self.pin_watch {
+            if w.check(&self.periph, self.cycles) { self.slice_yield = true; }
+        }
+    }
+
+    /// Jumperly patch J4: hand LEDC / MCPWM output changes to the host; without a tap nothing is watched.
+    pub(crate) fn note_pwm(&mut self) {
+        if let Some(tap) = &mut self.pwm_tap {
+            if tap.check(&self.periph, self.cycles) { self.slice_yield = true; }
+        }
+    }
+
+
     fn cadence_active(&self) -> bool {
         let p = &self.periph;
         p.i2s0.active() || p.i2s1.active()
@@ -841,6 +869,9 @@ impl SocBus {
     pub(crate) fn peripheral_clock_offset(&self) -> u64 {
         self.cycles - u64::from(self.tick_pending) - self.periph.clock_cycles()
     }
+
+    /// Jumperly patch J17: elapsed cycles the device models have not seen yet (`flush_ticks`).
+    pub fn pending_cycles(&self) -> u64 { u64::from(self.tick_pending) }
 
     /// Deliver the deferred cycles to the device models now.
     pub fn flush_ticks(&mut self) {
@@ -894,7 +925,14 @@ impl SocBus {
     #[inline(never)]
     fn deliver_rmt_frames(&mut self) {
         for (ch, bits) in std::mem::take(&mut self.periph.rmt.done) {
-            for pin in esp_soc::pins::ChipPins::S3.routes(&self.periph.gpio, &self.periph.io_mux).output_pins(RMT_SIG_OUT0 + ch as u32) { self.board.rmt_frame(pin, &bits); }
+            let pins: Vec<u8> = esp_soc::pins::ChipPins::S3.routes(&self.periph.gpio, &self.periph.io_mux).output_pins(RMT_SIG_OUT0 + ch as u32).collect();
+            // Jumperly patch J2: the host sees every frame with its pin (255 when the channel is routed nowhere)
+            if let Some(tap) = &mut self.rmt_tap {
+                if pins.is_empty() { tap.push((self.cycles, u8::MAX, bits.clone())); }
+                for &pin in &pins { tap.push((self.cycles, pin, bits.clone())); }
+                self.slice_yield = true;
+            }
+            for pin in pins { self.board.rmt_frame(pin, &bits); }
         }
         self.irq_dirty = true;
     }
@@ -915,3 +953,16 @@ mod memory_origin_regressions;
 
 #[path = "bus/pins.rs"]
 mod pins;
+
+/// Jumperly patch J4: does this write commit a PWM configuration the host should see? A LEDC channel
+/// (CHn_CONF0) or timer (TIMERn_CONF) update with its PARA_UP bit, any MCPWM write, and SYSTEM
+/// (clock gating, reset). The register writes the drivers make on the way (timer pause / reset
+/// bits, duty without PARA_UP) pass through states no circuit should see.
+fn pwm_commit(a: u32, v: u32) -> bool {
+    let off = a & 0xfff;
+    match a >> 12 {
+        0x60019 => (off < 0xa0 && off.is_multiple_of(0x14) && v & (1 << 4) != 0) || ((0xa0..0xc0).contains(&off) && off.is_multiple_of(8) && v & (1 << 25) != 0),
+        0x6001e | 0x6002c | 0x600c0 => true,
+        _ => false,
+    }
+}

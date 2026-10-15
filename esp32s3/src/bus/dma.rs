@@ -197,6 +197,7 @@ impl SocBus {
             self.periph.gpio.changes.clear();
         }
         let pins = if host == 2 { self.spi2_pins.take() } else { self.spi3_pins.take() };
+        if self.spi_host { self.periph.gpspi_mut(host).host_wait = Some(transfer); self.slice_yield = true; return; }   // Jumperly patch J7 / J18
         let rx = if let Some(pins) = pins {
             self.board.spi_transfer_pins(host, pins, &transfer.tx, transfer.rx_len)
         } else {
@@ -317,7 +318,9 @@ impl SocBus {
         let i2s = if port == 0 { &mut self.periph.i2s0 } else { &mut self.periph.i2s1 };
         let bytes = i2s.receive(cycles, self.cycles, port == 0, &self.periph.gpio, signals, bank.as_deref_mut());
         let eof = i2s.read(0x64);
+        let short = i2s.take_host_short();
         self.periph.i2s0.restore_pcm_bank(bank);
+        if short { self.slice_yield = true; }   // Jumperly patch J17: let the host queue more
         let _ = self.scatter_dma_in(ch, &bytes, Some(eof), false);
         let i2s = if port == 0 { &mut self.periph.i2s0 } else { &mut self.periph.i2s1 };
         i2s.recycle_rx_buffer(bytes);
