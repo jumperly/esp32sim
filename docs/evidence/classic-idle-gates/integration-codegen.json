@@ -1,0 +1,218 @@
+{
+  "exact_parent": "377716b8e39103711bf9ba27e3e33722410461e1",
+  "integrated_base": {
+    "parents": [
+      "377716b8e39103711bf9ba27e3e33722410461e1",
+      "f5a038bf"
+    ],
+    "tree": "9ecda1315f451881710b8096fa732a4ddfdf3988",
+    "method": "clean merge of exact #230 and current main, without #224"
+  },
+  "classic_total": 27,
+  "classic_same": 19,
+  "classic_tick_insns": [
+    2308,
+    2310
+  ],
+  "classic_machine": [
+    {
+      "name": "<esp_soc::machine::Machine<esp32::soc::Esp32>>::after_round",
+      "insns": 84,
+      "only_immediate_delta": 16,
+      "changed_immediates": 20
+    },
+    {
+      "name": "<esp_soc::machine::Machine<esp32::soc::Esp32>>::run_modeled",
+      "insns": 3445,
+      "only_immediate_delta": 16,
+      "changed_immediates": 143
+    },
+    {
+      "name": "<esp_soc::machine::Machine<esp32::soc::Esp32>>::run_unmodeled::<false>",
+      "insns": 1708,
+      "only_immediate_delta": 16,
+      "changed_immediates": 121
+    },
+    {
+      "name": "<esp_soc::machine::Machine<esp32::soc::Esp32>>::settle_modeled_time",
+      "insns": 737,
+      "only_immediate_delta": 16,
+      "changed_immediates": 63
+    },
+    {
+      "name": "<esp_soc::machine::Machine<esp32::soc::Esp32>>::step_core",
+      "insns": 838,
+      "only_immediate_delta": 16,
+      "changed_immediates": 54
+    }
+  ],
+  "other_total": 119,
+  "other_same_exact_parent": 118,
+  "other_same_integrated_base": 119,
+  "c3_difference": "two ldrb offsets +1, reproduced by main integration alone (#227 SpiMem field)",
+  "method": "Rust 1.99.0 cargo build --release --bins; llvm-objdump --disassemble --demangle --no-show-raw-insn; classic-idle-gates/disasm.py and classic-core/hot.py",
+  "classic_rows": [
+    {
+      "name": "<esp32::bus::SocBus as emu_core::bus::Bus>::tick",
+      "base_insns": 2308,
+      "candidate_insns": 2310,
+      "same": false
+    },
+    {
+      "name": "<esp32::i2s::ClassicI2s as esp_periph::device::Device>::read",
+      "base_insns": 85,
+      "candidate_insns": 85,
+      "same": true
+    },
+    {
+      "name": "<esp32::i2s::ClassicI2s as esp_periph::device::Device>::write",
+      "base_insns": 172,
+      "candidate_insns": 172,
+      "same": true
+    },
+    {
+      "name": "<esp32::ledc::ClassicLedc as esp_periph::device::Device>::read",
+      "base_insns": 90,
+      "candidate_insns": 90,
+      "same": true
+    },
+    {
+      "name": "<esp32::ledc::ClassicLedc as esp_periph::device::Device>::tick",
+      "base_insns": 433,
+      "candidate_insns": 433,
+      "same": true
+    },
+    {
+      "name": "<esp32::periph::ClassicGpio as esp_periph::device::Device>::read",
+      "base_insns": 251,
+      "candidate_insns": 251,
+      "same": true
+    },
+    {
+      "name": "<esp32::periph::ClassicGpio as esp_periph::device::Device>::write",
+      "base_insns": 556,
+      "candidate_insns": 556,
+      "same": true
+    },
+    {
+      "name": "<esp32::periph::ClassicRtc as esp_periph::device::Device>::read",
+      "base_insns": 91,
+      "candidate_insns": 91,
+      "same": true
+    },
+    {
+      "name": "<esp32::periph::ClassicRtc as esp_periph::device::Device>::write",
+      "base_insns": 41,
+      "candidate_insns": 41,
+      "same": true
+    },
+    {
+      "name": "<esp32::periph::ClassicSpi as esp_periph::device::Device>::read",
+      "base_insns": 0,
+      "candidate_insns": 78,
+      "same": false
+    },
+    {
+      "name": "<esp32::periph::ClassicSpi as esp_periph::device::Device>::write",
+      "base_insns": 0,
+      "candidate_insns": 78,
+      "same": false
+    },
+    {
+      "name": "<esp32::periph::Peripherals as esp_periph::mmio::Dispatch>::tick_optional",
+      "base_insns": 10,
+      "candidate_insns": 10,
+      "same": true
+    },
+    {
+      "name": "<esp32::rmt::ClassicRmt as esp_periph::device::Device>::tick",
+      "base_insns": 53,
+      "candidate_insns": 53,
+      "same": true
+    },
+    {
+      "name": "<esp32::spi::ClassicGpSpi as esp_periph::device::Device>::read",
+      "base_insns": 59,
+      "candidate_insns": 59,
+      "same": true
+    },
+    {
+      "name": "<esp32::spi::ClassicGpSpi>::write",
+      "base_insns": 386,
+      "candidate_insns": 386,
+      "same": true
+    },
+    {
+      "name": "<esp32::timers::ClassicTimer as esp_periph::device::Device>::read",
+      "base_insns": 96,
+      "candidate_insns": 96,
+      "same": true
+    },
+    {
+      "name": "<esp32::timers::ClassicTimer as esp_periph::device::Device>::tick",
+      "base_insns": 189,
+      "candidate_insns": 189,
+      "same": true
+    },
+    {
+      "name": "<esp32::timers::ClassicTimer as esp_periph::device::Device>::write",
+      "base_insns": 94,
+      "candidate_insns": 94,
+      "same": true
+    },
+    {
+      "name": "<esp32::wifi::Analog as esp_periph::device::Device>::read",
+      "base_insns": 102,
+      "candidate_insns": 102,
+      "same": true
+    },
+    {
+      "name": "<esp32::wifi::WifiMac as esp_periph::device::Device>::read",
+      "base_insns": 172,
+      "candidate_insns": 172,
+      "same": true
+    },
+    {
+      "name": "<esp32::wifi::WifiMac as esp_periph::device::Device>::write",
+      "base_insns": 219,
+      "candidate_insns": 219,
+      "same": true
+    },
+    {
+      "name": "<esp_soc::machine::Machine<esp32::soc::Esp32>>::after_round",
+      "base_insns": 84,
+      "candidate_insns": 84,
+      "same": false
+    },
+    {
+      "name": "<esp_soc::machine::Machine<esp32::soc::Esp32>>::run_modeled",
+      "base_insns": 3445,
+      "candidate_insns": 3445,
+      "same": false
+    },
+    {
+      "name": "<esp_soc::machine::Machine<esp32::soc::Esp32>>::run_unmodeled::<false>",
+      "base_insns": 1708,
+      "candidate_insns": 1708,
+      "same": false
+    },
+    {
+      "name": "<esp_soc::machine::Machine<esp32::soc::Esp32>>::settle_modeled_time",
+      "base_insns": 737,
+      "candidate_insns": 737,
+      "same": false
+    },
+    {
+      "name": "<esp_soc::machine::Machine<esp32::soc::Esp32>>::step_core",
+      "base_insns": 838,
+      "candidate_insns": 838,
+      "same": false
+    },
+    {
+      "name": "<esp_soc::machine::modeled::RecordingBus<esp32::bus::SocBus> as emu_core::bus::Bus>::write32",
+      "base_insns": 40,
+      "candidate_insns": 40,
+      "same": true
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+[
+  {
+    "fixture": "gpio",
+    "insns": 800000,
+    "cycles": 2400000,
+    "interrupts": 0,
+    "transactions": 0,
+    "console_sha256": "333e0a1e27815d0ceee55c473fe3dc93d56c63e3bee2b3b4aee8eed6d70191a3",
+    "elf_sha256": "1081999e2f9b2be9e3b767aead8610f7a104aab89b53be9b8e03ad1d56a4b780",
+    "both_identical": true
+  },
+  {
+    "fixture": "i2c",
+    "insns": 800000,
+    "cycles": 2400000,
+    "interrupts": 0,
+    "transactions": 42105,
+    "console_sha256": "333e0a1e27815d0ceee55c473fe3dc93d56c63e3bee2b3b4aee8eed6d70191a3",
+    "elf_sha256": "bbe023bc33e24ff36a10d35c52168dba2cab238571b61bca6c3a0dca52933706",
+    "both_identical": true
+  },
+  {
+    "fixture": "classic-hello-3s",
+    "core0_insns": 4610036,
+    "core1_insns": 668561,
+    "cycles": 720000000,
+    "exceptions": 3174,
+    "interrupts": 597,
+    "console_sha256": "8d8b7d143063e8d3d97b278cc43b326fc0378bf89d6a6ff7091a1f72b4c4c4ff",
+    "both_identical": true
+  }
+]

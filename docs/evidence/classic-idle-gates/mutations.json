@@ -1,0 +1,50 @@
+[
+  {
+    "mutation": "ledc-call",
+    "test": "classic_idle_gates_skip_adapter_calls",
+    "exit": 101,
+    "killed": true
+  },
+  {
+    "mutation": "rmt-call",
+    "test": "classic_idle_gates_skip_adapter_calls",
+    "exit": 101,
+    "killed": true
+  },
+  {
+    "mutation": "wifi-call",
+    "test": "classic_wifi_clock_and_reset_skip_step",
+    "exit": 101,
+    "killed": true
+  },
+  {
+    "mutation": "wifi-clock",
+    "test": "classic_wifi_clock_and_reset_skip_step",
+    "exit": 101,
+    "killed": true
+  },
+  {
+    "mutation": "wifi-reset",
+    "test": "classic_wifi_clock_and_reset_skip_step",
+    "exit": 101,
+    "killed": true
+  },
+  {
+    "mutation": "i2s-clock",
+    "test": "classic_i2s_clock_reset_and_pending_gates",
+    "exit": 101,
+    "killed": true
+  },
+  {
+    "mutation": "i2s-reset",
+    "test": "classic_i2s_clock_reset_and_pending_gates",
+    "exit": 101,
+    "killed": true
+  },
+  {
+    "mutation": "i2s-pending",
+    "test": "classic_i2s_clock_reset_and_pending_gates",
+    "exit": 101,
+    "killed": true
+  }
+]

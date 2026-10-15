@@ -1,0 +1,102 @@
+[
+  {
+    "mutation": "idle-gate",
+    "assertion_killed": true,
+    "exit": 101,
+    "tests": [
+      "bus::tests::irq_events_timer_alarm_and_clear_keep_both_core_lines_live",
+      "bus::tests::irq_events_idle_polling_is_clean_but_writes_and_inputs_are_dirty"
+    ]
+  },
+  {
+    "mutation": "bus-propagation",
+    "assertion_killed": true,
+    "exit": 101,
+    "tests": [
+      "bus::irq_event_tests::irq_events_gpio_output_transition_without_peripheral_irq",
+      "bus::irq_event_tests::irq_events_rtc_dispatch_transition_reaches_bus_dirty",
+      "bus::tests::irq_events_timer_alarm_and_clear_keep_both_core_lines_live",
+      "bus::irq_event_tests::irq_events_manual_apb_ledc_and_rmt_transitions"
+    ]
+  },
+  {
+    "mutation": "dispatch-propagation",
+    "assertion_killed": true,
+    "exit": 101,
+    "tests": [
+      "bus::irq_event_tests::irq_events_rtc_dispatch_transition_reaches_bus_dirty"
+    ]
+  },
+  {
+    "mutation": "manual-timer",
+    "assertion_killed": true,
+    "exit": 101,
+    "tests": [
+      "bus::tests::irq_events_timer_alarm_and_clear_keep_both_core_lines_live"
+    ]
+  },
+  {
+    "mutation": "manual-ledc",
+    "assertion_killed": true,
+    "exit": 101,
+    "tests": [
+      "bus::irq_event_tests::irq_events_manual_apb_ledc_and_rmt_transitions"
+    ]
+  },
+  {
+    "mutation": "manual-rmt",
+    "assertion_killed": true,
+    "exit": 101,
+    "tests": [
+      "bus::irq_event_tests::irq_events_manual_apb_ledc_and_rmt_transitions"
+    ]
+  },
+  {
+    "mutation": "routed-gpio",
+    "assertion_killed": true,
+    "exit": 101,
+    "tests": [
+      "bus::irq_event_tests::irq_events_gpio_output_transition_without_peripheral_irq"
+    ]
+  },
+  {
+    "mutation": "core-release",
+    "assertion_killed": true,
+    "exit": 101,
+    "tests": [
+      "irq_events_guest_release_edge",
+      "irq_events_held_release_republishes_level_and_edge_after_reset",
+      "irq_events_repeated_reset_clock_hold_stall_and_script_release",
+      "irq_events_guest_release_level"
+    ]
+  },
+  {
+    "mutation": "unmodeled-reset-order",
+    "assertion_killed": true,
+    "exit": 101,
+    "tests": [
+      "irq_events_guest_release_edge",
+      "irq_events_repeated_reset_clock_hold_stall_and_script_release",
+      "irq_events_guest_release_level",
+      "irq_events_held_release_republishes_level_and_edge_after_reset"
+    ]
+  },
+  {
+    "mutation": "modeled-reset-order",
+    "assertion_killed": true,
+    "exit": 101,
+    "tests": [
+      "irq_events_guest_release_level",
+      "irq_events_guest_release_edge",
+      "irq_events_repeated_reset_clock_hold_stall_and_script_release"
+    ]
+  },
+  {
+    "mutation": "board-reset",
+    "assertion_killed": true,
+    "exit": 101,
+    "tests": [
+      "bus::irq_event_tests::irq_events_board_and_chip_reset_invalidate"
+    ]
+  }
+]

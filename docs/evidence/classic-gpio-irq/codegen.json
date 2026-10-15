@@ -1,0 +1,813 @@
+{
+  "method": "EX230 address-normalized instructions, preserving field offsets and opcodes; no timing",
+  "base_revision": "ab89dc543bd8aa23b2d39f2cc48348ea5a0793ea",
+  "artifacts": [
+    {
+      "label": "base",
+      "binary_sha256": "2d7c150e364e24dc01b8fb014f0eff40f9a5357d81c289129f1b2f11d9f545e2",
+      "disassembly_sha256": "c5dd83be603b1a5f4305884d8fd4ad5902192516dbe6d020d439f7490c5aa736"
+    },
+    {
+      "label": "candidate",
+      "binary_sha256": "4ceff2c354adbaa7c14e43c3b3f91e18f975fb021f795d4e154b77e073195928",
+      "disassembly_sha256": "6711b17a86ff698a8e0eacb9a543f3764412b7f9727bca4a08c6a85c0d8badf4"
+    }
+  ],
+  "selected": 99,
+  "same": 78,
+  "different": 21,
+  "rows": [
+    {
+      "name": "<esp32::bus::SocBus as emu_core::bus::Bus>::fetch",
+      "base_instructions": 122,
+      "candidate_instructions": 122,
+      "same": false,
+      "base_sha256": "075612130190993e9c3d6aef469ee4d9b497f780f5e73a93b7868f4583a602ce",
+      "candidate_sha256": "2893b9bf8a3ec8e0cc6cd2956eb3924f315a0014ea2cf1e7524cd24b98fe29ee"
+    },
+    {
+      "name": "<esp32::bus::SocBus as emu_core::bus::Bus>::read32",
+      "base_instructions": 171,
+      "candidate_instructions": 171,
+      "same": false,
+      "base_sha256": "d54fbb93e087f1c35c93eded38014362fd8979f493df555af3c9a18fec39022f",
+      "candidate_sha256": "411fa09db277022cbca4dba0120206b68ad381e6b5595251dfc9f18210ddd245"
+    },
+    {
+      "name": "<esp32::bus::SocBus as emu_core::bus::Bus>::tick",
+      "base_instructions": 1854,
+      "candidate_instructions": 1927,
+      "same": false,
+      "base_sha256": "f0bc7ab17574aeea4b201cd27eada46742208b5042950a10a3f420c8883de753",
+      "candidate_sha256": "b80db57ac718471896552ba0141975207c54dfb32824fe37b5ee3d6c1d9913fb"
+    },
+    {
+      "name": "<esp32::bus::SocBus as esp_soc::soc::SocBus>::next_deadline",
+      "base_instructions": 817,
+      "candidate_instructions": 817,
+      "same": false,
+      "base_sha256": "a9d8a0859aed326214c55400c7e06eeb67284c521d9457cb2c06eb142f8dc038",
+      "candidate_sha256": "77d25c96483526c1c3c32eb54be1293726eaf6e3bbc0f2baaa4f24b6515892ac"
+    },
+    {
+      "name": "<esp32::ledc::ClassicLedc as esp_periph::device::Device>::next_deadline::{closure#0}",
+      "base_instructions": 81,
+      "candidate_instructions": 81,
+      "same": true,
+      "base_sha256": "221282c0e785e7182616f73630b3e601e56ecffab1c2a48bbfb3ce52532e71b9",
+      "candidate_sha256": "221282c0e785e7182616f73630b3e601e56ecffab1c2a48bbfb3ce52532e71b9"
+    },
+    {
+      "name": "<esp32::ledc::ClassicLedc as esp_periph::device::Device>::tick",
+      "base_instructions": 433,
+      "candidate_instructions": 433,
+      "same": true,
+      "base_sha256": "f358ccb49b6b5d7952a38b9486df1f68d79d4bb66c99d69eab434f7b2e044c31",
+      "candidate_sha256": "f358ccb49b6b5d7952a38b9486df1f68d79d4bb66c99d69eab434f7b2e044c31"
+    },
+    {
+      "name": "<esp32::periph::ClassicGpio as esp_periph::device::Device>::read",
+      "base_instructions": 381,
+      "candidate_instructions": 251,
+      "same": false,
+      "base_sha256": "b6015b65bd4d644bbfcae59f8a1270fd18176eb2b24bea0f7971e262b9c43dec",
+      "candidate_sha256": "cd1285a543e3c3e7fb38760f29a806430d7f817001c98d0a00e5750f2d885978"
+    },
+    {
+      "name": "<esp32::periph::ClassicGpio as esp_periph::device::Device>::write",
+      "base_instructions": 489,
+      "candidate_instructions": 556,
+      "same": false,
+      "base_sha256": "0e8e5a7d504854a0df9ab924cee55f6483b3c0fd170cfb6e30c2da216f29e9d7",
+      "candidate_sha256": "d7c51f3af12c8f296e9f08600a8fa5c6165f3c127cc16ac84444173869e95502"
+    },
+    {
+      "name": "<esp32::periph::ClassicGpio>::raw_status",
+      "base_instructions": 71,
+      "candidate_instructions": 0,
+      "same": false,
+      "base_sha256": "e84b2eda0b7e4046cfaad3f35a63a7b5cef67ced706b1744140e4c9446a2781b",
+      "candidate_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "<esp32::periph::ClassicGpio>::refresh_level_status",
+      "base_instructions": 0,
+      "candidate_instructions": 91,
+      "same": false,
+      "base_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "candidate_sha256": "3f2086681ee7c11a79f8ef50a2b1d3a76afe371b03a3952c7f8c801f1703ad66"
+    },
+    {
+      "name": "<esp32::periph::ClassicGpio>::set_output_signal",
+      "base_instructions": 0,
+      "candidate_instructions": 81,
+      "same": false,
+      "base_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "candidate_sha256": "816256173c0c4ea9df095d22db51c2a69e300206da9c2437239156bd4b3d03b2"
+    },
+    {
+      "name": "<esp32::periph::ClassicRtc as esp_periph::device::Device>::read",
+      "base_instructions": 91,
+      "candidate_instructions": 91,
+      "same": true,
+      "base_sha256": "0535fd628c027b36700ed0ed5637dfa038ad2a767d806c8c4af89e856faad392",
+      "candidate_sha256": "0535fd628c027b36700ed0ed5637dfa038ad2a767d806c8c4af89e856faad392"
+    },
+    {
+      "name": "<esp32::periph::ClassicRtc as esp_periph::device::Device>::write",
+      "base_instructions": 41,
+      "candidate_instructions": 41,
+      "same": true,
+      "base_sha256": "801c19b0087885633b49b40f85da05d39fe5a3c9bc8fcaeffb99984c0a14afd5",
+      "candidate_sha256": "801c19b0087885633b49b40f85da05d39fe5a3c9bc8fcaeffb99984c0a14afd5"
+    },
+    {
+      "name": "<esp32::periph::Peripherals as esp_periph::mmio::Dispatch>::source_status",
+      "base_instructions": 0,
+      "candidate_instructions": 288,
+      "same": false,
+      "base_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "candidate_sha256": "8d6636727812d15fa990b54479eef22fe119538bbda87c33342646944daf9c1a"
+    },
+    {
+      "name": "<esp32::periph::Peripherals as esp_periph::mmio::Dispatch>::tick_optional",
+      "base_instructions": 10,
+      "candidate_instructions": 10,
+      "same": true,
+      "base_sha256": "a5e1b2f4dea78988f0d494dc05f54166437ba2bd03d4864227fa9975f95f65a5",
+      "candidate_sha256": "a5e1b2f4dea78988f0d494dc05f54166437ba2bd03d4864227fa9975f95f65a5"
+    },
+    {
+      "name": "<esp32::periph::Peripherals>::read32",
+      "base_instructions": 596,
+      "candidate_instructions": 624,
+      "same": false,
+      "base_sha256": "fd9ebc6b8e06e2b18357fc56dce32b5f8361f310e22a550567c5e9567b50ab14",
+      "candidate_sha256": "a4ffaf03d8384e990a43b7ed398ca9283038f63e4928f5665bdd51ec92fad12b"
+    },
+    {
+      "name": "<esp32::periph::Peripherals>::source_status",
+      "base_instructions": 323,
+      "candidate_instructions": 0,
+      "same": false,
+      "base_sha256": "bd4e1215fcf9a2f50d11763ac6fffeeb2a7cd3899676d64b14dd6464d6809248",
+      "candidate_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "<esp32::periph::Peripherals>::sync_ledc_outputs",
+      "base_instructions": 164,
+      "candidate_instructions": 0,
+      "same": false,
+      "base_sha256": "55f1de863943f984dc11e242d2012afbbd07c26bca5ced53911da979c5bb4552",
+      "candidate_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "<esp32::periph::Peripherals>::sync_rmt_outputs",
+      "base_instructions": 167,
+      "candidate_instructions": 0,
+      "same": false,
+      "base_sha256": "90c173076cbf04fe0e7af82821dfedfc12f4dd8631b515649afb5782f4af5834",
+      "candidate_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "<esp32::rmt::ClassicRmt as esp_periph::device::Device>::tick",
+      "base_instructions": 53,
+      "candidate_instructions": 53,
+      "same": true,
+      "base_sha256": "f4b800a97d1687e999da7d01b5a501b2f744ed26d661bd5d1dd98b728568da5c",
+      "candidate_sha256": "f4b800a97d1687e999da7d01b5a501b2f744ed26d661bd5d1dd98b728568da5c"
+    },
+    {
+      "name": "<esp32::timers::ClassicTimer as esp_periph::device::Device>::tick",
+      "base_instructions": 189,
+      "candidate_instructions": 189,
+      "same": true,
+      "base_sha256": "42bd4dc3bf262f709d01d6bb9596d64a140697a5c305b871eb01f4593a7b3224",
+      "candidate_sha256": "42bd4dc3bf262f709d01d6bb9596d64a140697a5c305b871eb01f4593a7b3224"
+    },
+    {
+      "name": "<esp32c3::bus::SocBus as emu_core::bus::Bus>::fetch",
+      "base_instructions": 103,
+      "candidate_instructions": 103,
+      "same": true,
+      "base_sha256": "d0452f1935925c483029c2d5f2242fad68804f3283edc7667dab2bbb8efa72bd",
+      "candidate_sha256": "d0452f1935925c483029c2d5f2242fad68804f3283edc7667dab2bbb8efa72bd"
+    },
+    {
+      "name": "<esp32c3::bus::SocBus as emu_core::bus::Bus>::read32",
+      "base_instructions": 114,
+      "candidate_instructions": 114,
+      "same": true,
+      "base_sha256": "d54bd67992fc26a81644fa18e9a46efecb2c35691e6f77370b1a4a96a7348527",
+      "candidate_sha256": "d54bd67992fc26a81644fa18e9a46efecb2c35691e6f77370b1a4a96a7348527"
+    },
+    {
+      "name": "<esp32c3::bus::SocBus as emu_core::bus::Bus>::tick",
+      "base_instructions": 279,
+      "candidate_instructions": 279,
+      "same": true,
+      "base_sha256": "6ef33bf07b453078c7fef47c5094ded8dbaba3c696b4750153aadde5550e9333",
+      "candidate_sha256": "6ef33bf07b453078c7fef47c5094ded8dbaba3c696b4750153aadde5550e9333"
+    },
+    {
+      "name": "<esp32c3::bus::SocBus as emu_core::bus::Bus>::write32",
+      "base_instructions": 56,
+      "candidate_instructions": 56,
+      "same": true,
+      "base_sha256": "778fca96ea37418a853b59be513948934803efb3107f0fdcceca07adc220529b",
+      "candidate_sha256": "778fca96ea37418a853b59be513948934803efb3107f0fdcceca07adc220529b"
+    },
+    {
+      "name": "<esp32c3::bus::SocBus as esp_soc::soc::SocBus>::next_deadline",
+      "base_instructions": 194,
+      "candidate_instructions": 194,
+      "same": true,
+      "base_sha256": "e1d72ce7be4f115d184fe7f62c1d5051cfd27b1be9637745df755de9dc866a56",
+      "candidate_sha256": "e1d72ce7be4f115d184fe7f62c1d5051cfd27b1be9637745df755de9dc866a56"
+    },
+    {
+      "name": "<esp32c3::bus::SocBus>::tick_with_pins",
+      "base_instructions": 475,
+      "candidate_instructions": 475,
+      "same": true,
+      "base_sha256": "88ff89c4560cb2987dc54f68a6f0b9b3dd892921e4a744b1843a3b81a38c1ba3",
+      "candidate_sha256": "88ff89c4560cb2987dc54f68a6f0b9b3dd892921e4a744b1843a3b81a38c1ba3"
+    },
+    {
+      "name": "<esp32c3::periph::Peripherals as esp_periph::mmio::Dispatch>::tick_optional",
+      "base_instructions": 365,
+      "candidate_instructions": 365,
+      "same": true,
+      "base_sha256": "cb08568ca9afd6af71d24925ab1f8df6999b344f53f7fd3520c6c9ead0277efc",
+      "candidate_sha256": "cb08568ca9afd6af71d24925ab1f8df6999b344f53f7fd3520c6c9ead0277efc"
+    },
+    {
+      "name": "<esp32c6::bus::SocBus as emu_core::bus::Bus>::fetch",
+      "base_instructions": 106,
+      "candidate_instructions": 106,
+      "same": true,
+      "base_sha256": "0bcb56bbd9b302a2212aa48dc78eb96732c3eeb0161534fd44e80aae0b36ffaf",
+      "candidate_sha256": "0bcb56bbd9b302a2212aa48dc78eb96732c3eeb0161534fd44e80aae0b36ffaf"
+    },
+    {
+      "name": "<esp32c6::bus::SocBus as emu_core::bus::Bus>::read32",
+      "base_instructions": 96,
+      "candidate_instructions": 96,
+      "same": true,
+      "base_sha256": "ba99894d9a935f04ac7520e2576dc8d7bc4bf7b16122d2862e04928a25fab78a",
+      "candidate_sha256": "ba99894d9a935f04ac7520e2576dc8d7bc4bf7b16122d2862e04928a25fab78a"
+    },
+    {
+      "name": "<esp32c6::bus::SocBus as emu_core::bus::Bus>::tick",
+      "base_instructions": 1983,
+      "candidate_instructions": 1983,
+      "same": true,
+      "base_sha256": "4caa768f9ca9f18cc793b4569e18e38bbd6291674b6a9ed0fb2a3f42e90a460f",
+      "candidate_sha256": "4caa768f9ca9f18cc793b4569e18e38bbd6291674b6a9ed0fb2a3f42e90a460f"
+    },
+    {
+      "name": "<esp32c6::bus::SocBus as emu_core::bus::Bus>::write32",
+      "base_instructions": 48,
+      "candidate_instructions": 48,
+      "same": true,
+      "base_sha256": "dc142b16a6fa00208393514828afefc260ce5689521ca6e98c94657617daf27c",
+      "candidate_sha256": "dc142b16a6fa00208393514828afefc260ce5689521ca6e98c94657617daf27c"
+    },
+    {
+      "name": "<esp32c6::bus::SocBus as esp_soc::soc::SocBus>::next_deadline",
+      "base_instructions": 298,
+      "candidate_instructions": 298,
+      "same": true,
+      "base_sha256": "62bc38448de5d127812956a102ebe2f793be4946bdadb32aa7df124aa0187cfc",
+      "candidate_sha256": "62bc38448de5d127812956a102ebe2f793be4946bdadb32aa7df124aa0187cfc"
+    },
+    {
+      "name": "<esp32c6::periph::Peripherals as esp_periph::mmio::Dispatch>::tick_optional",
+      "base_instructions": 277,
+      "candidate_instructions": 277,
+      "same": true,
+      "base_sha256": "37c63ee45a81c9b82dd05fd78052ca1097eff2946273e1173bd687d52b32c03d",
+      "candidate_sha256": "37c63ee45a81c9b82dd05fd78052ca1097eff2946273e1173bd687d52b32c03d"
+    },
+    {
+      "name": "<esp32s3::bus::SocBus as emu_core::bus::Bus>::fetch",
+      "base_instructions": 102,
+      "candidate_instructions": 102,
+      "same": true,
+      "base_sha256": "f7588308412dde9b7bf37baff866c032132ee84d8798dfeaf7ee4a0af5136a70",
+      "candidate_sha256": "f7588308412dde9b7bf37baff866c032132ee84d8798dfeaf7ee4a0af5136a70"
+    },
+    {
+      "name": "<esp32s3::bus::SocBus as emu_core::bus::Bus>::read32",
+      "base_instructions": 235,
+      "candidate_instructions": 235,
+      "same": true,
+      "base_sha256": "5c5aed7c12542c4c5e8952f3a8d13616ad0edb795621fb08d45f7ac39b8904ff",
+      "candidate_sha256": "5c5aed7c12542c4c5e8952f3a8d13616ad0edb795621fb08d45f7ac39b8904ff"
+    },
+    {
+      "name": "<esp32s3::bus::SocBus as emu_core::bus::Bus>::tick",
+      "base_instructions": 26,
+      "candidate_instructions": 26,
+      "same": true,
+      "base_sha256": "cceac9638a2607e5d35cbf2ce60f2498baeb97c1be818d8fea29d35f13401a03",
+      "candidate_sha256": "cceac9638a2607e5d35cbf2ce60f2498baeb97c1be818d8fea29d35f13401a03"
+    },
+    {
+      "name": "<esp32s3::bus::SocBus as emu_core::bus::Bus>::write32",
+      "base_instructions": 315,
+      "candidate_instructions": 315,
+      "same": true,
+      "base_sha256": "a0ba93c46236bfc3c65b8793daa8fd90d8c0ec2ad34d12dae78c8cf92e8ac601",
+      "candidate_sha256": "a0ba93c46236bfc3c65b8793daa8fd90d8c0ec2ad34d12dae78c8cf92e8ac601"
+    },
+    {
+      "name": "<esp32s3::bus::SocBus>::read32_access::<false>",
+      "base_instructions": 128,
+      "candidate_instructions": 128,
+      "same": true,
+      "base_sha256": "a1fe07f40198b50058aeaad33f9b97842ca412c73d39dff2a76a0cce5f49dc5f",
+      "candidate_sha256": "a1fe07f40198b50058aeaad33f9b97842ca412c73d39dff2a76a0cce5f49dc5f"
+    },
+    {
+      "name": "<esp32s3::bus::SocBus>::tick_impl",
+      "base_instructions": 3686,
+      "candidate_instructions": 3686,
+      "same": true,
+      "base_sha256": "7ef93f5cacc240fa3877e60896793c88d5438ec8c147cad8c1c3d888bed3bb65",
+      "candidate_sha256": "0a64224b28d00a2419fdd173430b6924ab2a45ac29aeb4c8ff37755995a87898"
+    },
+    {
+      "name": "<esp32s3::bus::SocBus>::write32_access::<false>",
+      "base_instructions": 199,
+      "candidate_instructions": 199,
+      "same": true,
+      "base_sha256": "28aa5aa6eb0211b91b248b38ba706fec6dc42adde389ebdc792f20fac76609b5",
+      "candidate_sha256": "28aa5aa6eb0211b91b248b38ba706fec6dc42adde389ebdc792f20fac76609b5"
+    },
+    {
+      "name": "<esp32s3::periph::Peripherals as esp_periph::mmio::Dispatch>::tick_optional",
+      "base_instructions": 394,
+      "candidate_instructions": 394,
+      "same": true,
+      "base_sha256": "1ecebb427f647234699fe7bcef2c16aac5f8519d57a3e833f96b9ca8899675e5",
+      "candidate_sha256": "1ecebb427f647234699fe7bcef2c16aac5f8519d57a3e833f96b9ca8899675e5"
+    },
+    {
+      "name": "<esp_periph::i2c::I2c as esp_periph::device::Device>::tick",
+      "base_instructions": 316,
+      "candidate_instructions": 316,
+      "same": true,
+      "base_sha256": "c2f39986a127a7ba950ec3788eab9d1adc24c64b48c6313bc29e45e10685a5ce",
+      "candidate_sha256": "c2f39986a127a7ba950ec3788eab9d1adc24c64b48c6313bc29e45e10685a5ce"
+    },
+    {
+      "name": "<esp_periph::ledc::Ledc as esp_periph::device::Device>::tick",
+      "base_instructions": 186,
+      "candidate_instructions": 186,
+      "same": true,
+      "base_sha256": "55ca9c2ee789fbbad21e0d2334c56d40e6cee17d1baafef67105ce30b3621592",
+      "candidate_sha256": "55ca9c2ee789fbbad21e0d2334c56d40e6cee17d1baafef67105ce30b3621592"
+    },
+    {
+      "name": "<esp_periph::ledc::Ledc<true>>::next_wrap::<<esp32::ledc::ClassicLedc as esp_periph::device::Device>::next_deadline::{closure#0}::{closure#0}>::{closure#0}",
+      "base_instructions": 175,
+      "candidate_instructions": 175,
+      "same": true,
+      "base_sha256": "6e6aea9e1f7b6520640692f31040dea9b779a0feda32477a00f3bd71689912ac",
+      "candidate_sha256": "6e6aea9e1f7b6520640692f31040dea9b779a0feda32477a00f3bd71689912ac"
+    },
+    {
+      "name": "<esp_periph::mcpwm::Mcpwm as esp_periph::device::Device>::tick",
+      "base_instructions": 335,
+      "candidate_instructions": 335,
+      "same": true,
+      "base_sha256": "92ec9f117e6548a8b39172eec31b90d641787bfc3cb96e592dfbbc4c06a44b8a",
+      "candidate_sha256": "92ec9f117e6548a8b39172eec31b90d641787bfc3cb96e592dfbbc4c06a44b8a"
+    },
+    {
+      "name": "<esp_periph::rmt::Rmt>::tick",
+      "base_instructions": 286,
+      "candidate_instructions": 286,
+      "same": true,
+      "base_sha256": "46497d03be950e6aaf8ee967ebd40ce9031ece7c55b4805eabc5d9accef516c6",
+      "candidate_sha256": "46497d03be950e6aaf8ee967ebd40ce9031ece7c55b4805eabc5d9accef516c6"
+    },
+    {
+      "name": "<esp_periph::rmt::RmtDma>::tick",
+      "base_instructions": 555,
+      "candidate_instructions": 555,
+      "same": true,
+      "base_sha256": "40288c48505a2a8c38426b549d9e44bee469a7b8cbc1553d80d1d6e1a7f10b5c",
+      "candidate_sha256": "40288c48505a2a8c38426b549d9e44bee469a7b8cbc1553d80d1d6e1a7f10b5c"
+    },
+    {
+      "name": "<esp_periph::rtc_cntl::RtcCntl as esp_periph::device::Device>::tick",
+      "base_instructions": 291,
+      "candidate_instructions": 291,
+      "same": true,
+      "base_sha256": "ca9d93eba0273a47e9141c32873731b47a3e5d8a325aa702f7dca504ea17878c",
+      "candidate_sha256": "ca9d93eba0273a47e9141c32873731b47a3e5d8a325aa702f7dca504ea17878c"
+    },
+    {
+      "name": "<esp_periph::systimer::Systimer as esp_periph::device::Device>::tick",
+      "base_instructions": 93,
+      "candidate_instructions": 93,
+      "same": true,
+      "base_sha256": "ee20746b181967e241b4598731088e508cf3373141219b368756ca6c6b83f894",
+      "candidate_sha256": "ee20746b181967e241b4598731088e508cf3373141219b368756ca6c6b83f894"
+    },
+    {
+      "name": "<esp_periph::timg::TimerGroup as esp_periph::device::Device>::tick",
+      "base_instructions": 127,
+      "candidate_instructions": 127,
+      "same": true,
+      "base_sha256": "00cb9a9f132aab705fe34bba80aa2858d29ef33441c3661ec2a095b761c3992c",
+      "candidate_sha256": "00cb9a9f132aab705fe34bba80aa2858d29ef33441c3661ec2a095b761c3992c"
+    },
+    {
+      "name": "<esp_soc::machine::Machine<esp32::soc::Esp32>>::after_round",
+      "base_instructions": 81,
+      "candidate_instructions": 81,
+      "same": false,
+      "base_sha256": "4c69ac9da4d98583c06eeeec3830d79fed6582eea7ddb46394fee5c32e19159d",
+      "candidate_sha256": "106a915b20a6b9cc5470996b55241a1c13c9a3b9b376dbc336368ddbf580ec4e"
+    },
+    {
+      "name": "<esp_soc::machine::Machine<esp32::soc::Esp32>>::present_irqs",
+      "base_instructions": 207,
+      "candidate_instructions": 234,
+      "same": false,
+      "base_sha256": "7686d471a7941bc8801432b46abec4a36a324e2d1f3476dc88df1f97392cba09",
+      "candidate_sha256": "fff64377c60218502a0058ff4ece152162688d4d8bbf044cd8a144a8399c914d"
+    },
+    {
+      "name": "<esp_soc::machine::Machine<esp32::soc::Esp32>>::run_modeled",
+      "base_instructions": 3445,
+      "candidate_instructions": 3445,
+      "same": false,
+      "base_sha256": "70e777874672b924aa7157a477f82ab79562ece3e1b466073c2e298ad1b19705",
+      "candidate_sha256": "78cac9dab8f1df6670e6afc6e49a1e71e497f5e47c1885608611e4b39c4b353c"
+    },
+    {
+      "name": "<esp_soc::machine::Machine<esp32::soc::Esp32>>::run_unmodeled::<false>",
+      "base_instructions": 1707,
+      "candidate_instructions": 1707,
+      "same": false,
+      "base_sha256": "66191084823012f6a688274a7d3cb55350a4c7fe90e99431ad2abb1817fde2c2",
+      "candidate_sha256": "5c6e63346ed91ba0e8e360fa18b13b02f31f26e57e04eb45b16883baa0d46644"
+    },
+    {
+      "name": "<esp_soc::machine::Machine<esp32::soc::Esp32>>::step_core",
+      "base_instructions": 838,
+      "candidate_instructions": 838,
+      "same": false,
+      "base_sha256": "0f69db8338b890a142c662c66fd5222d5a4efee76734f3d3eeeceb045a13c554",
+      "candidate_sha256": "04b396a14c8fef9be8bb7c2ae6b4c38cfe03f3d89b0d7327733467bd9fc74b85"
+    },
+    {
+      "name": "<esp_soc::machine::Machine<esp32c3::soc::C3>>::after_round",
+      "base_instructions": 84,
+      "candidate_instructions": 84,
+      "same": true,
+      "base_sha256": "f0dc858a3840fae0bf15f00119b900bcf0116bcdd1d121c002573870087511bf",
+      "candidate_sha256": "f0dc858a3840fae0bf15f00119b900bcf0116bcdd1d121c002573870087511bf"
+    },
+    {
+      "name": "<esp_soc::machine::Machine<esp32c3::soc::C3>>::present_irqs",
+      "base_instructions": 119,
+      "candidate_instructions": 119,
+      "same": true,
+      "base_sha256": "2cda84930c0e1eea027fb60de32f3bf8ee5fa99aac54b503fcf9d21ee38426ed",
+      "candidate_sha256": "2cda84930c0e1eea027fb60de32f3bf8ee5fa99aac54b503fcf9d21ee38426ed"
+    },
+    {
+      "name": "<esp_soc::machine::Machine<esp32c3::soc::C3>>::run",
+      "base_instructions": 4319,
+      "candidate_instructions": 4319,
+      "same": true,
+      "base_sha256": "ae957662e5caf6ab236554e7e67e8418efe64e94bf42f826035f05d22f225520",
+      "candidate_sha256": "ae957662e5caf6ab236554e7e67e8418efe64e94bf42f826035f05d22f225520"
+    },
+    {
+      "name": "<esp_soc::machine::Machine<esp32c3::soc::C3>>::run_unmodeled::<false>",
+      "base_instructions": 1048,
+      "candidate_instructions": 1048,
+      "same": true,
+      "base_sha256": "8ed7faa11bf731648fba79bc829a5275ed5cd49cd276ed96f05150e94c76b671",
+      "candidate_sha256": "8ed7faa11bf731648fba79bc829a5275ed5cd49cd276ed96f05150e94c76b671"
+    },
+    {
+      "name": "<esp_soc::machine::Machine<esp32c3::soc::C3>>::step_core",
+      "base_instructions": 463,
+      "candidate_instructions": 463,
+      "same": true,
+      "base_sha256": "36083527b101a55b868538ae95c07c0d47147b59e9e81ad878c2f99a2a32c5ab",
+      "candidate_sha256": "36083527b101a55b868538ae95c07c0d47147b59e9e81ad878c2f99a2a32c5ab"
+    },
+    {
+      "name": "<esp_soc::machine::Machine<esp32c6::soc::C6>>::after_round",
+      "base_instructions": 92,
+      "candidate_instructions": 92,
+      "same": true,
+      "base_sha256": "acc32a7d3f7ec76deddd5b8cfbf0ca8b01af15870810e8e39c1ac7db21c29f5f",
+      "candidate_sha256": "acc32a7d3f7ec76deddd5b8cfbf0ca8b01af15870810e8e39c1ac7db21c29f5f"
+    },
+    {
+      "name": "<esp_soc::machine::Machine<esp32c6::soc::C6>>::present_irqs",
+      "base_instructions": 120,
+      "candidate_instructions": 120,
+      "same": true,
+      "base_sha256": "efcfd8a61fe504390431c12eaf3c755945ec7727a41c33b6aa869e9ef4311993",
+      "candidate_sha256": "efcfd8a61fe504390431c12eaf3c755945ec7727a41c33b6aa869e9ef4311993"
+    },
+    {
+      "name": "<esp_soc::machine::Machine<esp32c6::soc::C6>>::run",
+      "base_instructions": 4325,
+      "candidate_instructions": 4325,
+      "same": true,
+      "base_sha256": "b08120b5be01d47df730ed19b054914a7b96dec838a5d4b16541e30edb0de2e2",
+      "candidate_sha256": "b08120b5be01d47df730ed19b054914a7b96dec838a5d4b16541e30edb0de2e2"
+    },
+    {
+      "name": "<esp_soc::machine::Machine<esp32c6::soc::C6>>::run_unmodeled::<false>",
+      "base_instructions": 1053,
+      "candidate_instructions": 1053,
+      "same": true,
+      "base_sha256": "e958e81358194dbf99773464464a9c2dc80dd27b45306a7e34efe5f49a5a1db4",
+      "candidate_sha256": "e958e81358194dbf99773464464a9c2dc80dd27b45306a7e34efe5f49a5a1db4"
+    },
+    {
+      "name": "<esp_soc::machine::Machine<esp32c6::soc::C6>>::step_core",
+      "base_instructions": 465,
+      "candidate_instructions": 465,
+      "same": true,
+      "base_sha256": "3176100d79be1660afacf7e5bbe89630e00c5f5d05f76163ce5f822e76b51377",
+      "candidate_sha256": "3176100d79be1660afacf7e5bbe89630e00c5f5d05f76163ce5f822e76b51377"
+    },
+    {
+      "name": "<esp_soc::machine::Machine<esp32s3::soc::S3>>::after_round",
+      "base_instructions": 114,
+      "candidate_instructions": 114,
+      "same": true,
+      "base_sha256": "28fc1203a48a5c45e014a0eab07583a5000af083614d59cc41d1dbc128e4a38f",
+      "candidate_sha256": "28fc1203a48a5c45e014a0eab07583a5000af083614d59cc41d1dbc128e4a38f"
+    },
+    {
+      "name": "<esp_soc::machine::Machine<esp32s3::soc::S3>>::present_irqs",
+      "base_instructions": 247,
+      "candidate_instructions": 247,
+      "same": true,
+      "base_sha256": "7fbd2c79dfac45a8710a59976ca094932726aa3c09e14b0e6a2f6d51b841de31",
+      "candidate_sha256": "7fbd2c79dfac45a8710a59976ca094932726aa3c09e14b0e6a2f6d51b841de31"
+    },
+    {
+      "name": "<esp_soc::machine::Machine<esp32s3::soc::S3>>::run_modeled",
+      "base_instructions": 3378,
+      "candidate_instructions": 3378,
+      "same": true,
+      "base_sha256": "97d6d8583dcd6d046ff5f574daef2d28f9170ea95d1ea31f708468ab999b42e3",
+      "candidate_sha256": "97d6d8583dcd6d046ff5f574daef2d28f9170ea95d1ea31f708468ab999b42e3"
+    },
+    {
+      "name": "<esp_soc::machine::Machine<esp32s3::soc::S3>>::run_unmodeled::<false>",
+      "base_instructions": 3311,
+      "candidate_instructions": 3311,
+      "same": true,
+      "base_sha256": "722b2e4b1332a60755c247170a26f41642545756adb1cd191c40548fd1342579",
+      "candidate_sha256": "722b2e4b1332a60755c247170a26f41642545756adb1cd191c40548fd1342579"
+    },
+    {
+      "name": "<esp_soc::machine::Machine<esp32s3::soc::S3>>::step_core",
+      "base_instructions": 990,
+      "candidate_instructions": 990,
+      "same": true,
+      "base_sha256": "86a8eef90d9729ef7d21a22bea155a77dbaa9c6aa02fecd58222f640cad27801",
+      "candidate_sha256": "86a8eef90d9729ef7d21a22bea155a77dbaa9c6aa02fecd58222f640cad27801"
+    },
+    {
+      "name": "<esp_soc::machine::modeled::RecordingBus<esp32::bus::SocBus> as emu_core::bus::Bus>::read32",
+      "base_instructions": 37,
+      "candidate_instructions": 37,
+      "same": true,
+      "base_sha256": "c38d702cdcb308b12d1e414ad2f9695abd616762ca0661a8e1fac9033fbad826",
+      "candidate_sha256": "c38d702cdcb308b12d1e414ad2f9695abd616762ca0661a8e1fac9033fbad826"
+    },
+    {
+      "name": "<esp_soc::machine::modeled::RecordingBus<esp32::bus::SocBus> as emu_core::bus::Bus>::write32",
+      "base_instructions": 40,
+      "candidate_instructions": 40,
+      "same": true,
+      "base_sha256": "ee19fd614839e39a33147b48812b98ecf4d2fd5b11634a94c5417352f1ef0eaa",
+      "candidate_sha256": "ee19fd614839e39a33147b48812b98ecf4d2fd5b11634a94c5417352f1ef0eaa"
+    },
+    {
+      "name": "<esp_soc::machine::modeled::RecordingBus<esp32c3::bus::SocBus> as emu_core::bus::Bus>::read32",
+      "base_instructions": 37,
+      "candidate_instructions": 37,
+      "same": true,
+      "base_sha256": "e03b88dcba8fecff607094ea91dc52bd6817928442f49ce44bbbf4df9791d1e0",
+      "candidate_sha256": "e03b88dcba8fecff607094ea91dc52bd6817928442f49ce44bbbf4df9791d1e0"
+    },
+    {
+      "name": "<esp_soc::machine::modeled::RecordingBus<esp32c3::bus::SocBus> as emu_core::bus::Bus>::write32",
+      "base_instructions": 90,
+      "candidate_instructions": 90,
+      "same": true,
+      "base_sha256": "93c07cbcb140b82e88258c4e72a196278cef75184bed85131855e6b9b9216ad1",
+      "candidate_sha256": "93c07cbcb140b82e88258c4e72a196278cef75184bed85131855e6b9b9216ad1"
+    },
+    {
+      "name": "<esp_soc::machine::modeled::RecordingBus<esp32c6::bus::SocBus> as emu_core::bus::Bus>::read32",
+      "base_instructions": 37,
+      "candidate_instructions": 37,
+      "same": true,
+      "base_sha256": "7cf885c0ca568538b3a5df2ca894313ccec4d2eb3df19dccaea92c70876995d1",
+      "candidate_sha256": "7cf885c0ca568538b3a5df2ca894313ccec4d2eb3df19dccaea92c70876995d1"
+    },
+    {
+      "name": "<esp_soc::machine::modeled::RecordingBus<esp32c6::bus::SocBus> as emu_core::bus::Bus>::write32",
+      "base_instructions": 87,
+      "candidate_instructions": 87,
+      "same": true,
+      "base_sha256": "50c218b85706e389188b8f7879733b2ebc095ae946d792a99865f6a2be622afb",
+      "candidate_sha256": "50c218b85706e389188b8f7879733b2ebc095ae946d792a99865f6a2be622afb"
+    },
+    {
+      "name": "<esp_soc::machine::modeled::RecordingBus<esp32s3::bus::SocBus> as emu_core::bus::Bus>::read32",
+      "base_instructions": 37,
+      "candidate_instructions": 37,
+      "same": true,
+      "base_sha256": "442180a67edbb2011aa9af1f86f1e72629d1b068e2e2fab7363f65728eb71598",
+      "candidate_sha256": "442180a67edbb2011aa9af1f86f1e72629d1b068e2e2fab7363f65728eb71598"
+    },
+    {
+      "name": "<esp_soc::machine::modeled::RecordingBus<esp32s3::bus::SocBus> as emu_core::bus::Bus>::write32",
+      "base_instructions": 35,
+      "candidate_instructions": 35,
+      "same": true,
+      "base_sha256": "a0cdd57ee1c6a261e50d8816ee8a216c18472216ca287264a93e0fc97b6616a0",
+      "candidate_sha256": "a0cdd57ee1c6a261e50d8816ee8a216c18472216ca287264a93e0fc97b6616a0"
+    },
+    {
+      "name": "<xtensa_lx7::state::Cpu as emu_core::core::Core>::run::<esp32::bus::SocBus>",
+      "base_instructions": 706,
+      "candidate_instructions": 706,
+      "same": false,
+      "base_sha256": "d502599fa2e4015576ea03559f1fc074a44a1e4ff60e8dc190d86c4c454f1099",
+      "candidate_sha256": "ba37b08d1014b92d4ea864ad3d6ae2e82b7c0ba8cce5fe3bdb4cce5958cdae4d"
+    },
+    {
+      "name": "<xtensa_lx7::state::Cpu as emu_core::core::Core>::run::<esp32s3::bus::SocBus>",
+      "base_instructions": 948,
+      "candidate_instructions": 948,
+      "same": true,
+      "base_sha256": "7d6d3cdfc8dfbd217e82ba70b287e6b040b7181234207373687b65026a020380",
+      "candidate_sha256": "7d6d3cdfc8dfbd217e82ba70b287e6b040b7181234207373687b65026a020380"
+    },
+    {
+      "name": "xtensa_lx7::block::step_extra::<esp32::bus::SocBus>",
+      "base_instructions": 143,
+      "candidate_instructions": 143,
+      "same": false,
+      "base_sha256": "7cd27dd0ae4c11b32d8f56ed0cf6fd6b8d046762281e0b888f350806577019cc",
+      "candidate_sha256": "f93aaa1256219cb0a762275d1b026ae7989d21d86ad3d862d9f19f4daa380192"
+    },
+    {
+      "name": "xtensa_lx7::block::step_extra::<esp32s3::bus::SocBus>",
+      "base_instructions": 143,
+      "candidate_instructions": 143,
+      "same": true,
+      "base_sha256": "57abd92d2a24c52d2f2459c4187c9e7f24cc9a3a4ca9b68dab9bd097fb27d317",
+      "candidate_sha256": "57abd92d2a24c52d2f2459c4187c9e7f24cc9a3a4ca9b68dab9bd097fb27d317"
+    },
+    {
+      "name": "xtensa_lx7::exec::exec_insn::<esp32::bus::SocBus>",
+      "base_instructions": 2566,
+      "candidate_instructions": 2566,
+      "same": true,
+      "base_sha256": "0a454783b0a11b87202f2818b892152bfa1090e23e3d298ca664e0a411cd2361",
+      "candidate_sha256": "0a454783b0a11b87202f2818b892152bfa1090e23e3d298ca664e0a411cd2361"
+    },
+    {
+      "name": "xtensa_lx7::exec::exec_insn::<esp32s3::bus::SocBus>",
+      "base_instructions": 2562,
+      "candidate_instructions": 2562,
+      "same": true,
+      "base_sha256": "e882cb577944e43518178823403f62654e8225d342c6c6d2dfd9c36dca6b17b4",
+      "candidate_sha256": "e882cb577944e43518178823403f62654e8225d342c6c6d2dfd9c36dca6b17b4"
+    },
+    {
+      "name": "xtensa_lx7::exec::exec_insn::<esp_soc::machine::modeled::RecordingBus<esp32::bus::SocBus>>",
+      "base_instructions": 2562,
+      "candidate_instructions": 2562,
+      "same": true,
+      "base_sha256": "3dff1a402c1a44e60afba630ca3b3aa7c179004a2ab25da63171fcbdfb978188",
+      "candidate_sha256": "3dff1a402c1a44e60afba630ca3b3aa7c179004a2ab25da63171fcbdfb978188"
+    },
+    {
+      "name": "xtensa_lx7::exec::exec_insn::<esp_soc::machine::modeled::RecordingBus<esp32s3::bus::SocBus>>",
+      "base_instructions": 2562,
+      "candidate_instructions": 2562,
+      "same": true,
+      "base_sha256": "2aaaedf45938a929bc7397c59466384057ac94e1d723615d37cf3e2cfbd46581",
+      "candidate_sha256": "2aaaedf45938a929bc7397c59466384057ac94e1d723615d37cf3e2cfbd46581"
+    },
+    {
+      "name": "xtensa_lx7::exec::exec_mac16::<esp32::bus::SocBus>",
+      "base_instructions": 208,
+      "candidate_instructions": 208,
+      "same": true,
+      "base_sha256": "1dc7bb6643480da8c75397d9ad58d9726f10dea88936c19f8fb5625fd728e0e7",
+      "candidate_sha256": "1dc7bb6643480da8c75397d9ad58d9726f10dea88936c19f8fb5625fd728e0e7"
+    },
+    {
+      "name": "xtensa_lx7::exec::exec_mac16::<esp32s3::bus::SocBus>",
+      "base_instructions": 208,
+      "candidate_instructions": 208,
+      "same": true,
+      "base_sha256": "d76485d06819019eb8a8f71386de5aec51b75d9c2e2b5a2896b0ffe9c08baf8a",
+      "candidate_sha256": "d76485d06819019eb8a8f71386de5aec51b75d9c2e2b5a2896b0ffe9c08baf8a"
+    },
+    {
+      "name": "xtensa_lx7::exec::exec_mac16::<esp_soc::machine::modeled::RecordingBus<esp32::bus::SocBus>>",
+      "base_instructions": 261,
+      "candidate_instructions": 261,
+      "same": true,
+      "base_sha256": "0ba1f74db7d29f72ec7b918efd19ad1d761d004877a4e7c63021a1f7796d151d",
+      "candidate_sha256": "0ba1f74db7d29f72ec7b918efd19ad1d761d004877a4e7c63021a1f7796d151d"
+    },
+    {
+      "name": "xtensa_lx7::exec::exec_mac16::<esp_soc::machine::modeled::RecordingBus<esp32s3::bus::SocBus>>",
+      "base_instructions": 261,
+      "candidate_instructions": 261,
+      "same": true,
+      "base_sha256": "eba91c0fd1a9b34dcee34832b51f35da58f4913edc3f141110dd05a9698a4391",
+      "candidate_sha256": "eba91c0fd1a9b34dcee34832b51f35da58f4913edc3f141110dd05a9698a4391"
+    },
+    {
+      "name": "xtensa_lx7::pie::exec::<esp32::bus::SocBus>",
+      "base_instructions": 468,
+      "candidate_instructions": 468,
+      "same": true,
+      "base_sha256": "1c1dd4f93ab43a2ec1ea1adb6cf8819cf7deb261a9f1695381c6f664a7837685",
+      "candidate_sha256": "1c1dd4f93ab43a2ec1ea1adb6cf8819cf7deb261a9f1695381c6f664a7837685"
+    },
+    {
+      "name": "xtensa_lx7::pie::exec::<esp32s3::bus::SocBus>",
+      "base_instructions": 467,
+      "candidate_instructions": 467,
+      "same": true,
+      "base_sha256": "014f11ddb98dd37fb396fb4d7e9b221bc1167ef9271e7a87bfe8d6919cbf39df",
+      "candidate_sha256": "014f11ddb98dd37fb396fb4d7e9b221bc1167ef9271e7a87bfe8d6919cbf39df"
+    },
+    {
+      "name": "xtensa_lx7::pie::exec::<esp_soc::machine::modeled::RecordingBus<esp32::bus::SocBus>>",
+      "base_instructions": 776,
+      "candidate_instructions": 776,
+      "same": true,
+      "base_sha256": "3e5450200421075a4f33f805f920fa57f5820902129d9fb7357d92868617e435",
+      "candidate_sha256": "3e5450200421075a4f33f805f920fa57f5820902129d9fb7357d92868617e435"
+    },
+    {
+      "name": "xtensa_lx7::pie::exec::<esp_soc::machine::modeled::RecordingBus<esp32s3::bus::SocBus>>",
+      "base_instructions": 768,
+      "candidate_instructions": 768,
+      "same": true,
+      "base_sha256": "abb594d57d14fc894a828d09a6cec8ad449ed44d1db215433ed817da207eac87",
+      "candidate_sha256": "abb594d57d14fc894a828d09a6cec8ad449ed44d1db215433ed817da207eac87"
+    },
+    {
+      "name": "xtensa_lx7::pie::exec_table::<esp32::bus::SocBus>",
+      "base_instructions": 4774,
+      "candidate_instructions": 4774,
+      "same": true,
+      "base_sha256": "3922787fe94d5119a4d2b91e0b302966c9354ce38255b1096fa06cfaaeed3ac3",
+      "candidate_sha256": "3922787fe94d5119a4d2b91e0b302966c9354ce38255b1096fa06cfaaeed3ac3"
+    },
+    {
+      "name": "xtensa_lx7::pie::exec_table::<esp32s3::bus::SocBus>",
+      "base_instructions": 4741,
+      "candidate_instructions": 4741,
+      "same": true,
+      "base_sha256": "759525b00e705d527d60dd4995eed8e083db7379c793adb02ec80dd630ded383",
+      "candidate_sha256": "759525b00e705d527d60dd4995eed8e083db7379c793adb02ec80dd630ded383"
+    },
+    {
+      "name": "xtensa_lx7::pie::exec_table::<esp_soc::machine::modeled::RecordingBus<esp32::bus::SocBus>>",
+      "base_instructions": 5721,
+      "candidate_instructions": 5721,
+      "same": true,
+      "base_sha256": "d116e624161f83c71327f6fe3dda72db9a230cab49d307f7286b8991f9512768",
+      "candidate_sha256": "d116e624161f83c71327f6fe3dda72db9a230cab49d307f7286b8991f9512768"
+    },
+    {
+      "name": "xtensa_lx7::pie::exec_table::<esp_soc::machine::modeled::RecordingBus<esp32s3::bus::SocBus>>",
+      "base_instructions": 5723,
+      "candidate_instructions": 5723,
+      "same": true,
+      "base_sha256": "d1153d6a7245afec855ff6d595129871b22ff90b6e3fa63a22a6a3212147b4f0",
+      "candidate_sha256": "d1153d6a7245afec855ff6d595129871b22ff90b6e3fa63a22a6a3212147b4f0"
+    }
+  ]
+}

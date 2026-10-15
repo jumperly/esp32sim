@@ -1,5 +1,5 @@
 //! Classic I2S RX register adapter and native descriptor DMA.
-//! ESP-IDF v5.5.4 components/soc/esp32/register/soc/i2s_reg.h: CONF bits 21-125,
+//! ESP-IDF v5.5.4 components/soc/esp32/register/soc/i2s_reg.h: CONF bits 21-128,
 //! interrupt _S defines 142-184, RXEOF_NUM 676-682, CONF_CHAN 692-695, INLINK_ADDR 763-768,
 //! LC_CONF 856-868, clocks 1340-1390. include/soc/gpio_sig_map.h:69-72,299,309-312,343
 //! supplies the GPIO matrix signals; dport_reg.h:947,965 defines the clock gates.
@@ -22,6 +22,9 @@ pub struct ClassicI2s {
     pub inner: I2s,
     ram: RegRam,
     dma: esp_periph::gdma::GdmaInCh,
+    pub(crate) clock_enabled: bool,
+    #[cfg(test)]
+    pub(crate) step_calls: u64,
 }
 impl Default for ClassicI2s { fn default() -> Self { Self::new() } }
 impl ClassicI2s {
@@ -30,7 +33,8 @@ impl ClassicI2s {
         ram.write(8, CONF_RESET);
         ram.write(0x24, 64);
         ram.write(0x60, LC_CONF_RESET);
-        Self { inner: I2s::new(CPU_HZ), ram, dma: esp_periph::gdma::GdmaInCh { conf1: LC_CONF_RESET & CHECK_OWNER, ..Default::default() } }
+        Self { inner: I2s::new(CPU_HZ), ram, dma: esp_periph::gdma::GdmaInCh { conf1: LC_CONF_RESET & CHECK_OWNER, ..Default::default() }, clock_enabled: false,
+            #[cfg(test)] step_calls: 0 }
     }
     /// Writes go through `Device::write`, as the other chips' dispatch does, so the shared
     /// inherent writer keeps its single caller and S3/C3/C6 code generation is unchanged.
@@ -133,8 +137,8 @@ impl SocBus {
     #[inline]
     pub(crate) fn i2s_step(&mut self, cycles: u64) {
         for port in 0..2 {
-            let clock_bit = if port == 0 { 4 } else { 21 };
-            if self.periph.dport.ram.read(0xc0) & (1 << clock_bit) == 0 || !self.periph.i2s[port].dma.running { continue; }
+            if !self.periph.i2s[port].clock_enabled || !self.periph.i2s[port].dma.running { continue; }
+            #[cfg(test)] { self.periph.i2s[port].step_calls += 1; }
             // Pin-routed sources live on controller 0, as on the other chips.
             let mut bank = self.periph.i2s[0].inner.take_pcm_bank();
             let data = self.periph.i2s[port].data(cycles, self.cycles, port, &self.periph.gpio, bank.as_deref_mut());
@@ -159,6 +163,29 @@ impl SocBus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn classic_i2s_clock_reset_and_pending_gates() {
+        for (port, bit) in [4, 21].into_iter().enumerate() {
+            let mut b = SocBus::new(4 << 20, [0; 6]);
+            b.periph.i2s[port].dma.running = true;
+            b.i2s_step(64);
+            assert_eq!(b.periph.i2s[port].step_calls, 0);
+            b.write32(0x3ff0_00c0, 1 << bit).unwrap();
+            b.write32(0x3ff0_00c4, 1 << bit).unwrap();
+            b.i2s_step(64);
+            assert_eq!(b.periph.i2s[port].step_calls, 0);
+            b.write32(0x3ff0_00c4, 0).unwrap();
+            b.i2s_step(64);
+            assert_eq!(b.periph.i2s[port].step_calls, 1);
+            b.write32(0x3ff0_00c0, 0).unwrap();
+            b.i2s_step(64);
+            assert_eq!(b.periph.i2s[port].step_calls, 1);
+            b.periph.i2s[port].dma.running = false;
+            b.write32(0x3ff0_00c0, 1 << bit).unwrap();
+            b.i2s_step(64);
+            assert_eq!(b.periph.i2s[port].step_calls, 1);
+        }
+    }
     /// 16-bit stereo at 7843 Hz (PLL160 / 25.5 / BCK 25 / 32): one frame takes 30,601 CPU cycles.
     fn receiver(bits: u32, conf: u32) -> ClassicI2s {
         let mut i = ClassicI2s::new();

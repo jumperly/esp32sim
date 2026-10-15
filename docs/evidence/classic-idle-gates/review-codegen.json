@@ -1,0 +1,17 @@
+{
+  "previous_head": "626c8b2fcea3da609f0a8c8ae265576033750f38",
+  "candidate": "documentation-only descendant; runtime sources and dependency inputs unchanged",
+  "toolchain": "1.99.0",
+  "build": "cargo +1.99.0 build --release --bins",
+  "disassemble": "llvm-objdump --disassemble --demangle --no-show-raw-insn esp32sim",
+  "complete_listing": "identical except the objdump input-path header",
+  "classic_selection": {"same": 27, "different": 0, "missing": 0},
+  "shared_other_chip_selection": {"same": 119, "different": 0, "missing": 0},
+  "artifacts": {
+    "previous.dis": {"sha256": "d7224fd1cb25b159aca3261a82a9fc2df9fb3611650b22a9d534c43060e6be43", "bytes": 25109878},
+    "candidate.dis": {"sha256": "8c66bfad64db6b56eb95b5930f58da2131ab4a5ee47e3b8331a0137153a5568d", "bytes": 25109872},
+    "previous_binary": {"sha256": "391ac3951efae5feb39561c9c81b269e5e624601ada8079b97d3c05187a6a4c0", "bytes": 2891448},
+    "candidate_binary": {"sha256": "a64640a41e88f4fb5d87100a6b74291a1d8e36779d70d725736a18e0245ebcd6", "bytes": 2891432}
+  },
+  "limit": "Static instruction equality is not a new CPU measurement; maintainer CPU table applies to the previous head with the same runtime sources. Original main comparison hashes remain in manifest.json."
+}

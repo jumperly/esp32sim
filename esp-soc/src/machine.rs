@@ -308,7 +308,7 @@ impl<S: Soc> Machine<S> {
         let pc = self.cores[0].pc();
         self.bus.note_pc(pc);
         let cause = self.bus.reboot(self.mac);
-        for (i, c) in self.cores.iter_mut().enumerate() { S::reset_core(c, i); if i > 0 { self.core_held[i] = true; } }
+        for (i, c) in self.cores.iter_mut().enumerate() { S::reset_core_with_bus(c, &mut self.bus, i); if i > 0 { self.core_held[i] = true; } }
         self.reboots += 1;
         self.model_ready_at.fill(self.bus.cycles());
         if let Some(model) = &mut self.cost {
@@ -582,7 +582,7 @@ impl<S: Soc> Machine<S> {
                     CoreState::Reset => { self.core_held[i] = true; false }
                     CoreState::Held => false,
                     CoreState::Running => {
-                        if self.core_held[i] { self.core_held[i] = false; S::reset_core(&mut self.cores[i], i); if trace { eprintln!("          ** core{} released from reset", i); } }
+                        if self.core_held[i] { self.core_held[i] = false; S::reset_core_with_bus(&mut self.cores[i], &mut self.bus, i); if trace { eprintln!("          ** core{} released from reset", i); } }
                         true
                     }
                 };

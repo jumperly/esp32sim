@@ -1,0 +1,65 @@
+{
+  "base": "ab89dc543bd8aa23b2d39f2cc48348ea5a0793ea",
+  "toolchain": "1.99.0",
+  "checks": {
+    "test-rom": {
+      "passed": 941,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 18,
+      "empty_home": true
+    },
+    "test-plain": {
+      "passed": 913,
+      "failed": 0,
+      "ignored": 46,
+      "filtered": 0,
+      "empty_home": true
+    }
+  },
+  "artifacts": {
+    "base.dis": {
+      "sha256": "8acb1cf8fdb40e74424360c8f7096997d780031c707a269c29b32e91288077ad",
+      "bytes": 25104854
+    },
+    "candidate.dis": {
+      "sha256": "4b88d343342b62debeeb7961ee55cd5dd42733952900ec1750fb0593f9acd545",
+      "bytes": 25109872
+    },
+    "classic-hot.diff": {
+      "sha256": "514a2120b08fccb880a110d28acabebdad0fd2c523cd7975f2a0bd31401706f4",
+      "bytes": 101937
+    },
+    "shared-hot.diff": {
+      "sha256": "4cd3c7c0bf7ac032ba0f3f275b0f425830df18bf889843dc926619073a822aa8",
+      "bytes": 41
+    },
+    "base-binary": {
+      "sha256": "94804a946d6b31121a76f3b154c1b74e3c27078d082749acd658464642c5a734",
+      "bytes": 2891448
+    },
+    "candidate-binary": {
+      "sha256": "2cc4e59dc7be0dc43ae7b56db42c7f8063d6f109ee3f3445156e8f0b677e31b7",
+      "bytes": 2891448
+    }
+  },
+  "inputs": {
+    "esp32_rev300_rom.elf": {
+      "sha256": "920b70635440517866aab2230964a570d2cf2b676658d93c52fbac108c1cca31",
+      "bytes": 857500
+    },
+    "public/classic-hello-bootloader.bin": {
+      "sha256": "faa4ac0961a9ec6c02d865c874c82bfe0a01225491b89d54fe4b7393f712be2a",
+      "bytes": 26096
+    },
+    "public/classic-hello-ptable.bin": {
+      "sha256": "7f00b6c042a89b15b0cac534f82ed988caf29278ff5700b0c511eb1b5bb7c820",
+      "bytes": 3072
+    },
+    "public/classic-hello_world.bin": {
+      "sha256": "fa4307fe9545e6599155ac38ad61205946b3f56e92890ad10a69c1592e120cdd",
+      "bytes": 162832
+    }
+  },
+  "avoided_idle_calls": 28917705
+}

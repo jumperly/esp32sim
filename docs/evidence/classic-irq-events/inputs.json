@@ -1,0 +1,10 @@
+{
+  "docs/evidence/classic-gpio-irq/fixture.S": "46aebb05e75cfadc77075c4d671b236390695da71e789ba43b4bf815f3393b89",
+  "esp32/examples/gpio_irq_fixture.rs": "20cb825bb5da47f92a9ca8a81e7b409415be145aedadb7e9122d99bcac26f8c1",
+  "web/wasm/fw/esp32_rev300_rom.elf": "920b70635440517866aab2230964a570d2cf2b676658d93c52fbac108c1cca31",
+  "web/wasm/fw/public/classic-hello-bootloader.bin": "faa4ac0961a9ec6c02d865c874c82bfe0a01225491b89d54fe4b7393f712be2a",
+  "web/wasm/fw/public/classic-hello-ptable.bin": "7f00b6c042a89b15b0cac534f82ed988caf29278ff5700b0c511eb1b5bb7c820",
+  "web/wasm/fw/public/classic-hello_world.bin": "fa4307fe9545e6599155ac38ad61205946b3f56e92890ad10a69c1592e120cdd",
+  "gpio.elf": "1081999e2f9b2be9e3b767aead8610f7a104aab89b53be9b8e03ad1d56a4b780",
+  "i2c.elf": "bbe023bc33e24ff36a10d35c52168dba2cab238571b61bca6c3a0dca52933706"
+}

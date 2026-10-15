@@ -35,6 +35,8 @@ pub struct ClassicRmt {
     pub outputs: Vec<(usize, bool)>,
     pub done: Vec<(usize, Vec<bool>)>,
     pub tx_count: u64,
+    #[cfg(test)]
+    pub(crate) tick_calls: u64,
 }
 
 impl Default for ClassicRmt {
@@ -63,6 +65,7 @@ impl ClassicRmt {
             outputs: (0..CHANNELS).map(|n| (n, false)).collect(),
             done: Vec::new(),
             tx_count: 0,
+            #[cfg(test)] tick_calls: 0,
         }
     }
 
@@ -233,6 +236,7 @@ impl Device for ClassicRmt {
         (self.powered() && self.ch.iter().any(|c| c.running)).then_some(ClockDomain::Apb)
     }
     fn tick(&mut self, ticks: u64) {
+        #[cfg(test)] { self.tick_calls += 1; }
         if self.powered() {
             for n in 0..CHANNELS {
                 self.advance(n, ticks);

@@ -1,0 +1,239 @@
+[
+  {
+    "name": "stale-level-cache",
+    "killed": true,
+    "returncode": 101,
+    "tests": [
+      "periph::gpio_irq_tests::gpio_irq_level_invalidation_pad_signal_pull_and_rtc",
+      "periph::gpio_irq_tests::gpio_irq_output_writes_update_unmuxed_fallback_input",
+      "periph::gpio_irq_tests::gpio_irq_queries_and_unchanged_outputs_do_not_refresh",
+      "periph::gpio_irq_tests::gpio_irq_restore_takeover_and_live_other_sources",
+      "periph::gpio_irq_tests::gpio_irq_cached_queries_match_uncached_mixed_trace",
+      "periph::gpio_irq_tests::gpio_irq_routes_types_banks_and_software_status"
+    ]
+  },
+  {
+    "name": "ignore-level-mask",
+    "killed": true,
+    "returncode": 101,
+    "tests": [
+      "periph::gpio_irq_tests::gpio_irq_queries_and_unchanged_outputs_do_not_refresh",
+      "periph::gpio_irq_tests::gpio_irq_output_writes_update_unmuxed_fallback_input",
+      "periph::gpio_irq_tests::gpio_irq_restore_takeover_and_live_other_sources",
+      "periph::gpio_irq_tests::gpio_irq_cached_queries_match_uncached_mixed_trace",
+      "periph::gpio_irq_tests::gpio_irq_routes_types_banks_and_software_status"
+    ]
+  },
+  {
+    "name": "keep-removed-level-pin",
+    "killed": true,
+    "returncode": 101,
+    "tests": [
+      "periph::gpio_irq_tests::gpio_irq_restore_takeover_and_live_other_sources",
+      "periph::gpio_irq_tests::gpio_irq_routes_types_banks_and_software_status",
+      "periph::gpio_irq_tests::gpio_irq_cached_queries_match_uncached_mixed_trace"
+    ]
+  },
+  {
+    "name": "drop-low-level-type",
+    "killed": true,
+    "returncode": 101,
+    "tests": [
+      "periph::gpio_irq_tests::gpio_irq_cached_queries_match_uncached_mixed_trace",
+      "periph::gpio_irq_tests::gpio_irq_routes_types_banks_and_software_status"
+    ]
+  },
+  {
+    "name": "keep-removed-route",
+    "killed": true,
+    "returncode": 101,
+    "tests": [
+      "periph::gpio_irq_tests::gpio_irq_routes_types_banks_and_software_status",
+      "periph::gpio_irq_tests::gpio_irq_cached_queries_match_uncached_mixed_trace"
+    ]
+  },
+  {
+    "name": "lose-software-pending-type-zero",
+    "killed": true,
+    "returncode": 101,
+    "tests": [
+      "periph::gpio_irq_tests::gpio_irq_routes_types_banks_and_software_status",
+      "periph::gpio_irq_tests::gpio_irq_cached_queries_match_uncached_mixed_trace"
+    ]
+  },
+  {
+    "name": "omit-level-status",
+    "killed": true,
+    "returncode": 101,
+    "tests": [
+      "periph::gpio_irq_tests::gpio_irq_output_writes_update_unmuxed_fallback_input",
+      "periph::gpio_irq_tests::gpio_irq_level_invalidation_pad_signal_pull_and_rtc",
+      "periph::gpio_irq_tests::gpio_irq_queries_and_unchanged_outputs_do_not_refresh",
+      "periph::gpio_irq_tests::gpio_irq_restore_takeover_and_live_other_sources",
+      "periph::gpio_irq_tests::gpio_irq_cached_queries_match_uncached_mixed_trace",
+      "periph::gpio_irq_tests::gpio_irq_routes_types_banks_and_software_status"
+    ]
+  },
+  {
+    "name": "omit-sticky-status",
+    "killed": true,
+    "returncode": 101,
+    "tests": [
+      "periph::gpio_irq_tests::gpio_irq_cached_queries_match_uncached_mixed_trace",
+      "periph::gpio_irq_tests::gpio_irq_routes_types_banks_and_software_status"
+    ]
+  },
+  {
+    "name": "ignore-route-mask",
+    "killed": true,
+    "returncode": 101,
+    "tests": [
+      "periph::gpio_irq_tests::gpio_irq_cached_queries_match_uncached_mixed_trace",
+      "periph::gpio_irq_tests::gpio_irq_routes_types_banks_and_software_status"
+    ]
+  },
+  {
+    "name": "swap-pro-app",
+    "killed": true,
+    "returncode": 101,
+    "tests": [
+      "periph::gpio_irq_tests::gpio_irq_cached_queries_match_uncached_mixed_trace",
+      "periph::gpio_irq_tests::gpio_irq_routes_types_banks_and_software_status"
+    ]
+  },
+  {
+    "name": "swap-nmi",
+    "killed": true,
+    "returncode": 101,
+    "tests": [
+      "periph::gpio_irq_tests::gpio_irq_cached_queries_match_uncached_mixed_trace",
+      "periph::gpio_irq_tests::gpio_irq_routes_types_banks_and_software_status"
+    ]
+  },
+  {
+    "name": "miss-pin39-config",
+    "killed": true,
+    "returncode": 101,
+    "tests": [
+      "periph::gpio_irq_tests::gpio_irq_cached_queries_match_uncached_mixed_trace",
+      "periph::gpio_irq_tests::gpio_irq_routes_types_banks_and_software_status"
+    ]
+  },
+  {
+    "name": "miss-pin0-config",
+    "killed": true,
+    "returncode": 101,
+    "tests": [
+      "periph::gpio_irq_tests::gpio_irq_routes_types_banks_and_software_status",
+      "periph::gpio_irq_tests::gpio_irq_level_invalidation_pad_signal_pull_and_rtc",
+      "periph::gpio_irq_tests::gpio_irq_cached_queries_match_uncached_mixed_trace"
+    ]
+  },
+  {
+    "name": "refresh-unchanged-output",
+    "killed": true,
+    "returncode": 101,
+    "tests": [
+      "periph::gpio_irq_tests::gpio_irq_queries_and_unchanged_outputs_do_not_refresh"
+    ]
+  },
+  {
+    "name": "never-refresh-output",
+    "killed": true,
+    "returncode": 101,
+    "tests": [
+      "periph::gpio_irq_tests::gpio_irq_level_invalidation_pad_signal_pull_and_rtc"
+    ]
+  },
+  {
+    "name": "drop-other-device-sources",
+    "killed": true,
+    "returncode": 101,
+    "tests": [
+      "periph::gpio_irq_tests::gpio_irq_restore_takeover_and_live_other_sources"
+    ]
+  },
+  {
+    "name": "reuse-core-zero-sources",
+    "killed": true,
+    "returncode": 101,
+    "tests": [
+      "periph::gpio_irq_tests::gpio_irq_cached_queries_match_uncached_mixed_trace",
+      "periph::gpio_irq_tests::gpio_irq_routes_types_banks_and_software_status"
+    ]
+  },
+  {
+    "name": "invalidation-0",
+    "killed": true,
+    "returncode": 101,
+    "tests": [
+      "periph::gpio_irq_tests::gpio_irq_level_invalidation_pad_signal_pull_and_rtc"
+    ]
+  },
+  {
+    "name": "invalidation-1",
+    "killed": true,
+    "returncode": 101,
+    "tests": [
+      "periph::gpio_irq_tests::gpio_irq_level_invalidation_pad_signal_pull_and_rtc",
+      "periph::gpio_irq_tests::gpio_irq_cached_queries_match_uncached_mixed_trace",
+      "periph::gpio_irq_tests::gpio_irq_routes_types_banks_and_software_status"
+    ]
+  },
+  {
+    "name": "invalidation-2",
+    "killed": true,
+    "returncode": 101,
+    "tests": [
+      "periph::gpio_irq_tests::gpio_irq_level_invalidation_pad_signal_pull_and_rtc",
+      "periph::gpio_irq_tests::gpio_irq_cached_queries_match_uncached_mixed_trace"
+    ]
+  },
+  {
+    "name": "invalidation-3",
+    "killed": true,
+    "returncode": 101,
+    "tests": [
+      "periph::gpio_irq_tests::gpio_irq_level_invalidation_pad_signal_pull_and_rtc",
+      "periph::gpio_irq_tests::gpio_irq_cached_queries_match_uncached_mixed_trace"
+    ]
+  },
+  {
+    "name": "invalidation-4",
+    "killed": true,
+    "returncode": 101,
+    "tests": [
+      "periph::gpio_irq_tests::gpio_irq_output_writes_update_unmuxed_fallback_input"
+    ]
+  },
+  {
+    "name": "invalidation-5",
+    "killed": true,
+    "returncode": 101,
+    "tests": [
+      "periph::gpio_irq_tests::gpio_irq_output_writes_update_unmuxed_fallback_input",
+      "periph::gpio_irq_tests::gpio_irq_queries_and_unchanged_outputs_do_not_refresh",
+      "periph::gpio_irq_tests::gpio_irq_restore_takeover_and_live_other_sources",
+      "periph::gpio_irq_tests::gpio_irq_cached_queries_match_uncached_mixed_trace",
+      "periph::gpio_irq_tests::gpio_irq_routes_types_banks_and_software_status"
+    ]
+  },
+  {
+    "name": "invalidation-6",
+    "killed": true,
+    "returncode": 101,
+    "tests": [
+      "periph::gpio_irq_tests::gpio_irq_restore_takeover_and_live_other_sources"
+    ]
+  },
+  {
+    "name": "invalidation-7",
+    "killed": true,
+    "returncode": 101,
+    "tests": [
+      "periph::gpio_irq_tests::gpio_irq_restore_takeover_and_live_other_sources"
+    ],
+    "weaker_probe_killed": false,
+    "coverage_requirement": "RTC MMIO takeover must suppress a live high level without a driven-output change; an inactive-level probe is insufficient."
+  }
+]
