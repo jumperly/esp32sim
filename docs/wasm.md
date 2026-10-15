@@ -271,7 +271,7 @@ a camera emits `{"t":"camera-error","message":"no camera on this board"}`.
 
 ### Virtual BLE controller (Jumperly patch J23)
 
-The CLI's `--ble` in the browser, on the S3 and the C3. `esp32sim_ble_virtual(e, elf, len)` before
+The CLI's `--ble` in the browser, on the S3, the C3 and the classic ESP32. `esp32sim_ble_virtual(e, elf, len)` before
 boot: the application ELF (its symbols; debug info is not needed) — 0, or 1 for another chip, after
 boot, or an ELF without the controller symbols (logged). `esp32sim_ble_virtual_command(e, cmd, len)`: a
 command for the virtual peer now — `connect`, `disconnect`, `discover`, `read HANDLE`, `write HANDLE
@@ -445,7 +445,7 @@ another. mDNS works over it ([notes](jumperly/mdns-lan-2026-10-07/README.md)).
 
 | Export | Contract |
 | --- | --- |
-| `esp32sim_set_mac(e, ptr6)` | The station's MAC (efuse BLK1 and the machine's), S3 and C3, before boot; 1 otherwise. |
+| `esp32sim_set_mac(e, ptr6)` | The station's MAC (efuse BLK1 and the machine's; on the classic ESP32 BLK0 with its CRC8), S3, C3 and the classic ESP32, before boot; 1 otherwise. |
 | `esp32sim_net_station(e, ptr4)` | The address DHCP gives the station (default 10.0.2.15). After `esp32sim_wifi_ap`, before boot; 1 otherwise. |
 | `esp32sim_lan_peers(e, ptr, count)` | The other boards' addresses (`count` × IPv4[4]); 0 turns the LAN off. After `esp32sim_wifi_ap` (a new access point drops it); 1 without one. |
 | `esp32sim_lan_take(e)` | The packets sent to peers since the last call: their count; per packet `f64` device µs (cycles over the CPU MHz), `u32` length, the IPv4 packet padded to 4 bytes. At most 256 wait; more are dropped. |
@@ -487,7 +487,7 @@ the emulator does not shift SD bit by bit.
 
 | Export | Contract |
 | --- | --- |
-| `esp32sim_i2s_host(e, on)` | The host supplies what the receivers get (`on` nonzero); a frame falling due with no word queued is silence and ends the slice once, until the host pushes again. Survives a chip reset. ESP32-S3 only; 1 otherwise. |
+| `esp32sim_i2s_host(e, on)` | The host supplies what the receivers get (`on` nonzero); a frame falling due with no word queued is silence and ends the slice once, until the host pushes again. Survives a chip reset. ESP32-S3 and the classic ESP32 (Jumperly patch J28); 1 otherwise. |
 | `esp32sim_i2s_rx_need(e, port, cycles)` | Frames controller `port` (0, 1) should get now so the next `cycles` find them queued (those falling due, less the queued); 0 while its receiver is stopped or in a mode the model does not receive. The buffer: eight u32 LE — frame rate Hz, BCK per slot, data bits, received slot mask, slots per frame, flags (bit 0 running, bit 1 Philips), queued frames, BCK Hz. |
 | `esp32sim_i2s_rx_push(e, port, ptr, frames)` | Queue `frames` × 8 bytes: the left (WS low) and right (WS high) slot word, u32 LE, MSB-aligned (bit 31 = the first bit after the WS edge and the one-BCK delay). Returns how many it took (at most 65536 wait). |
 
@@ -510,12 +510,55 @@ reading it) or on its own IO_MUX pads with the matrix bypassed (S3: UART0 on 43 
 
 | Export | Contract |
 | --- | --- |
-| `esp32sim_uart_pins(e, port)` | The pads of UART `port` as `tx \| rx << 8`, 255 for none: TX is the pad routed to TXD_OUT through the matrix, else the IO_MUX TX pad in its UART function; RX the pad the matrix routes to RXD_IN, else (matrix bypassed) the IO_MUX RX pad in its UART function with input enabled. S3: ports 0..2; C3: 0, 1. |
+| `esp32sim_uart_pins(e, port)` | The pads of UART `port` as `tx \| rx << 8`, 255 for none: TX is the pad routed to TXD_OUT through the matrix, else the IO_MUX TX pad in its UART function; RX the pad the matrix routes to RXD_IN, else (matrix bypassed) the IO_MUX RX pad in its UART function with input enabled. S3: ports 0..2; C3: 0, 1; the classic ESP32: 0..2 (UART0 on 1 / 3). |
 | `esp32sim_wifi_beacons(e, ptr, len)` | Jumperly patch J22: the networks around (beacon-only, not joinable), replacing the ones there were. Entries `[ssid_len u8][ssid][channel u8][rssi i8][secure u8][bssid 6]`, SSID 1..=32 bytes of UTF-8, channel 1..=14, at most 32; `len` 0 clears them. They answer wildcard or matching probe requests from their own BSSID with their channel, signal and security; a network with the access point's SSID is left out. After `esp32sim_wifi_ap` (a new access point drops them), before or after boot. 0 ok; 1 without an access point or for bad data (logged). |
 | `esp32sim_uart_baud(e, port)` | Jumperly patch J21: the baud UART `port` is set to (its clock source and dividers, upstream's `uart_route`), 0 when not configured or no such port. |
-| `esp32sim_gpio_in_pin(e, signal)` | The pad a matrix input signal reads, 255 if none. On the C3 it now decodes the C3 layout (SIG_IN_SEL at bit 6, pad in bits 0..4; the S3: bit 7, 0..5). |
+| `esp32sim_gpio_in_pin(e, signal)` | The pad a matrix input signal reads, 255 if none. On the C3 it now decodes the C3 layout (SIG_IN_SEL at bit 6, pad in bits 0..4; the S3: bit 7, 0..5). On the classic ESP32 (J28) also a pad that carries the signal on its IO_MUX function with the matrix bypassed; the pad needs FUN_IE. |
 
 `wasm/tests/jumperly.rs` (`serial1_and_serial2_on_matrix_pins`, `c3_serial1_on_matrix_pins`) runs
 the `serial12` fixture (Serial1 RX 16 / TX 17, Serial2 RX 4 / TX 5) and `c3-serial1` (Serial1 RX 3 /
 TX 4): the bytes come out of console ports 1 and 2, the pads are found, and lines fed to the ports
 come back on UART0.
+
+## Classic ESP32 in the browser
+
+Jumperly patch J28. `esp32sim_new("esp32", …)` builds the classic ESP32 (ESP32-D0WDQ6, two Xtensa
+LX6 cores at 240 MHz) of a NodeMCU-32S: always 4 MB of flash, the module's (a larger `flash_mb` is
+logged and ignored), no PSRAM. It boots through the mask ROM (`esp32_rev300_rom.elf`, the ECO3
+ROM upstream fetches) from a whole-flash image whose second-stage bootloader sits at **0x1000**,
+not 0x0 as on the S3 and the C3; the partition table stays at 0x8000 and the app at 0x10000.
+`esp32sim_boot(e, 1)` (the app without the ROM) is upstream's error for this chip.
+
+The Jumperly ABI behind the `JumperlyChip` trait (`wasm/src/chip.rs`, `wasm/src/chips/esp32.rs`)
+works as on the S3: pins GPIO0..39 (34..39 input only: no drive, no pulls in the state word),
+console ports 0..2 (no USB-Serial/JTAG: port 3 takes nothing and has nothing), RMT frames
+(RMT_SIG_OUT0 = 87), PWM outputs from LEDC (signals 71..86; Arduino's channels 0..7 are the
+high-speed group 71..78; ESP32Servo and `tone()` use LEDC on this chip), the linear ADC on ADC1
+(GPIO32..39) and ADC2 (GPIO0, 2, 4, 12..15, 25..27; the Arduino core itself returns 0 for ADC2
+while Wi-Fi runs), the I2C bridge on both controllers, the SPI bridge on HSPI (host 2) and VSPI
+(host 3, Arduino's default `SPI`), the I2S host on ports 0 and 1, BLE, Wi-Fi, the LAN and
+`esp32sim_reset`. A chip reset takes the strapping byte from the circuit: a pad the host drives
+(`esp32sim_gpio_set_input`) gives its level, a free one its reset pull (GPIO0, 5, 15 up; 2, 4, 12
+down), so an empty circuit boots `boot:0x13 (SPI_FAST_FLASH_BOOT)` and IO0 held low at the reset
+`boot:0x3 (DOWNLOAD_BOOT(UART0/UART1/SDIO_REI_REO_V2))`, where the ROM prints `waiting for
+download` and waits (the SDIO slave DMA block reads its links parked, the rest of the SDIO slave
+is not modelled). The first power-on boot always uses 0x13: the host sets inputs only after
+`esp32sim_boot`, so download mode needs IO0 held, then `esp32sim_reset`.
+
+| Export | Contract |
+| --- | --- |
+| `esp32sim_dac_take(e)` | The DAC output changes since the last call: their count; per change `u32` GPIO (25 = DAC1, 26 = DAC2) and `u32` millivolts LE, `(code * 3300 + 127) / 255` (code 128 → 1656, 255 → 3300); `u32::MAX` once when an output turns off (`dacDisable`). A change written to PAD_DAC1/2 or SAR_DAC_CTRL2 ends the slice in Jumperly mode. 0 and an empty buffer for a chip without a DAC (S3, C3). |
+| `esp32sim_touch_set(e, gpio, touched)` | A finger on touch pad `gpio` (`touched` nonzero) or not: T0..T9 = GPIO 4, 0, 2, 15, 13, 12, 14, 27, 33, 32; `touchRead` counts drop while it is touched. 0 ok; 1 for another pin or another chip (S3, C3, C6). Survives a chip reset (RTC domain); Jumperly mode is not needed. |
+
+Limits: the ROM is the ECO3 one (banner `ets Jul 29 2019 12:21:46`); a board with an older silicon
+revision (v1.x prints `ets Jun  8 2016 00:22:57`) runs the same sketches, but its ROM banner and
+`esp_chip_info` revision differ from the emulator's. Download mode stops at `waiting for download`:
+the ROM's serial loader protocol (esptool's SYNC and the commands after it) is not exercised.
+Octal flash is refused (`esp32sim_flash_octal` → 1); MCPWM has no PWM tap on the classic.
+
+`wasm/tests/jumperly.rs` (`esp32_*`) runs the `esp32-*` fixtures (`esp32:esp32:nodemcu-32s`, see
+`emulator/fixtures/README.md` of the Jumperly monorepo): blink on GPIO2, Serial2 on RX 16 / TX 17
+at 9600, `analogRead` on GPIO34 and GPIO4, LEDC and `tone()`, ESP32Servo at 50 Hz, a NeoPixel
+frame on GPIO4, the I2C scan and the VSPI transfer through the host bridges, the INMP441 sketch
+on a −26 dBFS host sine, the Wi-Fi scan and join, the BLE server through the virtual peer, the
+DAC, touch, the host reset and download mode with IO0 held.

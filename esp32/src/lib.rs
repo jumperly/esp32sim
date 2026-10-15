@@ -18,3 +18,7 @@ pub mod rmt;
 pub mod spi;
 
 pub mod crypto;
+
+// Jumperly patch J28: the host hooks (pin view, PWM tap) the Jumperly ABI reads.
+pub mod jumperly;
+pub mod pwm;

@@ -31,6 +31,9 @@ pub struct ClassicGpSpi {
     dma_int_raw: u32,
     pub transfers: u64,
     log: bool,
+    /// Jumperly patch J28: the bus handed the taken transfer to the host and waits for its answer
+    /// (`SocBus::finish_spi_host`); USR stays set and a new USR starts nothing until `finish`.
+    pub(crate) host_busy: bool,
 }
 
 impl Default for ClassicGpSpi {
@@ -51,12 +54,13 @@ impl ClassicGpSpi {
             dma_int_raw: 0,
             transfers: 0,
             log: false,
+            host_busy: false,   // Jumperly patch J28
         }
     }
 
     pub fn read(&self, off: u32) -> u32 {
         match off {
-            0x00 => (self.regs.read(0) & !USR) | if self.pending.is_some() { USR } else { 0 },
+            0x00 => (self.regs.read(0) & !USR) | if self.pending.is_some() || self.host_busy { USR } else { 0 },   // Jumperly patch J28: host_busy
             0x80..=0xbc => self.w[((off - 0x80) / 4) as usize],
             0x10c => (self.out_active as u32) << 1 | self.in_active as u32,
             0x110 => self.dma_int_ena,
@@ -70,7 +74,7 @@ impl ClassicGpSpi {
         match off {
             0x00 => {
                 self.regs.write(0, v & !USR);
-                if v & USR != 0 && self.pending.is_none() {
+                if v & USR != 0 && self.pending.is_none() && !self.host_busy {   // Jumperly patch J28: host_busy
                     self.start();
                 }
             }
@@ -211,6 +215,7 @@ impl ClassicGpSpi {
         }
         self.out_active = false;
         self.in_active = false;
+        self.host_busy = false;   // Jumperly patch J28
         self.regs.write(0x38, self.regs.read(0x38) | (1 << 4));
         self.transfers += 1;
         if self.log {

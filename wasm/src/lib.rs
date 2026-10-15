@@ -10,6 +10,8 @@ use esp_soc::web::{json_escape, WebServer};
 use esp_soc::{Machine, Soc, SocBus};
 
 mod machine;
+mod chip;     // Jumperly patch J28
+mod chips;
 mod network;
 mod ethernet;
 mod ble;
@@ -132,6 +134,10 @@ pub unsafe extern "C" fn esp32sim_new(board: *const u8, board_len: usize, flash_
         esp32::board::make_board(&board)
     };
     let m = if let Some(b) = classic_board {
+        // Jumperly patch J28: the classic's module (ESP32-WROOM-32 on the NodeMCU-32S) has 4 MB of
+        // flash; a bigger request is accepted and gets the module's 4 MB.
+        if flash_mb > 4 { log(&format!("[emu] esp32: the module has 4 MB of flash, not {flash_mb} MB")); }
+        let flash_bytes = 4 << 20;
         let mut m = esp32::machine([0x24, 0x6f, 0x28, 0, 0x11, 0x22], flash_bytes);
         m.bus.board = b;
         m.bus.attach_board_devices();

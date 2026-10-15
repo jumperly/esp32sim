@@ -160,7 +160,7 @@ impl Device for ClassicSpi {
 // IDF v5.5.4 register/soc/io_mux_reg.h:41-66: pulls bits 7/8, input bit 9, function bits 12-14.
 // Pad offsets and function selectors: io_mux_reg.h:90-359.
 const IOMUX: u32 = 0x1000;
-const IOMUX_OFFSETS: [u32; 40] = [
+pub(crate) const IOMUX_OFFSETS: [u32; 40] = [   // Jumperly patch J28: crate-visible for the host hooks
     0x44, 0x88, 0x40, 0x84, 0x48, 0x6c, 0x60, 0x64,
     0x68, 0x54, 0x58, 0x5c, 0x34, 0x38, 0x30, 0x3c,
     0x4c, 0x50, 0x70, 0x74, 0x78, 0x7c, 0x80, 0x8c,
@@ -216,7 +216,8 @@ impl ClassicGpio {
             _ => off,
         }
     }
-    pub(crate) fn mux(&self, pin: usize) -> u32 {
+    /// IO_MUX_GPIOn_REG of `pin`, 0 for an unbonded pad (public for the Jumperly pin view, patch J28).
+    pub fn mux(&self, pin: usize) -> u32 {
         IOMUX_OFFSETS
             .get(pin)
             .filter(|&&off| off != u32::MAX)
@@ -581,13 +582,37 @@ impl Device for ClassicRtc {
     }
 }
 
+/// Jumperly patch J28: the SDIO slave's DMA block (SLC, 0x3ff58000) as far as the ROM's download
+/// mode needs it. With IO0 low at reset the ROM's `slc_init_attach` writes TXLINK_STOP to
+/// `SLC_0TX_LINK_REG` and polls TXLINK_PARK until the link parks. Nothing moves data through this
+/// model, so every link register reads parked (bit 31; ESP-IDF `soc/esp32/register/soc/sdio_slc_reg.h`:
+/// SLC_0RX_LINK_REG 0x3c, SLC_0TX_LINK_REG 0x40, SLC_1RX_LINK_REG 0x44, SLC_1TX_LINK_REG 0x48, PARK
+/// RO at bit 31); every other register keeps what was written.
+#[derive(Default)]
+pub struct ClassicSlc {
+    pub ram: RegRam,
+}
+impl Device for ClassicSlc {
+    fn read(&mut self, off: u32) -> u32 {
+        match off & 0xfff {
+            0x3c | 0x40 | 0x44 | 0x48 => self.ram.read(off) | 1 << 31,
+            _ => self.ram.read(off),
+        }
+    }
+    fn write(&mut self, off: u32, v: u32) -> WriteEffect {
+        self.ram.write(off, v);
+        WriteEffect::NONE
+    }
+}
+
 // Read-only factory eFuses include revision bits and the MAC address.
 pub struct ClassicEfuse {
     pub ram: RegRam,
     cmd: u32,
 }
 impl ClassicEfuse {
-    fn new(mac: [u8; 6]) -> Self {
+    /// Jumperly patch J28: public, so the host's `esp32sim_set_mac` rebuilds BLK0 for a new MAC.
+    pub fn new(mac: [u8; 6]) -> Self {
         let mut r = RegRam::new();
         r.write(0x04, u32::from_be_bytes([mac[2], mac[3], mac[4], mac[5]]));
         let mut crc = 0u8;
@@ -648,6 +673,8 @@ pub struct Peripherals {
     pub fe: crate::wifi::FrontEnd,
     pub adc: ClassicAdc,
     pub i2s: [crate::i2s::ClassicI2s; 2],
+    /// Jumperly patch J28: the SDIO slave DMA block the ROM touches in download mode.
+    pub slc: ClassicSlc,
 }
 
 device_set! { Peripherals; clock: (clock) CPU_HZ, [(ClockDomain::RtcSlow, 1600)];
@@ -675,6 +702,7 @@ device_set! { Peripherals; clock: (clock) CPU_HZ, [(ClockDomain::RtcSlow, 1600)]
     0x56 "RMT" (rmt) => [SRC_RMT];
     0x59 "LEDC" (ledc) => [SRC_LEDC];
     0x5a "EFUSE" (efuse) => [];
+    0x58 "SLC" (slc) => []; // Jumperly patch J28
     0x5f "TIMG0" (timg[0]) => [SRC_TG0_T0, SRC_TG0_T1, SRC_TG0_WDT, SRC_TG0_LACT, SRC_TG0_T0_EDGE, SRC_TG0_T0_EDGE + 1, SRC_TG0_T0_EDGE + 2, SRC_TG0_T0_EDGE + 3];
     0x60 "TIMG1" (timg[1]) => [SRC_TG1_T0, SRC_TG1_T1, SRC_TG1_WDT, SRC_TG1_LACT, SRC_TG1_T0_EDGE, SRC_TG1_T0_EDGE + 1, SRC_TG1_T0_EDGE + 2, SRC_TG1_T0_EDGE + 3];
     0x64 "SPI2" (spi[0]) => [SRC_SPI2, SRC_SPI2_DMA];
@@ -735,6 +763,7 @@ impl Peripherals {
             fe: crate::wifi::FrontEnd::default(),
             adc: ClassicAdc::new(),
             i2s: Default::default(),
+            slc: ClassicSlc::default(),
         };
         for uart in &mut p.uart { uart.write(0x20, 1 << 27); }
         p.sync_crypto();
@@ -769,6 +798,7 @@ impl Peripherals {
             0x6d => "I2S1",
             0x50 => "UART1",
             0x5a => "EFUSE",
+            0x58 => "SLC", // Jumperly patch J28
             0x5f => "TIMG0",
             0x60 => "TIMG1",
             0x6e => "UART2",
@@ -781,6 +811,25 @@ impl Peripherals {
         self.adc = adc;
         self.gpio.rtc_pads = self.adc.rtc_pad_mask();
         self.gpio.refresh_level_status();
+    }
+    /// Jumperly patch J28: `GPIO_STRAP_REG` as the chip latches it at reset from the strapping pads.
+    /// ESP-IDF `soc/esp32/register/soc/gpio_reg.h` (GPIO_STRAP_REG, 0x3ff44038), GPIO_STRAPPING
+    /// = `{10'b0, MTDI, GPIO0, GPIO2, GPIO4, MTDO, GPIO5}`:
+    ///
+    /// | bit | 5      | 4     | 3     | 2     | 1      | 0     |
+    /// |-----|--------|-------|-------|-------|--------|-------|
+    /// | pad | GPIO12 | GPIO0 | GPIO2 | GPIO4 | GPIO15 | GPIO5 |
+    ///
+    /// A pad the circuit drives (`ClassicGpio::set_input`) gives its level; a free pad its reset
+    /// pull (ESP32 datasheet, strapping pins: GPIO0/5/15 up, GPIO2/4/12 down), so an empty circuit
+    /// yields 0x13 — the ROM's `boot:0x13 (SPI_FAST_FLASH_BOOT)` — and IO0 held low 0x03.
+    pub fn strap_from_pads(&self) -> u32 {
+        const PADS: [(u8, bool); 6] = [(5, true), (15, true), (4, false), (2, false), (0, true), (12, false)];
+        let g = &self.gpio;
+        PADS.iter().enumerate().fold(0, |strap, (bit, &(pin, pull_up))| {
+            let level = if g.external & (1 << pin) != 0 { g.gpio.input & (1 << pin) != 0 } else { pull_up };
+            strap | u32::from(level) << bit
+        })
     }
     pub fn read32(&mut self, addr: u32) -> u32 {
         if (0x3ff0_00ec..=0x3ff0_0100).contains(&addr) {
@@ -984,6 +1033,18 @@ impl Peripherals {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Jumperly patch J28: the ROM's download mode stops the SLC links and waits for them to park.
+    #[test]
+    fn slc_links_read_parked_and_other_registers_keep_their_value() {
+        let mut p = Peripherals::new([0; 6]);
+        p.write32(0x3ff5_8040, 1 << 28);                          // SLC_0TX_LINK: TXLINK_STOP
+        assert_eq!(p.read32(0x3ff5_8040), 1 << 31 | 1 << 28);     // TXLINK_PARK
+        for off in [0x3c, 0x44, 0x48] { assert_eq!(p.read32(0x3ff5_8000 + off), 1 << 31); }
+        p.write32(0x3ff5_8060, 0x1234);                           // SLC_CONF1
+        assert_eq!(p.read32(0x3ff5_8060), 0x1234);
+        assert_eq!(Peripherals::block_name(0x58), "SLC");
+    }
 
     #[test]
     fn classic_factory_mac_includes_rom_crc8() {
