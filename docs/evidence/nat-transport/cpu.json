@@ -1,0 +1,370 @@
+{
+ "rust": "1.99.0",
+ "method": "child user CPU seconds via GetProcessTimes (15.625 ms resolution); one warmup pair B>M then 7 measured pairs alternating M>B, B>M; no load gate (other applications were running); change = ratio of medians",
+ "runs": [
+  {
+   "started": "2026-10-15T17:57:06",
+   "finished": "2026-10-15T18:08:28",
+   "machine": {
+    "cpu": "AMD64 Family 26 Model 68 Stepping 0, AuthenticAMD",
+    "os": "Windows-11-10.0.26200-SP0",
+    "python": "3.14.5"
+   },
+   "workloads": {
+    "s3-hello": {
+     "main_median": 32.953125,
+     "main_range": [
+      29.875,
+      36.296875
+     ],
+     "pr_median": 33.984375,
+     "pr_range": [
+      28.09375,
+      34.984375
+     ],
+     "change_pct": 3.1294452347083945,
+     "pr_slower_in": 5,
+     "identical_work_and_console": true,
+     "insns": [
+      1134713226,
+      655106431
+     ],
+     "console_sha256": "98de90e19cbd85e91103f4ae97797135bdf03a9669f9c370a5c924cc5d376887",
+     "pairs": [
+      {
+       "label": "warmup",
+       "order": "B>M",
+       "main_user": 34.15625,
+       "pr_user": 33.34375,
+       "main_wall": 37.022,
+       "pr_wall": 37.445
+      },
+      {
+       "label": "pair1",
+       "order": "M>B",
+       "main_user": 36.296875,
+       "pr_user": 28.09375,
+       "main_wall": 39.484,
+       "pr_wall": 36.374
+      },
+      {
+       "label": "pair2",
+       "order": "B>M",
+       "main_user": 31.765625,
+       "pr_user": 33.875,
+       "main_wall": 36.117,
+       "pr_wall": 36.749
+      },
+      {
+       "label": "pair3",
+       "order": "M>B",
+       "main_user": 32.953125,
+       "pr_user": 34.984375,
+       "main_wall": 35.307,
+       "pr_wall": 36.619
+      },
+      {
+       "label": "pair4",
+       "order": "B>M",
+       "main_user": 29.875,
+       "pr_user": 34.59375,
+       "main_wall": 33.562,
+       "pr_wall": 38.732
+      },
+      {
+       "label": "pair5",
+       "order": "M>B",
+       "main_user": 33.0625,
+       "pr_user": 32.5625,
+       "main_wall": 36.644,
+       "pr_wall": 37.157
+      },
+      {
+       "label": "pair6",
+       "order": "B>M",
+       "main_user": 33.203125,
+       "pr_user": 34.75,
+       "main_wall": 35.615,
+       "pr_wall": 37.405
+      },
+      {
+       "label": "pair7",
+       "order": "M>B",
+       "main_user": 31.734375,
+       "pr_user": 33.984375,
+       "main_wall": 35.406,
+       "pr_wall": 35.076
+      }
+     ]
+    },
+    "c3-hello": {
+     "main_median": 2.0625,
+     "main_range": [
+      1.5625,
+      2.390625
+     ],
+     "pr_median": 1.765625,
+     "pr_range": [
+      1.25,
+      2.203125
+     ],
+     "change_pct": -14.393939393939393,
+     "pr_slower_in": 2,
+     "identical_work_and_console": true,
+     "insns": [
+      4800000000
+     ],
+     "console_sha256": "3b9d8d3eb053a97670f11896674e70ffc968fd7a803cb2cdc5c051414af94efd",
+     "pairs": [
+      {
+       "label": "warmup",
+       "order": "B>M",
+       "main_user": 1.53125,
+       "pr_user": 1.71875,
+       "main_wall": 2.576,
+       "pr_wall": 2.56
+      },
+      {
+       "label": "pair1",
+       "order": "M>B",
+       "main_user": 2.390625,
+       "pr_user": 2.203125,
+       "main_wall": 2.583,
+       "pr_wall": 2.533
+      },
+      {
+       "label": "pair2",
+       "order": "B>M",
+       "main_user": 1.8125,
+       "pr_user": 1.96875,
+       "main_wall": 2.534,
+       "pr_wall": 2.529
+      },
+      {
+       "label": "pair3",
+       "order": "M>B",
+       "main_user": 2.0625,
+       "pr_user": 1.25,
+       "main_wall": 2.546,
+       "pr_wall": 2.484
+      },
+      {
+       "label": "pair4",
+       "order": "B>M",
+       "main_user": 1.5625,
+       "pr_user": 1.765625,
+       "main_wall": 2.568,
+       "pr_wall": 2.525
+      },
+      {
+       "label": "pair5",
+       "order": "M>B",
+       "main_user": 2.140625,
+       "pr_user": 2.046875,
+       "main_wall": 2.554,
+       "pr_wall": 2.52
+      },
+      {
+       "label": "pair6",
+       "order": "B>M",
+       "main_user": 2.25,
+       "pr_user": 1.5625,
+       "main_wall": 2.609,
+       "pr_wall": 2.542
+      },
+      {
+       "label": "pair7",
+       "order": "M>B",
+       "main_user": 1.765625,
+       "pr_user": 1.640625,
+       "main_wall": 2.629,
+       "pr_wall": 2.565
+      }
+     ]
+    },
+    "c6-hello": {
+     "main_median": 2.8125,
+     "main_range": [
+      2.484375,
+      2.953125
+     ],
+     "pr_median": 2.53125,
+     "pr_range": [
+      2.078125,
+      2.84375
+     ],
+     "change_pct": -9.999999999999998,
+     "pr_slower_in": 2,
+     "identical_work_and_console": true,
+     "insns": [
+      4800000000
+     ],
+     "console_sha256": "bd69fbb9ac5c677337a293c1ec0ff7941306eec82c499290917a7c42360f86ad",
+     "pairs": [
+      {
+       "label": "warmup",
+       "order": "B>M",
+       "main_user": 2.8125,
+       "pr_user": 2.59375,
+       "main_wall": 3.496,
+       "pr_wall": 3.456
+      },
+      {
+       "label": "pair1",
+       "order": "M>B",
+       "main_user": 2.671875,
+       "pr_user": 2.4375,
+       "main_wall": 3.503,
+       "pr_wall": 3.473
+      },
+      {
+       "label": "pair2",
+       "order": "B>M",
+       "main_user": 2.53125,
+       "pr_user": 2.578125,
+       "main_wall": 3.461,
+       "pr_wall": 3.488
+      },
+      {
+       "label": "pair3",
+       "order": "M>B",
+       "main_user": 2.953125,
+       "pr_user": 2.4375,
+       "main_wall": 3.529,
+       "pr_wall": 3.489
+      },
+      {
+       "label": "pair4",
+       "order": "B>M",
+       "main_user": 2.484375,
+       "pr_user": 2.078125,
+       "main_wall": 3.42,
+       "pr_wall": 3.506
+      },
+      {
+       "label": "pair5",
+       "order": "M>B",
+       "main_user": 2.859375,
+       "pr_user": 2.53125,
+       "main_wall": 3.489,
+       "pr_wall": 3.468
+      },
+      {
+       "label": "pair6",
+       "order": "B>M",
+       "main_user": 2.8125,
+       "pr_user": 2.5625,
+       "main_wall": 3.489,
+       "pr_wall": 3.477
+      },
+      {
+       "label": "pair7",
+       "order": "M>B",
+       "main_user": 2.8125,
+       "pr_user": 2.84375,
+       "main_wall": 3.539,
+       "pr_wall": 3.546
+      }
+     ]
+    }
+   }
+  },
+  {
+   "started": "2026-10-15T18:08:52",
+   "finished": "2026-10-15T18:17:55",
+   "machine": {
+    "cpu": "AMD64 Family 26 Model 68 Stepping 0, AuthenticAMD",
+    "os": "Windows-11-10.0.26200-SP0",
+    "python": "3.14.5"
+   },
+   "workloads": {
+    "s3-hello": {
+     "main_median": 26.125,
+     "main_range": [
+      25.46875,
+      33.9375
+     ],
+     "pr_median": 27.265625,
+     "pr_range": [
+      25.703125,
+      34.125
+     ],
+     "change_pct": 4.366028708133962,
+     "pr_slower_in": 5,
+     "identical_work_and_console": true,
+     "insns": [
+      1134713226,
+      655106431
+     ],
+     "console_sha256": "98de90e19cbd85e91103f4ae97797135bdf03a9669f9c370a5c924cc5d376887",
+     "pairs": [
+      {
+       "label": "warmup",
+       "order": "B>M",
+       "main_user": 30.484375,
+       "pr_user": 33.9375,
+       "main_wall": 35.367,
+       "pr_wall": 36.141
+      },
+      {
+       "label": "pair1",
+       "order": "M>B",
+       "main_user": 33.9375,
+       "pr_user": 32.453125,
+       "main_wall": 35.13,
+       "pr_wall": 34.287
+      },
+      {
+       "label": "pair2",
+       "order": "B>M",
+       "main_user": 29.953125,
+       "pr_user": 34.125,
+       "main_wall": 33.525,
+       "pr_wall": 35.451
+      },
+      {
+       "label": "pair3",
+       "order": "M>B",
+       "main_user": 26.0625,
+       "pr_user": 25.703125,
+       "main_wall": 33.015,
+       "pr_wall": 33.007
+      },
+      {
+       "label": "pair4",
+       "order": "B>M",
+       "main_user": 25.6875,
+       "pr_user": 27.265625,
+       "main_wall": 32.875,
+       "pr_wall": 33.329
+      },
+      {
+       "label": "pair5",
+       "order": "M>B",
+       "main_user": 26.125,
+       "pr_user": 26.375,
+       "main_wall": 33.043,
+       "pr_wall": 33.577
+      },
+      {
+       "label": "pair6",
+       "order": "B>M",
+       "main_user": 25.46875,
+       "pr_user": 26.921875,
+       "main_wall": 32.775,
+       "pr_wall": 33.957
+      },
+      {
+       "label": "pair7",
+       "order": "M>B",
+       "main_user": 26.46875,
+       "pr_user": 28.390625,
+       "main_wall": 34.082,
+       "pr_wall": 33.655
+      }
+     ]
+    }
+   }
+  }
+ ]
+}
