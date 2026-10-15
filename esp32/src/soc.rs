@@ -117,7 +117,8 @@ impl esp_soc::SocBus for SocBus {
         let cause = self.periph.rtc.0.reset_cause;
         let mut old = std::mem::replace(&mut self.periph, Peripherals::new(mac));
         for port in 0..2 { self.periph.i2s[port].inner.keep_rx_input(&mut old.i2s[port].inner); }
-        self.periph.restore_rtc_analog(old.adc);
+        self.periph.restore_rtc_analog(old.adc);   // Jumperly patch J28: with it the linear ADC and the DAC state the host heard
+        self.drop_spi_wait();   // Jumperly patch J28: the new SPI controllers know no host transfer
         self.periph.gpio.restore_inputs(&old.gpio);
         if let Some(tap) = &mut self.pwm_tap { if tap.reset(self.cycles) { self.slice_yield = true; } }   // Jumperly patch J28
         for c in &mut self.periph.i2c { c.defer = self.i2c_host; }   // Jumperly patch J28: the bridge survives a chip reset

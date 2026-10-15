@@ -143,6 +143,7 @@ impl SocBus {
             let mut bank = self.periph.i2s[0].inner.take_pcm_bank();
             let data = self.periph.i2s[port].data(cycles, self.cycles, port, &self.periph.gpio, bank.as_deref_mut());
             self.periph.i2s[0].inner.restore_pcm_bank(bank);
+            if self.periph.i2s[port].inner.take_host_short() { self.slice_yield = true; }   // Jumperly patch J28 (J17): let the host queue more
             let mut dma = self.periph.i2s[port].dma;
             let mut irq = false;
             // IDF v5.5.4 hal/esp32/include/hal/i2s_ll.h:639-643 counts RXEOF_NUM in words.
@@ -186,6 +187,33 @@ mod tests {
             assert_eq!(b.periph.i2s[port].step_calls, 1);
         }
     }
+    /// Jumperly patch J28 (J17 on the S3): with the host supplying the receiver, a frame falling
+    /// due with no host word queued ends the slice once, so the host can queue more.
+    #[test]
+    fn a_host_receiver_short_of_frames_ends_the_slice_once() {
+        use esp_soc::SocBus as _;
+        let mut b = SocBus::new(4 << 20, [0; 6]);
+        b.write32(0x3ff0_00c0, 1 << 4).unwrap();                            // DPORT: I2S0 clock
+        for (off, v) in [(0xac, 25 | (1 << 8) | (2 << 14)), (0xb0, (25 << 6) | (16 << 18)), (8, 1 << 5)] {
+            b.write32(0x3ff4_f000 + off, v).unwrap();                       // 16-bit stereo, RX_START
+        }
+        let desc = 0x3ffb_0100;
+        b.write32(desc, (1 << 31) | 4092).unwrap();                         // owner DMA, size 4092
+        b.write32(desc + 4, 0x3ffb_1000).unwrap();
+        b.write32(desc + 8, desc).unwrap();                                 // a ring of one
+        b.write32(0x3ff4_f034, (1 << 29) | (desc & 0xfffff)).unwrap();      // IN_LINK: start
+        b.periph.i2s[0].inner.set_host(true);
+        b.take_slice_yield();
+        b.i2s_step(40_000);
+        assert!(b.take_slice_yield(), "a frame fell due with nothing queued");
+        b.i2s_step(40_000);
+        assert!(!b.take_slice_yield(), "once until the host pushes");
+        b.periph.i2s[0].inner.host_push(&[[1 << 16, 2 << 16]]);
+        b.i2s_step(80_000);
+        assert!(b.take_slice_yield(), "short again after the push ran out");
+        assert!(b.periph.i2s[0].dma.running, "the receiver kept running throughout");
+    }
+
     /// 16-bit stereo at 7843 Hz (PLL160 / 25.5 / BCK 25 / 32): one frame takes 30,601 CPU cycles.
     fn receiver(bits: u32, conf: u32) -> ClassicI2s {
         let mut i = ClassicI2s::new();

@@ -69,6 +69,17 @@ pub struct SocBus {
     pub i2c_host: bool,
     pub spi_host: bool,
     pub(crate) slice_yield: bool,
+    /// Jumperly patch J28: the GP-SPI transfer the host has (`pending_spi_host` / `finish_spi_host`).
+    spi_wait: Option<SpiWait>,
+}
+
+/// Jumperly patch J28: a GP-SPI transfer handed to the host, with what `run_gp_spi`'s tail needs to
+/// finish it (DMA RX, `finish`, CS release). One at a time; `spi::Transfer` stays crate-private.
+struct SpiWait {
+    index: usize,
+    transfer: crate::spi::Transfer,
+    out_eof: u32,
+    in_link: u32,
 }
 
 impl SocBus {
@@ -95,7 +106,7 @@ impl SocBus {
             clock_half: 0,
             pins_active: false,
             ble: Default::default(),
-            pin_watch: None, rmt_tap: None, pwm_tap: None, i2c_host: false, spi_host: false, slice_yield: false,   // Jumperly patch J28
+            pin_watch: None, rmt_tap: None, pwm_tap: None, i2c_host: false, spi_host: false, slice_yield: false, spi_wait: None,   // Jumperly patch J28
         }
     }
     /// Jumperly patch J28: hand LEDC output changes to the host.
@@ -104,6 +115,25 @@ impl SocBus {
             if tap.check(&self.periph, self.cycles) { self.slice_yield = true; }
         }
     }
+    /// Jumperly patch J28: the GP-SPI transfer waiting for the host: (controller 2 = HSPI / SPI2,
+    /// 3 = VSPI / SPI3, MOSI bytes, MISO bytes wanted).
+    pub fn pending_spi_host(&self) -> Option<(u8, Vec<u8>, usize)> {
+        self.spi_wait.as_ref().map(|w| (w.index as u8 + 2, w.transfer.tx.clone(), w.transfer.rx_len))
+    }
+    /// Jumperly patch J28: finish the waiting transfer with the host's MISO bytes (missing ones read
+    /// 0xFF), then start what the other controller queued meanwhile. False when nothing waits.
+    pub fn finish_spi_host(&mut self, rx: &[u8]) -> bool {
+        let Some(wait) = self.spi_wait.take() else { return false };
+        let mut rx = rx.to_vec();
+        rx.resize(wait.transfer.rx_len, 0xff);
+        self.finish_gp_spi(wait, &rx);
+        self.run_gp_spi();
+        self.flush_gpio();
+        self.irq_dirty = true;
+        true
+    }
+    /// Jumperly patch J28: drop a transfer the host still has (the chip reset its controller).
+    pub(crate) fn drop_spi_wait(&mut self) { self.spi_wait = None; }
     /// Jumperly patch J28: a GPIO or IO_MUX register changed — record pin states, end the slice.
     pub(crate) fn note_pin_write(&mut self) {
         if let Some(w) = &mut self.pin_watch {
@@ -259,7 +289,10 @@ impl SocBus {
         let v = if size == 4 { value } else { merge(self.periph.read32(a), value, addr, size) };
         let old_enable = self.periph.gpio.gpio.enable;
         if (0x3ff4_8800..=0x3ff4_88ff).contains(&a) { self.periph.adc.now_cycles = self.cycles; }
+        // Jumperly patch J28: RTC_IO PAD_DAC1/2, SENS_SAR_DAC_CTRL2 — a DAC change ends the slice.
+        let dac_before = (self.pin_watch.is_some() && matches!(a, 0x3ff4_8484 | 0x3ff4_8488 | 0x3ff4_889c)).then(|| self.periph.adc.dac_outputs());
         self.periph.write32(a, v);
+        if dac_before.is_some_and(|before| before != self.periph.adc.dac_outputs()) { self.slice_yield = true; }
         if matches!(a >> 12, 0x3ff44 | 0x3ff49) || (0x3ff4_8400..0x3ff4_8500).contains(&a) { self.note_pin_write(); }   // Jumperly patch J28: GPIO, IO_MUX, RTC_IO
         if self.pwm_tap.is_some() && pwm_commit(a, v) { self.note_pwm(); }      // Jumperly patch J28
         if self.periph.i2c.iter().any(|c| c.deferred) { self.slice_yield = true; }   // Jumperly patch J28
@@ -410,10 +443,11 @@ impl SocBus {
         (pos == data.len()).then_some(last)
     }
     fn run_gp_spi(&mut self) {
+        if self.spi_wait.is_some() { return; }   // Jumperly patch J28: one transfer with the host at a time
         for index in 0..2 {
-            let Some((dma_len, rx_len, dma_rx)) = self.periph.spi[index]
+            let Some(dma_len) = self.periph.spi[index]
                 .pending()
-                .map(|t| (t.dma_tx_len, t.rx_len, t.dma_rx))
+                .map(|t| t.dma_tx_len)
             else {
                 continue;
             };
@@ -446,6 +480,15 @@ impl SocBus {
                     .set_output_signal(cs_signals[cs], polarity, true);
             }
             self.flush_gpio();
+            let wait = SpiWait { index, transfer, out_eof, in_link };   // Jumperly patch J28
+            if self.spi_host {
+                // Jumperly patch J28: the host answers between slices (`finish_spi_host`).
+                self.periph.spi[index].host_busy = true;
+                self.spi_wait = Some(wait);
+                self.slice_yield = true;
+                return;
+            }
+            let transfer = &wait.transfer;
             let rx = if self.board.uses_spi_pins() {
             let gpio = &self.periph.gpio;
             let pins = esp_soc::board::SpiPins {
@@ -455,22 +498,31 @@ impl SocBus {
             };
             self.board.spi_transfer_pins(host as u8, pins, &transfer.tx, transfer.rx_len)
             } else { self.board.spi_transfer(host as u8, &transfer.tx, transfer.rx_len) };
-            let mut in_eof = 0;
-            if dma_rx && rx_len != 0 {
-                match self.dma_write_chain(in_link, &rx[..rx.len().min(rx_len)]) {
-                    Some(last) => in_eof = last,
-                    None => self.periph.spi[index].dma_fault(false),
-                }
+            self.finish_gp_spi(wait, &rx);
+        }
+    }
+    /// The end of a GP-SPI transfer: MISO bytes through the RX descriptors or into W0..W15, the
+    /// completion interrupts, CS released. Jumperly patch J28: out of `run_gp_spi`, so the host's
+    /// answer (`finish_spi_host`) ends a transfer the same way the board's does.
+    fn finish_gp_spi(&mut self, wait: SpiWait, rx: &[u8]) {
+        let SpiWait { index, transfer, out_eof, in_link } = wait;
+        let (_, _, _, cs_signals) = crate::spi::signals(index + 2);
+        let (dma_rx, rx_len) = (transfer.dma_rx, transfer.rx_len);
+        let mut in_eof = 0;
+        if dma_rx && rx_len != 0 {
+            match self.dma_write_chain(in_link, &rx[..rx.len().min(rx_len)]) {
+                Some(last) => in_eof = last,
+                None => self.periph.spi[index].dma_fault(false),
             }
-            let cs = transfer.cs;
-            let keep_cs = transfer.keep_cs;
-            self.periph.spi[index].finish(transfer, &rx, out_eof, in_eof);
-            if !keep_cs {
-                if let Some((cs, polarity)) = cs {
-                    self.periph
-                        .gpio
-                        .set_output_signal(cs_signals[cs], !polarity, true);
-                }
+        }
+        let cs = transfer.cs;
+        let keep_cs = transfer.keep_cs;
+        self.periph.spi[index].finish(transfer, rx, out_eof, in_eof);
+        if !keep_cs {
+            if let Some((cs, polarity)) = cs {
+                self.periph
+                    .gpio
+                    .set_output_signal(cs_signals[cs], !polarity, true);
             }
         }
     }
@@ -1084,6 +1136,157 @@ mod tests {
         b.write32(I2C0 + 0x04, 1 << 5).unwrap();                          // TRANS_START
         assert!(b.periph.i2c[0].deferred);
         assert!(b.take_slice_yield());
+    }
+
+    /// Jumperly patch J28: a transaction deferred to the host ends the slice; `service` runs it and
+    /// its interrupt source is read live (the classic's `I2c<16>` needs no refresh, unlike the S3).
+    #[test]
+    fn a_deferred_i2c_transaction_ends_the_slice_and_runs_on_service() {
+        use esp_soc::SocBus as _;
+        struct Nack;
+        impl esp_periph::i2c::I2cHost for Nack {
+            fn start(&mut self, _: u8, _: bool) -> bool { false }
+            fn write(&mut self, _: u8) -> bool { false }
+            fn read(&mut self) -> u8 { 0xff }
+            fn stop(&mut self) {}
+        }
+        const I2C0: u32 = 0x3ff5_3000;
+        const SRC_I2C0: u32 = 49;                                         // ETS_I2C_EXT0_INTR_SOURCE
+        let on = |b: &SocBus| b.periph.source_status(0)[1] & (1 << (SRC_I2C0 - 32)) != 0;
+        let mut b = SocBus::new(4 << 20, [0; 6]);
+        b.i2c_host = true;
+        for c in &mut b.periph.i2c { c.defer = true; }
+        for signal in [29, 30] { b.write32(0x3ff4_4130 + 4 * signal, (1 << 7) | 0x38).unwrap(); }   // SCL/SDA in: constant high
+        b.write32(0x3ff0_0104 + 4 * SRC_I2C0, 9).unwrap();                  // PRO CPU line 9
+        b.write32(I2C0 + 0x28, esp_periph::i2c::INT_NACK).unwrap();          // INT_ENA: NACK
+        b.write32(I2C0 + 0x1c, 0x50 << 1).unwrap();
+        b.write32(I2C0 + 0x58, 0).unwrap();                                  // RSTART
+        b.write32(I2C0 + 0x5c, (1 << 11) | (1 << 8) | 1).unwrap();           // WRITE one byte, ACK checked
+        b.write32(I2C0 + 0x60, 3 << 11).unwrap();                            // STOP
+        b.write32(I2C0 + 0x04, 1 << 5).unwrap();                             // TRANS_START: deferred to the host
+        assert!(b.periph.i2c[0].deferred && b.take_slice_yield());
+        assert!(!on(&b));
+        assert!(b.periph.i2c[0].service(&mut Nack));
+        assert!(on(&b), "the host NACKed the address; the source is live");
+        let mut lines = [0; 2];
+        b.periph.all_cpu_lines(&mut lines);
+        assert_eq!(lines[0], 1 << 9);
+    }
+
+    const VSPI: u32 = 0x3ff6_5000;
+
+    /// One CPU-buffer transfer: MOSI `byte` from W0, one MISO byte back into W0.
+    fn start_cpu_transfer(b: &mut SocBus, base: u32, byte: u32) {
+        b.write32(base + 0x80, byte).unwrap();                               // W0
+        b.write32(base + 0x1c, (1 << 28) | (1 << 27)).unwrap();              // USER: MISO, MOSI
+        b.write32(base + 0x28, 7).unwrap();                                  // MOSI_DLEN: 8 bits
+        b.write32(base + 0x2c, 7).unwrap();                                  // MISO_DLEN: 8 bits
+        b.write32(base, 1 << 18).unwrap();                                   // CMD.USR
+    }
+
+    /// Jumperly patch J28: with the SPI bridge on, a transfer waits for the host (USR stays set,
+    /// the slice ends) and finishes with the host's MISO bytes.
+    #[test]
+    fn spi_host_holds_the_transfer_until_the_host_answers() {
+        use esp_soc::SocBus as _;
+        let mut b = SocBus::new(4 << 20, [0; 6]);
+        b.spi_host = true;
+        start_cpu_transfer(&mut b, VSPI, 0x5a);
+        assert_eq!(b.pending_spi_host(), Some((3, vec![0x5a], 1)), "VSPI is host 3");
+        assert!(b.take_slice_yield());
+        assert_ne!(b.read32(VSPI).unwrap() & (1 << 18), 0, "USR stays set while the host has it");
+        b.write32(VSPI, 1 << 18).unwrap();                                   // USR again: still the one transfer
+        assert_eq!(b.periph.spi[1].transfers, 0);
+        assert!(b.finish_spi_host(&[0xa5]));
+        assert_eq!(b.read32(VSPI + 0x80).unwrap() & 0xff, 0xa5);
+        assert_eq!(b.read32(VSPI).unwrap() & (1 << 18), 0);
+        assert_eq!(b.periph.spi[1].transfers, 1);
+        assert_eq!(b.pending_spi_host(), None);
+        assert!(!b.finish_spi_host(&[1]), "nothing waits");
+    }
+
+    /// Jumperly patch J28: one transfer waits at a time; the other controller's transfer is next.
+    #[test]
+    fn spi_host_serves_the_second_controller_after_the_first() {
+        let mut b = SocBus::new(4 << 20, [0; 6]);
+        b.spi_host = true;
+        start_cpu_transfer(&mut b, VSPI, 0x33);
+        start_cpu_transfer(&mut b, SPI2, 0x22);
+        assert_eq!(b.pending_spi_host(), Some((3, vec![0x33], 1)));
+        assert_ne!(b.read32(SPI2).unwrap() & (1 << 18), 0, "HSPI's transfer is queued");
+        assert!(b.finish_spi_host(&[0x03]));
+        assert_eq!(b.pending_spi_host(), Some((2, vec![0x22], 1)), "HSPI is host 2");
+        assert!(b.finish_spi_host(&[]));
+        assert_eq!(b.read32(SPI2 + 0x80).unwrap() & 0xff, 0xff, "missing MISO bytes read 0xFF");
+        assert_eq!((b.periph.spi[0].transfers, b.periph.spi[1].transfers), (1, 1));
+    }
+
+    /// Jumperly patch J28: a DMA transfer through the host stores the MISO bytes through the RX
+    /// descriptors, as the board path does.
+    #[test]
+    fn spi_host_transfer_with_dma_writes_the_rx_descriptors() {
+        let mut b = SocBus::new(4 << 20, [0; 6]);
+        b.spi_host = true;
+        let (tx_desc, rx_desc, tx_buf, rx_buf) = (0x3ffb_0100, 0x3ffb_0140, 0x3ffb_0200, 0x3ffb_0240);
+        for (desc, buf) in [(tx_desc, tx_buf), (rx_desc, rx_buf)] {
+            b.write32(desc, 0xc000_3003).unwrap();                           // owner, eof, length 3, size 3
+            b.write32(desc + 4, buf).unwrap();
+            b.write32(desc + 8, 0).unwrap();
+        }
+        b.write32(tx_buf, 0x0033_2211).unwrap();
+        b.write32(SPI2 + 0x104, (1 << 29) | (tx_desc & 0xfffff)).unwrap();
+        b.write32(SPI2 + 0x108, (1 << 29) | (rx_desc & 0xfffff)).unwrap();
+        b.write32(SPI2 + 0x1c, (1 << 28) | (1 << 27)).unwrap();
+        b.write32(SPI2 + 0x28, 23).unwrap();
+        b.write32(SPI2 + 0x2c, 23).unwrap();
+        b.write32(SPI2, 1 << 18).unwrap();
+        assert_eq!(b.pending_spi_host(), Some((2, vec![0x11, 0x22, 0x33], 3)));
+        assert!(b.finish_spi_host(&[0xa1, 0xa2, 0xa3]));
+        assert_eq!(b.read32(rx_buf), Ok(0x00a3_a2a1));
+        assert_eq!((b.read32(rx_desc).unwrap() >> 12) & 0xfff, 3);
+        assert_eq!(b.read32(SPI2 + 0x114).unwrap() & 0x1e8, 0x1e8);
+    }
+
+    /// Jumperly patch J28: a chip reset drops a transfer the host still has (its controller is new).
+    #[test]
+    fn reboot_drops_a_waiting_spi_transfer() {
+        use esp_soc::SocBus as _;
+        let mut b = SocBus::new(4 << 20, [0; 6]);
+        b.spi_host = true;
+        start_cpu_transfer(&mut b, VSPI, 0x5a);
+        assert!(b.pending_spi_host().is_some());
+        b.reboot([0; 6]);
+        assert_eq!(b.pending_spi_host(), None);
+        assert!(!b.finish_spi_host(&[1]));
+    }
+
+    /// Jumperly patch J28: in Jumperly mode a DAC output change ends the slice, so the host sees it.
+    #[test]
+    fn a_dac_change_ends_the_slice() {
+        use esp_soc::SocBus as _;
+        let mut b = SocBus::new(4 << 20, [0; 6]);
+        let on = (1 << 18) | (1 << 10);
+        b.write32(0x3ff4_8484, (100 << 19) | on).unwrap();
+        assert!(!b.take_slice_yield(), "outside Jumperly mode");
+        b.pin_watch = Some(PinWatch::new(&b.periph, 0));
+        b.write32(0x3ff4_8484, (100 << 19) | on).unwrap();
+        assert!(!b.take_slice_yield(), "the same value");
+        b.write32(0x6000_8484, (200 << 19) | on).unwrap();                   // AHB alias
+        assert!(b.take_slice_yield());
+        assert_eq!(b.periph.adc.take_dac_changes(), vec![(25, 2588)]);
+        b.write32(0x3ff4_889c, 1 << 24).unwrap();                            // SENS_SAR_DAC_CTRL2: DAC1 cosine
+        assert!(b.take_slice_yield(), "the output turned off");
+        assert_eq!(b.periph.adc.take_dac_changes(), vec![(25, u32::MAX)]);
+    }
+
+    /// Jumperly patch J28: the linear ADC of Jumperly mode survives a chip reset (the RTC domain).
+    #[test]
+    fn reboot_keeps_the_linear_adc() {
+        use esp_soc::SocBus as _;
+        let mut b = SocBus::new(4 << 20, [0; 6]);
+        b.periph.adc.adc_linear = true;
+        b.reboot([0; 6]);
+        assert!(b.periph.adc.adc_linear);
     }
 
     #[test]

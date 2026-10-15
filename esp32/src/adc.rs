@@ -55,6 +55,11 @@ pub struct ClassicAdc {
     pub now_cycles: u64,
     touched: [bool; 10],
     pub(crate) touch_timer: bool,
+    /// Jumperly patch J28: a straight line from 0 V to the attenuation's full scale instead of
+    /// IDF's line fitting, so the sketch reads what the circuit's voltage says (J5 on the S3/C3).
+    pub adc_linear: bool,
+    /// Jumperly patch J28: the DAC outputs (GPIO25, GPIO26) the host last heard of, mV.
+    dac_last: [Option<u32>; 2],
 }
 
 impl Default for ClassicAdc {
@@ -81,6 +86,7 @@ impl ClassicAdc {
             now_cycles: 0,
             touched: [false; 10],
             touch_timer: false,
+            adc_linear: false, dac_last: [None; 2],   // Jumperly patch J28
         }
     }
 
@@ -112,6 +118,22 @@ impl ClassicAdc {
                 (powered && !cw).then_some((pin, (((value >> 19) & 255) * 3300 + 127) / 255))
             })
             .collect()
+    }
+
+    /// Jumperly patch J28: the DAC outputs that changed since the last call, `(pin, mV)` for an
+    /// enabled one, `(pin, u32::MAX)` once when it turns off.
+    pub fn take_dac_changes(&mut self) -> Vec<(u8, u32)> {
+        let now = self.dac_outputs();
+        let mut changes = Vec::new();
+        for (channel, last) in self.dac_last.iter_mut().enumerate() {
+            let pin = 25 + channel as u8;
+            let mv = now.iter().find(|&&(p, _)| p == pin).map(|&(_, mv)| mv);
+            if mv != *last {
+                changes.push((pin, mv.unwrap_or(u32::MAX)));
+                *last = mv;
+            }
+        }
+        changes
     }
 
     pub fn read_sens(&mut self, off: u32) -> u32 {
@@ -174,9 +196,12 @@ impl ClassicAdc {
             ];
             let offsets = [[75, 78, 107, 142], [63, 66, 89, 128]];
             let slope = 1100 * scales[unit][attenuation] / 4096;
+            let linear = self.adc_linear;   // Jumperly patch J28
             raw = self.analog.convert(pins[channel], self.now_cycles, |volts| {
-            let mv = ((volts.clamp(0.0, 3.3) * 1000.0).round() as u32)
-                .saturating_sub(offsets[unit][attenuation]);
+            let mv = (volts.clamp(0.0, 3.3) * 1000.0).round() as u32;
+            // Jumperly patch J28: full scale 1100 / 1500 / 2200 / 3100 mV at 0 / 2.5 / 6 / 11 dB.
+            if linear { return (mv * 4095 / [1100, 1500, 2200, 3100][attenuation]).min(4095); }
+            let mv = mv.saturating_sub(offsets[unit][attenuation]);
             ((mv * 65536 + slope / 2) / slope).min(4095)
             }) >> (12 - width);
             if control & (1 << (28 + unit)) == 0 {
@@ -319,6 +344,56 @@ mod tests {
         assert_eq!(adc.dac_outputs(), vec![(26, 1656)]);
         adc.rtc_io.write(0x88, 1 << 17);
         assert!(adc.dac_outputs().is_empty());
+    }
+
+    /// Jumperly patch J28: the linear ADC reads a straight line from 0 V to the attenuation's full
+    /// scale (1100 / 1500 / 2200 / 3100 mV), clamped; without the flag upstream's line fitting holds.
+    #[test]
+    fn linear_mode_reads_a_straight_line_to_the_attenuation_full_scale() {
+        let mut adc = ClassicAdc::new();
+        adc.write_sens(0, 1 << 28);                                          // ADC1: not inverted
+        adc.write_sens(0x34, 3 << 12);                                       // CH6 (GPIO34): 11 dB
+        adc.analog.set(34, esp_periph::AnalogSource::Const(1.650));
+        assert_eq!(sample(&mut adc, 0, 6), 1872, "upstream's model without the flag");
+        adc.adc_linear = true;
+        for (volts, raw) in [(0.0, 0), (1.55, 2047), (3.1, 4095), (3.3, 4095)] {
+            adc.analog.set(34, esp_periph::AnalogSource::Const(volts));
+            assert_eq!(sample(&mut adc, 0, 6), raw, "{volts} V at 11 dB");
+        }
+        adc.write_sens(0x34, 0);                                             // 0 dB
+        adc.analog.set(34, esp_periph::AnalogSource::Const(1.1));
+        assert_eq!(sample(&mut adc, 0, 6), 4095);
+        adc.analog.set(34, esp_periph::AnalogSource::Const(0.55));
+        assert_eq!(sample(&mut adc, 0, 6), 2047);
+        adc.write_sens(0x2c, 0xc);                                           // 9 bits
+        assert_eq!(sample(&mut adc, 0, 6), 2047 >> 3);
+        adc.write_sens(0x2c, 0xf);
+        adc.write_sens(0, 0);                                                // inverted data
+        assert_eq!(sample(&mut adc, 0, 6), 4095 - 2047);
+        adc.write_sens(0x90, 1 << 29);                                       // ADC2 not inverted
+        adc.write_sens(0x38, 2 << 4);                                        // ADC2 CH2 (GPIO2): 6 dB
+        adc.analog.set(2, esp_periph::AnalogSource::Const(1.1));
+        assert_eq!(sample(&mut adc, 1, 2), 2047);
+    }
+
+    /// Jumperly patch J28: the host hears an enabled DAC output once per change, and once when it
+    /// turns off (`u32::MAX`).
+    #[test]
+    fn dac_changes_report_enabled_outputs_once_per_change() {
+        let mut adc = ClassicAdc::new();
+        assert!(adc.take_dac_changes().is_empty());
+        let on = (1 << 18) | (1 << 10);                                      // XPD_DAC, DAC_XPD_FORCE
+        adc.rtc_io.write(0x84, (128 << 19) | on);
+        assert_eq!(adc.take_dac_changes(), vec![(25, 1656)]);
+        assert!(adc.take_dac_changes().is_empty(), "no change, nothing to report");
+        adc.rtc_io.write(0x84, (255 << 19) | on);
+        assert_eq!(adc.take_dac_changes(), vec![(25, 3300)]);
+        adc.rtc_io.write(0x88, on);                                          // DAC2 on, code 0
+        adc.rtc_io.write(0x84, 0);
+        assert_eq!(adc.take_dac_changes(), vec![(25, u32::MAX), (26, 0)]);
+        assert!(adc.take_dac_changes().is_empty(), "the off state is reported once");
+        adc.write_sens(0x9c, 1 << 25);                                       // DAC2 in cosine mode
+        assert_eq!(adc.take_dac_changes(), vec![(26, u32::MAX)]);
     }
 
     #[test]
