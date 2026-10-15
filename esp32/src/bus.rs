@@ -260,7 +260,7 @@ impl SocBus {
         let old_enable = self.periph.gpio.gpio.enable;
         if (0x3ff4_8800..=0x3ff4_88ff).contains(&a) { self.periph.adc.now_cycles = self.cycles; }
         self.periph.write32(a, v);
-        if matches!(a >> 12, 0x3ff44 | 0x3ff49) { self.note_pin_write(); }      // Jumperly patch J28: GPIO, IO_MUX
+        if matches!(a >> 12, 0x3ff44 | 0x3ff49) || (0x3ff4_8400..0x3ff4_8500).contains(&a) { self.note_pin_write(); }   // Jumperly patch J28: GPIO, IO_MUX, RTC_IO
         if self.pwm_tap.is_some() && pwm_commit(a, v) { self.note_pwm(); }      // Jumperly patch J28
         if self.periph.i2c.iter().any(|c| c.deferred) { self.slice_yield = true; }   // Jumperly patch J28
         if self.pins_active {
@@ -1004,19 +1004,22 @@ mod tests {
     fn pin_watch_write_ends_the_slice() {
         use esp_soc::SocBus as _;
         let mut b = SocBus::new(4 << 20, [0; 6]);
-        b.pin_watch = Some(PinWatch::new(&b.periph, 1 << 2));
+        b.pin_watch = Some(PinWatch::new(&b.periph, (1 << 2) | (1 << 16)));
         b.cycles = 77;
         b.write32(0x3ff4_4024, 1 << 2).unwrap();                         // GPIO_ENABLE_W1TS
         assert!(b.take_slice_yield());
         assert!(!b.take_slice_yield(), "taking the request clears it");
         b.cycles = 88;
-        b.write32(0x6000_9040, 1 << 8).unwrap();                         // IO_MUX GPIO2 pull-up, AHB alias
+        b.write32(0x6000_849c, 1 << 27).unwrap();                        // RTC_IO_TOUCH_PAD2.RUE (GPIO2), AHB alias
+        assert!(b.take_slice_yield());
+        b.cycles = 99;
+        b.write32(0x6000_904c, 1 << 8).unwrap();                         // IO_MUX GPIO16 FUN_WPU, AHB alias
         assert!(b.take_slice_yield());
         assert_eq!(b.pin_watch.as_ref().unwrap().events,
-            vec![(77, 2, state::ENABLE | PLAIN), (88, 2, state::ENABLE | state::PULL_UP | PLAIN)]);
+            vec![(77, 2, state::ENABLE | PLAIN), (88, 2, state::ENABLE | state::PULL_UP | PLAIN), (99, 16, state::PULL_UP | PLAIN)]);
         b.write32(0x3ff4_4024, 1 << 3).unwrap();                         // an unwatched pin
         assert!(!b.take_slice_yield());
-        assert_eq!(b.pin_watch.as_ref().unwrap().events.len(), 2);
+        assert_eq!(b.pin_watch.as_ref().unwrap().events.len(), 3);
     }
 
     #[test]
