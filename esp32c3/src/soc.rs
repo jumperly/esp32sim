@@ -73,6 +73,7 @@ impl esp_soc::SocBus for SocBus {
         if self.periph.i2s_rx { Some(timer.unwrap_or(u64::MAX).min(256)) } else { timer }
     }
     fn irq_dirty(&mut self) -> &mut bool { &mut self.irq_dirty }
+    fn take_slice_yield(&mut self) -> bool { std::mem::take(&mut self.slice_yield) }   // Jumperly patch J1/J9
     fn refresh_irq(&mut self) -> bool { self.periph.refresh_lines(); true }
     fn misc(&mut self) -> &mut Misc { &mut self.periph.misc }
     fn load_bytes(&mut self, addr: u32, data: &[u8]) -> Result<(), String> { SocBus::load_bytes(self, addr, data) }
@@ -134,6 +135,9 @@ impl esp_soc::SocBus for SocBus {
         p.i2s0.keep_rx_input(&mut old.i2s0);
         p.adc.analog = old.adc.analog;
         p.adc.analog.set_stream_clock_offset(self.cycles); // the new peripheral clock starts at zero
+        p.adc.adc_linear = old.adc.adc_linear;   // Jumperly patch J5: the straight-line ADC survives a reset
+        if let Some(tap) = &mut self.pwm_tap { if tap.reset(self.cycles) { self.slice_yield = true; } }   // Jumperly patch J4
+        p.i2c.defer = self.i2c_host;   // Jumperly patch J6: the bridge survives a chip reset
         p.misc.log_unknown = old.misc.log_unknown;
         p.usb.connected = old.usb.connected;
         p.rtc.reset_cause = cause;
@@ -144,6 +148,7 @@ impl esp_soc::SocBus for SocBus {
         p.spi1.jedec = old.spi1.jedec;
         p.gpio.restore_external(&old.gpio);
         p.gpio.strap = old.gpio.strap;      // strapping pins are board wiring, not chip state
+        if self.pin_watch.is_some() { p.gpio.input = old.gpio.input; }   // Jumperly patch J9: the outside circuit is not reset with the chip
         // Publish the cause where the ROM reads it, so the boot banner says RTC_SW_CPU_RST like
         // real silicon rather than POWERON.
         p.rtc.ram.write(0x38, cause | (cause << 6));
@@ -151,6 +156,7 @@ impl esp_soc::SocBus for SocBus {
         self.attach_board_devices();
         for area in self.debug.iter() { esp_periph::Dispatch::debug(&mut self.periph, area, true); }
         self.periph.misc.log_all = self.debug.has("mmio");
+        self.note_pin_write();   // Jumperly patch J9: the reset released every pin; report it
         cause
     }
     fn sw_reset(&self) -> bool { self.periph.rtc.sw_reset }

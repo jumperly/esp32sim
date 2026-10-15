@@ -16,11 +16,15 @@ mod ble;
 pub use ble::*;
 pub use ethernet::*;
 mod s3;
+mod jumperly;
+mod net_host;
 #[cfg(target_arch = "wasm32")]
 mod browser_jit;
 use machine::MachineKind;
 pub use network::*;
 pub use s3::*;
+pub use jumperly::*;
+pub use net_host::*;
 #[cfg(target_arch = "wasm32")]
 pub use browser_jit::*;
 #[cfg(target_arch = "wasm32")]
@@ -48,6 +52,10 @@ pub struct Emu {
     ethernet_out: Vec<Vec<u8>>,
     ble_out: String,
     booted: bool,
+    /// Jumperly patch J3: the result of the last `esp32sim_*_take` call
+    buf: Vec<u8>,
+    /// Jumperly patch J13: the host's side of the station's NAT (`esp32sim_net_host`)
+    net: Option<esp_soc::nat::QueueHandle>,
     #[cfg(target_arch = "wasm32")]
     jit: BrowserJit,
 }
@@ -160,6 +168,8 @@ pub unsafe extern "C" fn esp32sim_new(board: *const u8, board_len: usize, flash_
         m,
         out: Vec::new(), ethernet_out: Vec::new(), ble_out: String::new(),
         booted: false,
+        buf: Vec::new(),
+        net: None,
         #[cfg(target_arch = "wasm32")]
         jit: BrowserJit::default(),
     }))

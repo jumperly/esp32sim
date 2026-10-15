@@ -2,6 +2,8 @@ pub mod board;
 pub mod bus;
 pub mod periph;
 pub mod i2c;
+pub mod jumperly;   // Jumperly patch J2
+pub mod pwm;        // Jumperly patch J4
 pub mod soc;
 pub mod timing;
 pub mod rough_memory;

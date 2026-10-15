@@ -627,6 +627,10 @@ impl Peripherals {
 
     /// Raw per-source interrupt status (4 × 32 bits).
     pub fn source_status(&self) -> [u32; 4] { Dispatch::source_status(self) }
+    /// Jumperly patch J6: the I2C blocks are optional devices, whose interrupt sources are cached at
+    /// their register writes and ticks; a transaction the host finished between runs (`I2c::service`,
+    /// `set_defer(false)`) raises its interrupt only once the cache is refreshed.
+    pub fn refresh_i2c_sources(&mut self) { for block in [0x13, 0x27] { Dispatch::refresh_optional(self, block); } }
 
     /// The I2S controller carrying the board's audio output (whichever has played samples).
     pub fn audio(&self) -> &I2s { if self.i2s1.frames_out > self.i2s0.frames_out { &self.i2s1 } else { &self.i2s0 } }

@@ -86,13 +86,16 @@ pub fn voltage_code(volts: f32, atten: u32, calibration: Calibration) -> u32 {
 pub struct SarAdc {
     pub analog: AnalogInputs,
     pub now_cycles: u64,
+    /// Jumperly patch J5 on the C3/C6 APB SAR: a straight line to the attenuation full scale
+    /// (same codes as the S3), instead of the IDF curve. The host sets it in Jumperly mode.
+    pub adc_linear: bool,
     c6: bool,
     ram: RegRam,
     raw: u32,
 }
 impl SarAdc {
     pub fn new(c6: bool, cpu_hz: u64) -> Self {
-        Self { analog: AnalogInputs::new(cpu_hz), now_cycles: 0, c6, ram: RegRam::new(), raw: 0 }
+        Self { analog: AnalogInputs::new(cpu_hz), now_cycles: 0, adc_linear: false, c6, ram: RegRam::new(), raw: 0 }
     }
 }
 impl Device for SarAdc {
@@ -119,8 +122,11 @@ impl Device for SarAdc {
                     };
                     if let Some(pin) = pin.filter(|_| value & (1 << (31 - unit)) != 0) {
                         let calibration = if self.c6 { Calibration::C6 } else { Calibration::C3 };
+                        let linear = self.adc_linear;
+                        let atten = (value >> 23) & 3;
                         let raw = self.analog.convert(pin, self.now_cycles, |v| {
-                            voltage_code(v, (value >> 23) & 3, calibration)
+                            if linear { crate::rtc_cntl::RtcCntl::linear_adc_code(v, atten) }
+                            else { voltage_code(v, atten, calibration) }
                         });
                         self.ram.write(0x2c + 4 * unit, raw);
                         self.raw |= 1 << (31 - unit);
@@ -132,6 +138,30 @@ impl Device for SarAdc {
             _ => self.ram.write(off, value),
         }
         WriteEffect::NONE
+    }
+}
+
+#[cfg(test)]
+mod linear_tests {
+    use super::*;
+    use crate::analog::AnalogSource;
+
+    /// One APB SAR conversion of ADC1 channel 0 (GPIO0) at 11 dB. Bit 31 arms the unit, bit 29 rising starts it.
+    fn read_gpio0(adc: &mut SarAdc) -> u32 {
+        let start = (1 << 31) | (3 << 23) | (1 << 29);
+        adc.write(0x20, start & !(1 << 29));
+        adc.write(0x20, start);
+        adc.read(0x2c)
+    }
+
+    #[test]
+    fn linear_mode_maps_3v3_to_full_scale() {
+        let mut adc = SarAdc::new(false, 160_000_000);
+        adc.adc_linear = true;
+        adc.analog.set(0, AnalogSource::Const(3.3));
+        assert_eq!(read_gpio0(&mut adc), 4095);
+        adc.analog.set(0, AnalogSource::Const(1.55));
+        assert_eq!(read_gpio0(&mut adc), 1550 * 4095 / 3100);
     }
 }
 

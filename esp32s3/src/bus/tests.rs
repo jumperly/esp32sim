@@ -1592,6 +1592,85 @@ fn rmt_dma_ring_waits_for_a_cpu_owned_node_and_resumes_after_restart() {
     assert!(!bus.periph.gdma.out[0].running);
 }
 
+#[test]
+fn reboot_reports_running_pwm_outputs_as_disabled() {
+    use esp_periph::Device;
+    let mut bus = SocBus::new(1024, 1024, [0; 6]);
+    bus.pwm_tap = Some(Default::default());
+    bus.periph.ledc.write(0xd0, 3);
+    bus.periph.ledc.write(0xa0, (40000 << 4) | 8 | (1 << 25));
+    bus.periph.ledc.write(0x08, 64 << 4);
+    bus.periph.ledc.write(0x0c, 1 << 31);
+    bus.periph.ledc.write(0x00, (1 << 2) | (1 << 4));
+    bus.note_pwm();   // the duty counts as soon as PARA_UP queued it
+    assert!(bus.pwm_tap.as_mut().unwrap().events.drain(..).any(|(_, o)| o.signal == 73 && o.enabled));
+    bus.cycles = 1234;
+    bus.slice_yield = false;
+    esp_soc::SocBus::reboot(&mut bus, [0; 6]);
+    let tap = bus.pwm_tap.as_ref().unwrap();
+    assert_eq!(tap.events.len(), 1);
+    assert_eq!((tap.events[0].0, tap.events[0].1.signal, tap.events[0].1.enabled), (1234, 73, false));
+    assert!(bus.slice_yield);
+}
+
+#[test]
+fn reboot_keeps_the_linear_adc_and_the_bus_bridges() {
+    let mut bus = SocBus::new(1024, 1024, [0; 6]);
+    bus.periph.rtc.adc_linear = true;
+    bus.periph.rtc.analog.set(1, esp_periph::AnalogSource::Const(1.5));
+    bus.i2c_host = true;
+    for c in &mut bus.periph.i2c { c.defer = true; }
+    bus.spi_host = true;
+    esp_soc::SocBus::reboot(&mut bus, [0; 6]);
+    assert!(bus.periph.rtc.adc_linear);
+    assert_eq!(bus.periph.rtc.analog.volts(1, 0), 1.5);
+    assert!(bus.periph.i2c.iter().all(|c| c.defer));
+    assert!(bus.i2c_host && bus.spi_host);
+}
+
+/// Jumperly patch J6: a transaction the host finishes between runs raises the I2C interrupt, which
+/// the optional block caches at its register writes and ticks (`Peripherals::refresh_i2c_sources`).
+#[test]
+fn a_serviced_i2c_transaction_raises_its_interrupt_source() {
+    struct Nack;
+    impl crate::i2c::I2cHost for Nack {
+        fn start(&mut self, _: u8, _: bool) -> bool { false }
+        fn write(&mut self, _: u8) -> bool { false }
+        fn read(&mut self) -> u8 { 0xff }
+        fn stop(&mut self) {}
+    }
+    const I2C0: u32 = 0x6001_3000;
+    let on = |bus: &SocBus| bus.periph.source_status()[crate::periph::SRC_I2C0 / 32] & (1 << (crate::periph::SRC_I2C0 % 32)) != 0;
+    let mut bus = SocBus::new(1024, 1024, [0; 6]);
+    bus.i2c_host = true;
+    for c in &mut bus.periph.i2c { c.defer = true; }
+    bus.write32(I2C0 + 0x28, 1 << 10).unwrap();                      // INT_ENA: NACK
+    bus.write32(I2C0 + 0x58, 6 << 11).unwrap();                      // RSTART
+    bus.write32(I2C0 + 0x5c, (1 << 11) | (1 << 8) | 1).unwrap();     // WRITE one byte, ACK checked
+    bus.write32(I2C0 + 0x60, 2 << 11).unwrap();                      // STOP
+    bus.write32(I2C0 + 0x1c, 0x50 << 1).unwrap();                    // the address byte
+    bus.write32(I2C0 + 0x04, 1 << 5).unwrap();                       // TRANS_START: deferred to the host
+    assert!(bus.periph.i2c[0].deferred && esp_soc::SocBus::take_slice_yield(&mut bus));
+    assert!(!on(&bus));
+    assert!(bus.periph.i2c[0].service(&mut Nack));
+    assert!(bus.periph.i2c[0].irq(), "the host NACKed the address");
+    bus.periph.refresh_i2c_sources();
+    assert!(on(&bus));
+}
+
+#[test]
+fn only_committing_pwm_writes_are_shown_to_the_host() {
+    let ledc = 0x6001_9000;
+    assert!(pwm_commit(ledc, 1 << 4));                  // CH0_CONF0 with PARA_UP
+    assert!(pwm_commit(ledc + 0x14, 1 << 4));           // CH1_CONF0
+    assert!(!pwm_commit(ledc, 1 << 2));                 // CH0_CONF0 without PARA_UP
+    assert!(!pwm_commit(ledc + 0x08, 1 << 4));          // CH0_DUTY: not a CONF0 register
+    assert!(pwm_commit(ledc + 0xa0, 1 << 25));          // TIMER0_CONF with PARA_UP
+    assert!(!pwm_commit(ledc + 0xa0, 1 << 23));         // TIMER0_CONF reset / pause on the way
+    assert!(pwm_commit(0x6001_e000 + 0x50, 0));         // MCPWM0
+    assert!(!pwm_commit(0x6000_4000, 1 << 4));          // GPIO
+}
+
 // ------------------------------------------------------------------ SPI3
 
 const SPI3: u32 = 0x6002_5000;
@@ -1621,6 +1700,27 @@ fn spi3_cpu_transfer_reaches_the_board_as_host_3_on_its_own_source() {
     assert!(on(crate::periph::SRC_SPI3) && !on(crate::periph::SRC_SPI2));
     bus.write32(SPI3 + 0x38, 1 << 12).unwrap();
     assert!(!bus.periph.spi3.irq());
+}
+
+/// Jumperly patch J18: with the host bridge on, an SPI3 transfer waits (USR busy, the slice ends)
+/// next to SPI2's, each in its own controller.
+#[test]
+fn spi3_waits_for_the_host_beside_spi2() {
+    let mut bus = SocBus::new(1024, 1024, [0; 6]);
+    bus.spi_host = true;
+    for (base, byte) in [(SPI2, 0x22), (SPI3, 0x33)] {
+        bus.write32(base + 0x10, 1 << 27).unwrap();
+        bus.write32(base + 0x1c, 7).unwrap();
+        bus.write32(base + 0x98, byte).unwrap();
+        bus.write32(base, 1 << 24).unwrap();
+        assert_ne!(bus.read32(base).unwrap() & (1 << 24), 0, "USR busy while the host has it");
+    }
+    assert!(std::mem::take(&mut bus.slice_yield));
+    let t2 = bus.periph.spi2.host_wait.take().expect("SPI2 waits");
+    let t3 = bus.periph.spi3.host_wait.take().expect("SPI3 waits");
+    assert_eq!((t2.tx.as_slice(), t3.tx.as_slice()), (&[0x22u8][..], &[0x33u8][..]));
+    bus.periph.spi3.finish_transfer(t3, &[]);
+    assert_eq!(bus.read32(SPI3).unwrap() & (1 << 24), 0);
 }
 
 /// SPI3's DMA data phase comes from the GDMA OUT channel bound to trigger 1

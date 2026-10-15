@@ -13,6 +13,18 @@ impl Peripherals {
         const NO_SIGNAL: u32 = u32::MAX;
         ChipPins::S3.routes(&self.gpio, &self.io_mux).spi_pins(&self.spi3, [66, 67, 68, 71, 72, 127, NO_SIGNAL, NO_SIGNAL, NO_SIGNAL], 256, &[])
     }
+    /// Jumperly patches J19 / J21: the (TX, RX) pads of UART `port` (0..2) from upstream's route
+    /// (the GPIO matrix or the UART's IO_MUX pads; the lowest TX pad when it fans out).
+    pub fn uart_pins(&self, port: u8) -> (Option<u8>, Option<u8>) {
+        if port > 2 { return (None, None); }
+        let r = self.uart_route(port as usize);
+        ((r.tx_pins != 0).then(|| r.tx_pins.trailing_zeros() as u8), r.rx_pin)
+    }
+    /// Jumperly patch J21: the baud UART `port` (0..2) is set to, if its clock and divider are.
+    pub fn uart_baud(&self, port: u8) -> Option<u32> {
+        if port > 2 { return None; }
+        self.uart_route(port as usize).baud
+    }
     /// GP-SPI `host` 2 (SPI2, FSPI) or 3 (SPI3, HSPI).
     pub fn gpspi(&self, host: u8) -> &esp_periph::GpSpi { if host == 3 { &self.spi3 } else { &self.spi2 } }
     pub fn gpspi_mut(&mut self, host: u8) -> &mut esp_periph::GpSpi { if host == 3 { &mut self.spi3 } else { &mut self.spi2 } }

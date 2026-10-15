@@ -317,6 +317,9 @@ struct Script {
     resolves: bool,
     lookups: Vec<(u32, String, u16)>,
     answers: VecDeque<(u32, Resolve)>,
+    /// J15: flows the host opens to the guest, and what the NAT reported about them
+    incoming: VecDeque<(FlowId, u16, SocketAddrV4)>,
+    results: Vec<(FlowId, bool)>,
 }
 
 #[derive(Clone, Default)]
@@ -374,6 +377,8 @@ impl NatTransport for Mock {
         Some(qid)
     }
     fn resolved(&mut self) -> Option<(u32, Resolve)> { self.s().answers.pop_front() }
+    fn incoming(&mut self) -> Option<(FlowId, u16, SocketAddrV4)> { self.s().incoming.pop_front() }
+    fn incoming_result(&mut self, id: FlowId, accepted: bool) { self.s().results.push((id, accepted)); }
 }
 
 const GUEST: [u8; 4] = [10, 0, 2, 15];
@@ -645,4 +650,152 @@ fn local_ntp_answers_sntp_here_even_with_a_nat() {
     assert_eq!(&reply[0][26..30], &server);
     assert_eq!(net.ntp_answers, 1);
     assert!(mock.s().udp_opens.is_empty());
+}
+
+// ---- Jumperly patch J15: flows the host opens to the guest ----
+
+const GATEWAY: [u8; 4] = [10, 0, 2, 2];
+const PEER: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 9), 50000);
+
+/// A NAT whose station is known, with one incoming flow `id` to the guest's port 7000 queued.
+fn incoming_nat(mock: &Mock, id: FlowId) -> Nat {
+    let mut nat = mock.nat();
+    nat.set_station(Some(([2; 6], GUEST)), GATEWAY);
+    mock.s().incoming.push_back((id, 7000, PEER));
+    nat
+}
+
+/// A segment from the guest's port 7000 to the gateway's `port`.
+fn guest_seg(port: u16, seq: u32, ack: u32, flags: u8, data: &[u8]) -> Vec<u8> {
+    let mut seg = segment(seq, ack, flags, data);
+    seg[..2].copy_from_slice(&7000u16.to_be_bytes());
+    seg[2..4].copy_from_slice(&port.to_be_bytes());
+    seg
+}
+fn from_guest(nat: &mut Nat, seg: Vec<u8>, now_us: u64) -> Vec<Vec<u8>> { nat.tcp_in(&[2; 6], &GUEST, &GATEWAY, &seg, now_us) }
+fn ports_of(frame: &[u8]) -> (u16, u16) { (u16::from_be_bytes([frame[34], frame[35]]), u16::from_be_bytes([frame[36], frame[37]])) }
+
+#[test]
+fn an_incoming_flow_is_a_syn_from_the_gateway_and_the_guest_syn_ack_accepts_it() {
+    let mock = Mock::default();
+    let mut nat = incoming_nat(&mock, 77);
+    let syn = nat.poll(0);
+    assert_eq!(syn.len(), 1);
+    let f = &syn[0];
+    assert_eq!(flags(f), SYN);
+    assert_eq!((&f[0..6], &f[6..12]), (&[2u8; 6][..], &GATEWAY_MAC[..]));
+    assert_eq!((&f[26..30], &f[30..34]), (&GATEWAY[..], &GUEST[..]));
+    let (sport, dport) = ports_of(f);
+    assert_eq!((sport, dport), (EPHEMERAL_FIRST, 7000));
+    assert_eq!(transport_checksum(&GATEWAY, &GUEST, 6, &f[34..]), 0);
+    assert!(mock.s().results.is_empty(), "no answer yet");
+    assert_eq!(nat.poll(RETRANSMIT_US), syn, "the SYN is retransmitted");
+    let isn = seq_of(f);
+    // a SYN-ACK for another sequence number is not an answer
+    assert!(from_guest(&mut nat, guest_seg(sport, 900, isn.wrapping_add(5), SYN | ACK, &[]), RETRANSMIT_US + 1).is_empty());
+    let ack = from_guest(&mut nat, guest_seg(sport, 900, isn.wrapping_add(1), SYN | ACK, &[]), RETRANSMIT_US + 2);
+    assert_eq!(ack.len(), 1);
+    assert_eq!((flags(&ack[0]), seq_of(&ack[0]), ack_of(&ack[0])), (ACK, isn.wrapping_add(1), 901));
+    assert_eq!(mock.s().results, [(77, true)]);
+    assert_eq!(nat.incoming_accepted, 1);
+    // our ACK was lost: the guest repeats its SYN-ACK and gets it again, reported once
+    assert_eq!(from_guest(&mut nat, guest_seg(sport, 900, isn.wrapping_add(1), SYN | ACK, &[]), RETRANSMIT_US + 3), ack);
+    assert_eq!(mock.s().results.len(), 1);
+    assert!(nat.poll(RETRANSMIT_US * 3).is_empty(), "nothing left to retransmit");
+    // then both ways like an outbound flow
+    mock.s().reads.insert(77, VecDeque::from([b"ping\n".to_vec()]));
+    let data = nat.poll(RETRANSMIT_US * 3 + 1);
+    assert_eq!((flags(&data[0]), &data[0][54..]), (PSH | ACK, &b"ping\n"[..]));
+    let reply = from_guest(&mut nat, guest_seg(sport, 901, isn.wrapping_add(6), PSH | ACK, b"pong\n"), RETRANSMIT_US * 3 + 2);
+    assert_eq!(ack_of(&reply[0]), 906);
+    nat.poll(RETRANSMIT_US * 3 + 3);
+    assert_eq!(mock.s().written[&77], b"pong\n");
+    from_guest(&mut nat, guest_seg(sport, 906, isn.wrapping_add(6), RST, &[]), RETRANSMIT_US * 3 + 4);
+    assert_eq!(mock.s().closes, [(77, true)]);
+    assert_eq!(mock.s().results.len(), 1, "an accepted flow is not refused later");
+    assert_eq!(nat.incoming_refused, 0);
+}
+
+#[test]
+fn the_guest_rst_refuses_an_incoming_flow() {
+    let mock = Mock::default();
+    let mut nat = incoming_nat(&mock, 5);
+    let syn = nat.poll(0);
+    let (sport, _) = ports_of(&syn[0]);
+    assert!(from_guest(&mut nat, guest_seg(sport, 0, seq_of(&syn[0]).wrapping_add(1), RST | ACK, &[]), 1).is_empty());
+    assert_eq!(mock.s().results, [(5, false)]);
+    assert_eq!(mock.s().closes, [(5, true)]);
+    assert_eq!(nat.incoming_refused, 1);
+    assert!(nat.poll(RETRANSMIT_US * 2).is_empty());
+    assert!(nat.tcp.is_empty());
+}
+
+#[test]
+fn an_unanswered_incoming_flow_is_refused_and_the_guest_reset() {
+    let mock = Mock::default();
+    let mut nat = incoming_nat(&mock, 5);
+    let syn = nat.poll(0);
+    assert!(!nat.poll(INCOMING_TIMEOUT_US - 1).is_empty(), "still retransmitting");
+    let rst = nat.poll(INCOMING_TIMEOUT_US);
+    assert_eq!(rst.len(), 1);
+    assert_eq!((flags(&rst[0]), seq_of(&rst[0])), (RST, seq_of(&syn[0]).wrapping_add(1)));
+    assert_eq!(mock.s().results, [(5, false)]);
+    assert_eq!(mock.s().closes, [(5, true)]);
+    assert_eq!(nat.incoming_refused, 1);
+}
+
+#[test]
+fn an_incoming_flow_the_host_gives_up_on_resets_the_guest() {
+    let mock = Mock::default();
+    let mut nat = incoming_nat(&mock, 5);
+    nat.poll(0);
+    mock.s().states.insert(5, Connect::Failed(ErrorKind::ConnectionReset));
+    let rst = nat.poll(1);
+    assert_eq!(flags(&rst[0]), RST);
+    assert_eq!(mock.s().closes, [(5, true)]);
+    assert_eq!(nat.incoming_refused, 0, "the host's own choice");
+}
+
+#[test]
+fn without_a_station_or_a_free_flow_an_incoming_flow_is_refused_at_once() {
+    let mock = Mock::default();
+    let mut nat = mock.nat();
+    mock.s().incoming.push_back((5, 80, PEER));
+    assert!(nat.poll(0).is_empty());
+    assert_eq!(mock.s().results, [(5, false)]);
+    assert_eq!(mock.s().closes, [(5, true)]);
+    nat.set_station(Some(([2; 6], GUEST)), GATEWAY);
+    for _ in 0..MAX_FLOWS { let mut c = flow(); c.state = FlowState::Connected(1); nat.tcp.push(c); }
+    mock.s().incoming.push_back((6, 80, PEER));
+    assert!(nat.poll(1).is_empty());
+    assert_eq!(mock.s().results[1], (6, false));
+    assert_eq!(nat.incoming_refused, 2);
+}
+
+#[test]
+fn incoming_flows_to_one_port_get_their_own_gateway_ports() {
+    let mock = Mock::default();
+    let mut nat = incoming_nat(&mock, 5);
+    mock.s().incoming.push_back((6, 7000, PEER));
+    let syns = nat.poll(0);
+    assert_eq!(syns.iter().map(|f| ports_of(f)).collect::<Vec<_>>(), [(EPHEMERAL_FIRST, 7000), (EPHEMERAL_FIRST + 1, 7000)]);
+    // abort_all refuses the flows still waiting for the guest
+    nat.abort_all();
+    assert_eq!(mock.s().results, [(5, false), (6, false)]);
+    assert_eq!(mock.s().closes, [(5, true), (6, true)]);
+}
+
+#[test]
+fn the_virtual_net_sends_incoming_flows_to_the_station_it_has_heard() {
+    let mock = Mock::default();
+    let mut net = mock_net(&mock);
+    net.sta_ip = [10, 0, 2, 16];
+    mock.s().incoming.push_back((5, 80, PEER));
+    assert!(net.poll(0).is_empty(), "the station has sent nothing yet");
+    assert_eq!(mock.s().results, [(5, false)]);
+    net.handle(&guest_udp(REMOTE, 9, b"x"), 1);
+    mock.s().incoming.push_back((6, 80, PEER));
+    let syn = net.poll(2);
+    assert_eq!(syn.len(), 1);
+    assert_eq!((&syn[0][26..30], &syn[0][30..34]), (&net.gw_ip[..], &[10, 0, 2, 16][..]));
 }
