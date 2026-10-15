@@ -1591,3 +1591,82 @@ fn rmt_dma_ring_waits_for_a_cpu_owned_node_and_resumes_after_restart() {
     assert_eq!(bus.periph.gdma.out[0].eof_desc, n1);
     assert!(!bus.periph.gdma.out[0].running);
 }
+
+// ------------------------------------------------------------------ SPI3
+
+const SPI3: u32 = 0x6002_5000;
+
+/// SPI3 is its own GP-SPI block at DR_REG_SPI3_BASE (IDF v5.5.5
+/// components/soc/esp32s3/register/soc/reg_base.h:39) on ETS_SPI3_INTR_SOURCE 22
+/// (components/soc/esp32s3/include/soc/interrupts.h:41). A CPU-FIFO transfer, as the Arduino SPI
+/// driver makes it for `SPIClass(HSPI)` (arduino-esp32 3.3.12 cores/esp32/esp32-hal-spi.h:36,
+/// esp32-hal-spi.c:593: HSPI is SPI3_HOST on the S3), reaches the board as host 3, raises
+/// TRANS_DONE on SPI3's source and leaves SPI2 alone.
+#[test]
+fn spi3_cpu_transfer_reaches_the_board_as_host_3_on_its_own_source() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let mut bus = SocBus::new(1024, 1024, [0; 6]);
+    bus.board = Box::new(ProbeBoard { events: events.clone() });
+    bus.write32(SPI3 + 0x34, 1 << 12).unwrap();                         // TRANS_DONE enabled
+    bus.write32(SPI3 + 0x10, (1 << 27) | (1 << 28) | 1).unwrap();       // MOSI + MISO, full duplex
+    bus.write32(SPI3 + 0x1c, 15).unwrap();
+    bus.write32(SPI3 + 0x98, 0x3412).unwrap();
+    bus.write32(SPI3, 1 << 24).unwrap();
+    assert_eq!(&*events.lock().unwrap(), &["spi:3:[12, 34]:2"]);
+    assert_eq!(bus.read32(SPI3).unwrap() & (1 << 24), 0, "USR done");
+    assert_eq!(bus.read32(SPI3 + 0x98).unwrap() & 0xffff, 0x5150, "MISO in W0");
+    assert_eq!((bus.periph.spi3.transfers, bus.periph.spi2.transfers), (1, 0));
+    let status = bus.periph.source_status();
+    let on = |src: usize| status[src / 32] & (1 << (src % 32)) != 0;
+    assert!(on(crate::periph::SRC_SPI3) && !on(crate::periph::SRC_SPI2));
+    bus.write32(SPI3 + 0x38, 1 << 12).unwrap();
+    assert!(!bus.periph.spi3.irq());
+}
+
+/// SPI3's DMA data phase comes from the GDMA OUT channel bound to trigger 1
+/// (SOC_GDMA_TRIG_PERIPH_SPI3, IDF v5.5.5 components/soc/esp32s3/include/soc/gdma_channel.h:12);
+/// a channel bound to SPI2 (trigger 0) does not feed it.
+#[test]
+fn spi3_dma_reads_the_gdma_channel_of_trigger_1() {
+    const DATA: u32 = 0x3fc9_0200;
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let mut bus = SocBus::new(1024, 1024, [0; 6]);
+    bus.board = Box::new(ProbeBoard { events: events.clone() });
+    bus.write32(DATA, 0x4433_2211).unwrap();
+    bus.write32(FIRST_DESC, 4 | (4 << 12) | (1 << 30) | (1 << 31)).unwrap();
+    bus.write32(FIRST_DESC + 4, DATA).unwrap();
+    bus.write32(FIRST_DESC + 8, 0).unwrap();
+    bus.periph.gdma.out[0].peri_sel = 0;                                // SPI2's channel, idle
+    bus.periph.gdma.out[1].peri_sel = 1;
+    bus.periph.gdma.out[1].desc = FIRST_DESC;
+    bus.periph.gdma.out[1].running = true;
+    bus.write32(SPI3 + 0x30, 1 << 28).unwrap();
+    bus.write32(SPI3 + 0x10, 1 << 27).unwrap();
+    bus.write32(SPI3 + 0x1c, 31).unwrap();
+    bus.write32(SPI3, 1 << 24).unwrap();
+    assert_eq!(&*events.lock().unwrap(), &["spi:3:[11, 22, 33, 44]:0"]);
+    assert_eq!(bus.periph.spi3.transfers, 1);
+    assert!(bus.periph.spi3.dma_tx_pending.is_none());
+    assert_ne!(bus.periph.gdma.out[1].int_raw & (1 << 1), 0, "OUT_EOF on SPI3's channel");
+    assert_eq!(bus.spi3_dma_fault, None);
+}
+
+/// A pin-aware board sees SPI3's routes through the matrix (IDF v5.5.5
+/// components/soc/esp32s3/include/soc/gpio_sig_map.h:136-147, :226): SPI3_CLK 66, SPI3_D 68,
+/// SPI3_Q 67 in, SPI3_CS0 71; LEDC_LS_SIG_OUT0 (73, right after SPI3_CS1 72) is no select, and
+/// SPI2 is routed nowhere.
+#[test]
+fn spi3_routes_come_from_its_matrix_signals() {
+    let mut bus = SocBus::new(1024, 1024, [0; 6]);
+    for (pin, signal) in [(6u32, 66u32), (5, 68), (7, 71), (15, 73)] {
+        bus.write32(0x6000_4554 + 4 * pin, signal).unwrap();            // FUNC_OUT_SEL_CFG
+        bus.write32(0x6000_9004 + 4 * pin, (1 << 12) | (1 << 9)).unwrap();   // IO_MUX: GPIO function, input enable
+    }
+    bus.write32(0x6000_4154 + 4 * 67, 0x80 | 4).unwrap();               // FUNC_IN_SEL: SPI3_Q from GPIO4
+    bus.write32(0x6000_9004 + 4 * 4, (1 << 12) | (1 << 9)).unwrap();
+    bus.write32(SPI3 + 0x10, (1 << 27) | (1 << 28)).unwrap();
+    bus.write32(SPI3 + 0x20, 0x3e).unwrap();                            // CS0 only
+    let pins = bus.periph.spi3_pins();
+    assert_eq!((pins.sclk, pins.mosi, pins.miso, pins.cs), (1 << 6, 1 << 5, Some(4), 1 << 7));
+    assert_eq!(bus.periph.spi2_pins().sclk, 0, "SPI2 is routed nowhere");
+}

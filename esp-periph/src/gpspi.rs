@@ -31,12 +31,16 @@ pub struct GpSpiTransfer {
 /// enables and lengths, writes CMD.UPDATE then CMD.USR, and waits for the transfer. The chip bus
 /// supplies any DMA data, asks its board for the MISO response, then finishes the transfer.
 pub struct GpSpi { pub regs: RegRam, pub w: [u32; 16], pub int_raw: u32, pub int_ena: u32, pub transfers: u64, pub log: bool,
+                   /// the controller's number in log lines: 2 (SPI2 / FSPI, the default) or 3 (the S3's SPI3 / HSPI)
+                   pub host: u8,
                    /// bit length of a MOSI phase that DMA must supply, until the bus completes it
                    pub dma_tx_pending: Option<u32>, pending: Option<GpSpiTransfer> }
 impl Default for GpSpi { fn default() -> Self { Self::new() } }
 
 impl GpSpi {
-    pub fn new() -> Self { GpSpi { regs: RegRam::new(), w: [0; 16], int_raw: 0, int_ena: 0, transfers: 0, log: false, dma_tx_pending: None, pending: None } }
+    pub fn new() -> Self { GpSpi { regs: RegRam::new(), w: [0; 16], int_raw: 0, int_ena: 0, transfers: 0, log: false, host: 2, dma_tx_pending: None, pending: None } }
+    /// The same block as GP-SPI `host` (2 or 3), for its log lines.
+    pub fn with_host(host: u8) -> Self { GpSpi { host, ..Self::new() } }
     pub fn irq(&self) -> bool { self.int_raw & self.int_ena != 0 }
     pub fn read(&self, off: u32) -> u32 {
         match off {
@@ -75,7 +79,7 @@ impl GpSpi {
             data_len = n;
             if self.regs.read(0x30) & (1 << 28) != 0 {                    // DMA_TX_ENA: the bus fetches the data through GDMA
                 self.dma_tx_pending = Some(data_bits);
-                if self.log { eprintln!("[spi2] transfer {} header bytes, {} data bits by DMA", tx.len(), data_bits); }
+                if self.log { eprintln!("[spi{}] transfer {} header bytes, {} data bits by DMA", self.host, tx.len(), data_bits); }
             } else {
                 let base = if user & (1 << 25) != 0 { 8 } else { 0 };
                 for i in 0..n.min((16 - base) * 4) { tx.push((self.w[base + i / 4] >> (8 * (i % 4))) as u8); }
@@ -147,7 +151,7 @@ impl GpSpi {
         if let Some(transfer) = self.pending.as_mut() {
             transfer.tx.extend_from_slice(&data[..data.len().min(transfer.data_len)]);
         }
-        if self.log { eprintln!("[spi2] dma data {} bytes: {:02x?}", data.len(), &data[..data.len().min(16)]); }
+        if self.log { eprintln!("[spi{}] dma data {} bytes: {:02x?}", self.host, data.len(), &data[..data.len().min(16)]); }
     }
 
     /// Complete a transfer with the board's MISO response.
@@ -155,7 +159,7 @@ impl GpSpi {
         if transfer.rx_len != 0 {
             fill_spi_w!(self.w, transfer.rx_word_base, transfer.rx_len, rx);
         }
-        if self.log { eprintln!("[spi2] transfer tx={} rx={}: {:02x?}", transfer.tx.len(), transfer.rx_len, &transfer.tx[..transfer.tx.len().min(16)]); }
+        if self.log { eprintln!("[spi{}] transfer tx={} rx={}: {:02x?}", self.host, transfer.tx.len(), transfer.rx_len, &transfer.tx[..transfer.tx.len().min(16)]); }
         self.transfers += 1;
         self.int_raw |= 1 << 12;                                          // TRANS_DONE
     }
