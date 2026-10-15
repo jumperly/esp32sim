@@ -783,6 +783,25 @@ impl Peripherals {
         self.gpio.rtc_pads = self.adc.rtc_pad_mask();
         self.gpio.refresh_level_status();
     }
+    /// Jumperly patch J28: `GPIO_STRAP_REG` as the chip latches it at reset from the strapping pads.
+    /// ESP-IDF `soc/esp32/register/soc/gpio_reg.h` (GPIO_STRAP_REG, 0x3ff44038), GPIO_STRAPPING
+    /// = `{10'b0, MTDI, GPIO0, GPIO2, GPIO4, MTDO, GPIO5}`:
+    ///
+    /// | bit | 5      | 4     | 3     | 2     | 1      | 0     |
+    /// |-----|--------|-------|-------|-------|--------|-------|
+    /// | pad | GPIO12 | GPIO0 | GPIO2 | GPIO4 | GPIO15 | GPIO5 |
+    ///
+    /// A pad the circuit drives (`ClassicGpio::set_input`) gives its level; a free pad its reset
+    /// pull (ESP32 datasheet, strapping pins: GPIO0/5/15 up, GPIO2/4/12 down), so an empty circuit
+    /// yields 0x13 — the ROM's `boot:0x13 (SPI_FAST_FLASH_BOOT)` — and IO0 held low 0x03.
+    pub fn strap_from_pads(&self) -> u32 {
+        const PADS: [(u8, bool); 6] = [(5, true), (15, true), (4, false), (2, false), (0, true), (12, false)];
+        let g = &self.gpio;
+        PADS.iter().enumerate().fold(0, |strap, (bit, &(pin, pull_up))| {
+            let level = if g.external & (1 << pin) != 0 { g.gpio.input & (1 << pin) != 0 } else { pull_up };
+            strap | u32::from(level) << bit
+        })
+    }
     pub fn read32(&mut self, addr: u32) -> u32 {
         if (0x3ff0_00ec..=0x3ff0_0100).contains(&addr) {
             let (core, word) = if addr < 0x3ff0_00f8 {

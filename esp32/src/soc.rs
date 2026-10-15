@@ -95,6 +95,7 @@ impl esp_soc::SocBus for SocBus {
     fn irq_dirty(&mut self) -> &mut bool {
         &mut self.irq_dirty
     }
+    fn take_slice_yield(&mut self) -> bool { std::mem::take(&mut self.slice_yield) }   // Jumperly patch J28
     fn refresh_irq(&mut self) -> bool {
         true
     }
@@ -118,13 +119,17 @@ impl esp_soc::SocBus for SocBus {
         for port in 0..2 { self.periph.i2s[port].inner.keep_rx_input(&mut old.i2s[port].inner); }
         self.periph.restore_rtc_analog(old.adc);
         self.periph.gpio.restore_inputs(&old.gpio);
+        if let Some(tap) = &mut self.pwm_tap { if tap.reset(self.cycles) { self.slice_yield = true; } }   // Jumperly patch J28
+        for c in &mut self.periph.i2c { c.defer = self.i2c_host; }   // Jumperly patch J28: the bridge survives a chip reset
         self.periph.spi0.0.jedec = old.spi0.0.jedec;
         self.periph.spi1.0.jedec = old.spi1.0.jedec;
         self.periph.efuse = old.efuse;
         self.periph.wifi.link = old.wifi.link.surviving_reboot();
         self.periph.wifi.log = old.wifi.log;
         self.periph.misc.log_unknown = old.misc.log_unknown;
-        self.periph.gpio.gpio.strap = old.gpio.gpio.strap;
+        // Jumperly patch J28: with a host circuit the strapping pins are sampled at every chip reset
+        // (the first power-on keeps 0x13: the host sets its inputs only once the boot has started).
+        self.periph.gpio.gpio.strap = if self.pin_watch.is_some() { self.periph.strap_from_pads() } else { old.gpio.gpio.strap };
         self.periph.rtc.0.ram = old.rtc.0.ram;
         self.periph.rtc.0.slow_ticks = old.rtc.0.slow_ticks;
         self.periph.rtc.0.ram.write(0x38, cause | cause << 6);
@@ -132,6 +137,7 @@ impl esp_soc::SocBus for SocBus {
         self.periph.rtc.0.ram.write(0x8c, 0);
         self.periph.rtc.0.reset_cause = cause;
         self.attach_board_devices();
+        self.note_pin_write();   // Jumperly patch J28: the reset released every pin; report it
         cause
     }
     fn sw_reset(&self) -> bool {

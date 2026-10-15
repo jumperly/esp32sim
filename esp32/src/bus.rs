@@ -58,6 +58,17 @@ pub struct SocBus {
     pub(crate) clock_half: u64,
     pub(crate) pins_active: bool,
     pub ble: esp_soc::ble::vhci::Ble,
+    /// Jumperly patch J28: pin states with cycles (`crate::jumperly`), RMT frames with cycles, and
+    /// the request to end the slice (`SocBus::take_slice_yield`), as on the C3 (J9).
+    pub pin_watch: Option<crate::jumperly::PinWatch>,
+    /// Jumperly patch J28: RMT frames (cycle, pin, bits), pin 255 when the channel is not routed.
+    pub rmt_tap: Option<Vec<(u64, u8, Vec<bool>)>>,
+    /// Jumperly patch J28: LEDC output changes for the host.
+    pub pwm_tap: Option<crate::pwm::PwmTap>,
+    /// Jumperly patch J28: Wire and SPI transactions wait for the host instead of the board.
+    pub i2c_host: bool,
+    pub spi_host: bool,
+    pub(crate) slice_yield: bool,
 }
 
 impl SocBus {
@@ -84,6 +95,19 @@ impl SocBus {
             clock_half: 0,
             pins_active: false,
             ble: Default::default(),
+            pin_watch: None, rmt_tap: None, pwm_tap: None, i2c_host: false, spi_host: false, slice_yield: false,   // Jumperly patch J28
+        }
+    }
+    /// Jumperly patch J28: hand LEDC output changes to the host.
+    pub(crate) fn note_pwm(&mut self) {
+        if let Some(tap) = &mut self.pwm_tap {
+            if tap.check(&self.periph, self.cycles) { self.slice_yield = true; }
+        }
+    }
+    /// Jumperly patch J28: a GPIO or IO_MUX register changed — record pin states, end the slice.
+    pub(crate) fn note_pin_write(&mut self) {
+        if let Some(w) = &mut self.pin_watch {
+            if w.check(&self.periph, self.cycles) { self.slice_yield = true; }
         }
     }
     fn load<const N: usize>(&mut self, a: u32) -> Result<[u8; N], Fault> {
@@ -236,6 +260,9 @@ impl SocBus {
         let old_enable = self.periph.gpio.gpio.enable;
         if (0x3ff4_8800..=0x3ff4_88ff).contains(&a) { self.periph.adc.now_cycles = self.cycles; }
         self.periph.write32(a, v);
+        if matches!(a >> 12, 0x3ff44 | 0x3ff49) { self.note_pin_write(); }      // Jumperly patch J28: GPIO, IO_MUX
+        if self.pwm_tap.is_some() && pwm_commit(a, v) { self.note_pwm(); }      // Jumperly patch J28
+        if self.periph.i2c.iter().any(|c| c.deferred) { self.slice_yield = true; }   // Jumperly patch J28
         if self.pins_active {
             if let Some(port) = [0x3ff4_0000, 0x3ff5_0000, 0x3ff6_e000].iter().position(|&base| a == base) {
                 self.board.uart_tx(self.cycles, self.periph.uart_route(port), v as u8);
@@ -278,7 +305,11 @@ impl SocBus {
         for (channel, mut bits) in std::mem::take(&mut self.periph.rmt.done) {
             if let Some((pin, inverted)) = self.periph.gpio.output_pin(crate::rmt::SIGNAL0 + channel) {
                 if inverted { for bit in &mut bits { *bit = !*bit; } }
+                if let Some(tap) = &mut self.rmt_tap { tap.push((self.cycles, pin, bits.clone())); self.slice_yield = true; }   // Jumperly patch J28
                 if self.pins_active { self.board.rmt_frame(pin, &bits); }
+            } else if let Some(tap) = &mut self.rmt_tap {
+                tap.push((self.cycles, u8::MAX, bits));   // Jumperly patch J28: a frame routed nowhere
+                self.slice_yield = true;
             }
         }
     }
@@ -463,6 +494,22 @@ impl SocBus {
         }
         self.written(addr, data.len());
         Ok(())
+    }
+}
+
+/// Jumperly patch J28: a write that can change what a LEDC channel outputs. High-speed channels
+/// (0x00..0xa0) apply every register write at once (ESP32 `ledc_hal` updates them with
+/// CONF1.DUTY_START, no PARA_UP); low-speed channels on CONF0 with PARA_UP; any timer
+/// configuration; LEDC_CONF's slow-clock select; DPORT PERIP_CLK_EN / PERIP_RST_EN.
+fn pwm_commit(a: u32, v: u32) -> bool {
+    let off = a & 0xfff;
+    match a >> 12 {
+        0x3ff59 => off < 0xa0
+            || (off < 0x140 && off.is_multiple_of(0x14) && v & (1 << 4) != 0)
+            || ((0x140..0x180).contains(&off) && off.is_multiple_of(8))
+            || off == 0x190,
+        0x3ff00 => off == 0xc0 || off == 0xc4,
+        _ => false,
     }
 }
 
@@ -947,5 +994,155 @@ mod tests {
         assert_eq!(b.periph.cpu_lines(0), 0);
         b.write32(0x3ff0_00c4, 0).unwrap();
         assert!(b.periph.rmt.clock_enabled);
+    }
+
+    // Jumperly patch J28: the host hooks.
+    use crate::jumperly::{state, PinWatch};
+    const PLAIN: u32 = state::PLAIN_GPIO << state::SIGNAL_SHIFT;
+
+    #[test]
+    fn pin_watch_write_ends_the_slice() {
+        use esp_soc::SocBus as _;
+        let mut b = SocBus::new(4 << 20, [0; 6]);
+        b.pin_watch = Some(PinWatch::new(&b.periph, 1 << 2));
+        b.cycles = 77;
+        b.write32(0x3ff4_4024, 1 << 2).unwrap();                         // GPIO_ENABLE_W1TS
+        assert!(b.take_slice_yield());
+        assert!(!b.take_slice_yield(), "taking the request clears it");
+        b.cycles = 88;
+        b.write32(0x6000_9040, 1 << 8).unwrap();                         // IO_MUX GPIO2 pull-up, AHB alias
+        assert!(b.take_slice_yield());
+        assert_eq!(b.pin_watch.as_ref().unwrap().events,
+            vec![(77, 2, state::ENABLE | PLAIN), (88, 2, state::ENABLE | state::PULL_UP | PLAIN)]);
+        b.write32(0x3ff4_4024, 1 << 3).unwrap();                         // an unwatched pin
+        assert!(!b.take_slice_yield());
+        assert_eq!(b.pin_watch.as_ref().unwrap().events.len(), 2);
+    }
+
+    #[test]
+    fn rmt_tap_sees_the_frame_with_its_pin() {
+        use esp_soc::SocBus as _;
+        let mut b = SocBus::new(4 << 20, [0; 6]);
+        b.rmt_tap = Some(vec![]);
+        b.write32(0x3ff4_9048, 2 << 12).unwrap();                         // GPIO4: matrix
+        b.write32(0x3ff4_4540, crate::rmt::SIGNAL0 as u32 | (1 << 9)).unwrap();   // GPIO4 <- RMT_SIG_OUT0, inverted
+        b.periph.gpio.set_output_signal(crate::rmt::SIGNAL0, false, true);
+        assert!(!b.take_slice_yield());
+        b.cycles = 500;
+        b.periph.rmt.done.push((0, vec![true, false, false]));
+        b.periph.rmt.done.push((1, vec![true, true]));                   // channel 1 is routed nowhere
+        b.tick(0);
+        assert_eq!(b.rmt_tap.as_deref(), Some(&[(500, 4, vec![false, true, true]), (500, u8::MAX, vec![true, true])][..]));
+        assert!(b.take_slice_yield());
+        assert!(b.periph.rmt.done.is_empty());
+    }
+
+    #[test]
+    fn pwm_tap_follows_ledc_writes_and_ends_the_slice() {
+        use esp_soc::SocBus as _;
+        let mut b = SocBus::new(4 << 20, [0; 6]);
+        b.pwm_tap = Some(crate::pwm::PwmTap::new());
+        b.write32(0x3ff0_00c0, 1 << 11).unwrap();                         // DPORT_LEDC_CLK_EN
+        b.write32(0x3ff5_9140, 8 | (16000 << 5) | (1 << 25)).unwrap();   // HSTIMER0: 5 kHz, 8 bits
+        b.write32(0x3ff5_9008, 64 << 4).unwrap();                         // HSCH0_DUTY
+        b.write32(0x3ff5_900c, 1 << 31).unwrap();                         // HSCH0_CONF1.DUTY_START
+        assert!(!b.take_slice_yield(), "the channel is still off");
+        b.cycles = 10;
+        b.write32(0x3ff5_9000, 4).unwrap();                               // HSCH0_CONF0.SIG_OUT_EN
+        assert!(b.take_slice_yield());
+        let (cycle, o) = b.pwm_tap.as_mut().unwrap().events.pop().unwrap();
+        assert_eq!((cycle, o.signal, o.enabled), (10, 71, true));
+        assert!((o.duty - 0.25).abs() < 1e-9 && (o.freq - 5000.0).abs() < 1e-6, "{o:?}");
+        // a high-speed duty update is DUTY + CONF1.DUTY_START, without any PARA_UP (ledc_hal on ESP32)
+        b.write32(0x3ff5_9008, 128 << 4).unwrap();
+        b.write32(0x3ff5_900c, 1 << 31).unwrap();
+        assert!(b.take_slice_yield());
+        let (_, o) = b.pwm_tap.as_mut().unwrap().events.pop().unwrap();
+        assert!((o.duty - 0.5).abs() < 1e-9, "{o:?}");
+        b.write32(0x3ff0_00c4, 1 << 11).unwrap();                         // DPORT_LEDC_RST
+        assert!(b.take_slice_yield());
+        let (_, o) = b.pwm_tap.as_mut().unwrap().events.pop().unwrap();
+        assert_eq!((o.signal, o.enabled), (71, false));
+    }
+
+    #[test]
+    fn deferred_i2c_transaction_ends_the_slice() {
+        use esp_soc::SocBus as _;
+        const I2C0: u32 = 0x3ff5_3000;
+        let mut b = SocBus::new(4 << 20, [0; 6]);
+        b.i2c_host = true;
+        for c in &mut b.periph.i2c { c.defer = true; }
+        for signal in [29, 30] { b.write32(0x3ff4_4130 + 4 * signal, (1 << 7) | 0x38).unwrap(); }   // SCL/SDA in: constant high
+        b.write32(I2C0 + 0x1c, 0x50 << 1).unwrap();
+        b.write32(I2C0 + 0x58, 0).unwrap();                               // RSTART
+        b.write32(I2C0 + 0x5c, (1 << 11) | (1 << 8) | 1).unwrap();        // WRITE one byte, ACK checked
+        b.write32(I2C0 + 0x60, 3 << 11).unwrap();                         // STOP
+        assert!(!b.take_slice_yield());
+        b.write32(I2C0 + 0x04, 1 << 5).unwrap();                          // TRANS_START
+        assert!(b.periph.i2c[0].deferred);
+        assert!(b.take_slice_yield());
+    }
+
+    #[test]
+    fn strap_from_circuit_defaults_to_0x13_and_follows_io0() {
+        let mut b = SocBus::new(4 << 20, [0; 6]);
+        assert_eq!(b.periph.gpio.gpio.strap, 0x13, "power-on value");
+        assert_eq!(b.periph.strap_from_pads(), 0x13, "nothing driven: the reset pulls");
+        b.periph.gpio.set_input(0, false);                                // IO0 held low: download boot
+        assert_eq!(b.periph.strap_from_pads(), 0x03);
+        b.periph.gpio.set_input(15, false);                               // MTDO low: ROM log silenced
+        assert_eq!(b.periph.strap_from_pads(), 0x01);
+        b.periph.gpio.set_input(12, true);                                // MTDI high: 1.8 V flash
+        b.periph.gpio.set_input(2, true);
+        b.periph.gpio.set_input(4, true);
+        b.periph.gpio.set_input(5, false);
+        assert_eq!(b.periph.strap_from_pads(), 0x2c);
+        for pin in [0, 2, 4, 5, 12, 15] { b.periph.gpio.release_input(pin); }
+        assert_eq!(b.periph.strap_from_pads(), 0x13, "released pins fall back to the reset pulls");
+    }
+
+    #[test]
+    fn reboot_takes_the_strap_from_the_circuit_only_with_the_pin_watch() {
+        use esp_soc::SocBus as _;
+        let mut b = SocBus::new(4 << 20, [0; 6]);
+        b.gpio_set_input(0, false);
+        b.reboot([0; 6]);
+        assert_eq!(b.periph.gpio.gpio.strap, 0x13, "without the host the strap is board wiring");
+        b.pin_watch = Some(PinWatch::new(&b.periph, 1));
+        b.reboot([0; 6]);
+        assert_eq!(b.periph.gpio.gpio.strap, 0x03, "IO0 low at reset: download boot");
+        b.gpio_release_input(0);
+        b.reboot([0; 6]);
+        assert_eq!(b.periph.gpio.gpio.strap, 0x13);
+    }
+
+    #[test]
+    fn reboot_keeps_the_taps_and_the_bridges() {
+        use esp_soc::SocBus as _;
+        let mut b = SocBus::new(4 << 20, [0; 6]);
+        b.i2c_host = true;
+        for c in &mut b.periph.i2c { c.defer = true; }
+        b.spi_host = true;
+        b.rmt_tap = Some(vec![]);
+        b.pwm_tap = Some(crate::pwm::PwmTap::new());
+        b.pin_watch = Some(PinWatch::new(&b.periph, 1 << 2));
+        b.write32(0x3ff4_4024, 1 << 2).unwrap();                          // GPIO2 driven
+        b.write32(0x3ff0_00c0, 1 << 11).unwrap();
+        b.write32(0x3ff5_9140, 8 | (16000 << 5) | (1 << 25)).unwrap();
+        b.write32(0x3ff5_9008, 64 << 4).unwrap();
+        b.write32(0x3ff5_900c, 1 << 31).unwrap();
+        b.write32(0x3ff5_9000, 4).unwrap();
+        assert!(b.pwm_tap.as_mut().unwrap().events.drain(..).any(|(_, o)| o.signal == 71 && o.enabled));
+        b.pin_watch.as_mut().unwrap().events.clear();
+        b.take_slice_yield();
+        b.cycles = 1234;
+        b.reboot([0; 6]);
+        assert!(b.periph.i2c.iter().all(|c| c.defer));
+        assert!(b.i2c_host && b.spi_host && b.rmt_tap.is_some());
+        let tap = b.pwm_tap.as_ref().unwrap();
+        assert_eq!(tap.events.len(), 1);
+        assert_eq!((tap.events[0].0, tap.events[0].1.signal, tap.events[0].1.enabled), (1234, 71, false));
+        assert_eq!(b.pin_watch.as_ref().unwrap().events, vec![(1234, 2, PLAIN)], "the reset released GPIO2");
+        assert!(b.take_slice_yield());
     }
 }
