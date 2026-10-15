@@ -4,17 +4,14 @@
 //! (`esp32sim_net_event`) before the next one. The host resolves the guest's names; SNTP may stay
 //! local. Without `esp32sim_net_host` nothing changes (the stage-1 subnet: local DNS, TCP refused).
 use super::{bytes, log, Emu};
-use crate::machine::MachineKind;
 use esp_soc::nat::{HostEvent, Nat, QueueTransport};
 use esp_soc::wifi::{StaState, StationLink, WpaState};
 
 /// The station's link (S3 and C3), with the bus's deferred device time delivered first.
 pub(crate) fn link(e: &mut Emu) -> Option<&mut StationLink> {
-    match &mut e.m {
-        MachineKind::S3(m) => { m.bus.flush_ticks(); Some(&mut m.bus.periph.wifi.link) }
-        MachineKind::C3(m) => { esp_soc::SocBus::flush_ticks(&mut m.bus); Some(&mut m.bus.periph.wifi.link) }
-        MachineKind::C6(_) | MachineKind::Esp32(_) => None,
-    }
+    let c = e.m.chip_mut()?;   // Jumperly patch J28
+    c.flush_ticks();
+    Some(c.wifi_link())
 }
 
 /// Carry the station's traffic over the host. `flags` bit 0: the host transport (TCP and UDP past
@@ -145,16 +142,8 @@ pub unsafe extern "C" fn esp32sim_set_mac(e: *mut Emu, mac: *const u8) -> u32 {
     if e.booted || mac.is_null() { return 1; }
     // SAFETY: the caller provides six readable bytes.
     let mac: [u8; 6] = unsafe { bytes(mac, 6) }.try_into().unwrap();
-    let (efuse, machine_mac) = match &mut e.m {
-        MachineKind::S3(m) => (&mut m.bus.periph.efuse, &mut m.mac),
-        MachineKind::C3(m) => (&mut m.bus.periph.efuse, &mut m.mac),
-        MachineKind::C6(_) | MachineKind::Esp32(_) => { log("[emu] set mac: ESP32-S3 and ESP32-C3 only"); return 1; }
-    };
-    *machine_mac = mac;
-    // BLK1 words 0 and 1, as `Efuse::new` lays them out; the rest of word 1 is the chip's
-    efuse.write(0x44, u32::from_be_bytes([mac[2], mac[3], mac[4], mac[5]]));
-    let high = efuse.read(0x48) & !0xffff;
-    efuse.write(0x48, high | (u32::from(mac[0]) << 8) | u32::from(mac[1]));
+    // Jumperly patch J28: the chip writes it (`chip::write_efuse_mac` on the S3 and the C3)
+    if !e.m.chip_mut().is_some_and(|c| c.set_mac(mac)) { log("[emu] set mac: ESP32-S3 and ESP32-C3 only"); return 1; }
     0
 }
 

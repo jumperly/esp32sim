@@ -10,6 +10,8 @@ use esp_soc::web::{json_escape, WebServer};
 use esp_soc::{Machine, Soc, SocBus};
 
 mod machine;
+mod chip;     // Jumperly patch J28
+mod chips;
 mod network;
 mod ethernet;
 mod ble;

@@ -1,5 +1,6 @@
 //! Shared machine operations and explicit chip dispatch for the browser ABI.
 use super::log;
+use crate::chip::JumperlyChip;
 use esp_soc::observers::{BlockProfile, Coverage, IrqLatency};
 use esp_soc::web::{json_escape, WebServer};
 use esp_soc::{Machine, Soc, SocBus, Stop};
@@ -85,13 +86,14 @@ impl MachineKind {
     pub fn s3_mut(&mut self) -> Option<&mut esp32s3::Machine> {
         match self { Self::S3(m) => Some(m), _ => None }
     }
-    /// Jumperly patch J9: the C3 takes the same host ABI calls as the S3 where it models them.
-    pub fn c3_mut(&mut self) -> Option<&mut esp32c3::Machine> {
-        match self { Self::C3(m) => Some(m), _ => None }
-    }
-    /// The console of the chips with a Jumperly ABI (S3, C3).
-    pub fn console_mut(&mut self) -> Option<&mut esp_soc::Console> {
-        match self { Self::S3(m) => Some(&mut m.console), Self::C3(m) => Some(&mut m.console), _ => None }
+    /// Jumperly patch J28 (J9 for the C3): the chips with a Jumperly host ABI behind one interface;
+    /// every export of `jumperly.rs` and `net_host.rs` dispatches here once.
+    pub fn chip_mut(&mut self) -> Option<&mut dyn JumperlyChip> {
+        match self {
+            Self::S3(m) => Some(m.as_mut()),
+            Self::C3(m) => Some(m.as_mut()),
+            Self::C6(_) | Self::Esp32(_) => None,
+        }
     }
 }
 
