@@ -18,6 +18,9 @@ pub const SRC_UART0: usize = 27;
 pub const SRC_UART1: usize = 28;
 pub const SRC_UART2: usize = 29;
 pub const SRC_SPI2: usize = 21;
+/// ETS_SPI3_INTR_SOURCE (IDF v5.5.5 components/soc/esp32s3/include/soc/interrupts.h:41; v4.4.8
+/// components/soc/esp32s3/include/soc/periph_defs.h:81).
+pub const SRC_SPI3: usize = 22;
 pub const SRC_PWM0: usize = 31;
 pub const SRC_PWM1: usize = 32;
 pub const SRC_LEDC: usize = 35;
@@ -411,6 +414,9 @@ pub struct Peripherals {
     pub i2c: [crate::i2c::I2c; 2],
     pub lcd_cam: LcdCam,
     pub spi2: GpSpi,
+    /// GP-SPI3 (Arduino `HSPI`), the same register block as SPI2, at DR_REG_SPI3_BASE 0x60025000
+    /// (IDF v5.5.5 components/soc/esp32s3/register/soc/reg_base.h:39; v4.4.8 soc.h:74).
+    pub spi3: GpSpi,
     pub pcnt: Pcnt,
     pub wifi: WifiMac,
     pub fe: FeIq,
@@ -469,6 +475,7 @@ device_set! { Peripherals; clock: (clock) CPU_HZ, [(ClockDomain::Systimer, 15), 
     0x27 "I2C1" optional (i2c[1]) => [SRC_I2C1];
     0x41 "LCD_CAM" (lcd_cam) => [SRC_LCD_CAM];
     0x24 "SPI2" (spi2) => [SRC_SPI2];
+    0x25 "SPI3" (spi3) => [SRC_SPI3];
     0x17 "PCNT" (pcnt) => [SRC_PCNT];
     0x33 "WIFI_MAC" (wifi) => [SRC_WIFI_MAC];
     0x34 "WIFI_MAC" alias (wifi) delta 0x1000 => [];
@@ -507,7 +514,7 @@ impl Peripherals {
             usb: UsbSerialJtag::new(CPU_HZ), uart: [Uart::new(UartLayout::S3), Uart::new(UartLayout::S3), Uart::new(UartLayout::S3)], systimer: Systimer::new(),
             timg: [TimerGroup::new(), TimerGroup::new()], intmatrix: IntMatrix::new(), gpio: Gpio::new(), ledc: Ledc::new(LedcLayout::S3), mcpwm: [Mcpwm::new(160, 9), Mcpwm::new(166, 9)], rtc: RtcCntl::new(),
             efuse: Efuse::new(mac), system: SystemRegs::new(0x30), extmem: Extmem::new(), spi0: SpiMem::new(false), spi1: SpiMem::new(true),
-            i2c: [crate::i2c::I2c::new(), crate::i2c::I2c::new()], lcd_cam: LcdCam::new(), spi2: GpSpi::new(), pcnt: Pcnt::new(), wifi: WifiMac::new(), fe: FeIq { word: 0, done: false },
+            i2c: [crate::i2c::I2c::new(), crate::i2c::I2c::new()], lcd_cam: LcdCam::new(), spi2: GpSpi::new(), spi3: GpSpi::with_host(3), pcnt: Pcnt::new(), wifi: WifiMac::new(), fe: FeIq { word: 0, done: false },
             aes: Aes::new(), rsa: Rsa::new(), sha: Sha::new(), wdev: Wdev::new(), i2c_mst: I2cMst::new(), gdma: Gdma::new(), i2s0: I2s::new(CPU_HZ), i2s1: I2s::new(CPU_HZ), rmt: Rmt::new(CPU_HZ),
             io_mux: RegRam::new(), misc: Misc::new(), fake_reads: std::env::var("ESP_EMU_FAKE_READ").ok().map(|v| v.split(',').filter_map(|e| { let mut p = e.split(':'); let a = u32::from_str_radix(p.next()?.trim_start_matches("0x"), 16).ok()?; let o = u32::from_str_radix(p.next().unwrap_or("0").trim_start_matches("0x"), 16).ok()?; let m = u32::from_str_radix(p.next().unwrap_or("ffffffff").trim_start_matches("0x"), 16).ok()?; Some((a, (o, m))) }).collect()).unwrap_or_default(),
             clock: Self::new_clock(),
