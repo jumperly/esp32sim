@@ -107,7 +107,7 @@ mod tests {
         p.write32(LEDC + 0x08, 64 << 4);                                 // HSCH0_DUTY
         assert!(!t.check(&p, 5));
         p.write32(LEDC + 0x0c, 1 << 31);                                 // HSCH0_CONF1.DUTY_START
-        p.write32(LEDC + 0x00, 4 | (1 << 4));                            // HSCH0_CONF0: timer 0, SIG_OUT_EN
+        p.write32(LEDC, 4 | (1 << 4));                            // HSCH0_CONF0: timer 0, SIG_OUT_EN
         assert!(t.check(&p, 10));
         let (cycle, o) = t.events.pop().expect("no change");
         assert_eq!(cycle, 10);
@@ -138,7 +138,7 @@ mod tests {
         p.write32(LEDC + 0x140, TIMER);
         p.write32(LEDC + 0x08, 64 << 4);
         p.write32(LEDC + 0x0c, 1 << 31);
-        p.write32(LEDC + 0x00, 4 | 8);                                   // SIG_OUT_EN, IDLE_LV high
+        p.write32(LEDC, 4 | 8);                                   // SIG_OUT_EN, IDLE_LV high
         assert!(t.check(&p, 10));
         t.events.clear();
         p.write32(DPORT_PERIP_RST_EN, LEDC_BIT);                         // DPORT_LEDC_RST
@@ -148,7 +148,7 @@ mod tests {
         p.write32(LEDC + 0x140, TIMER);
         p.write32(LEDC + 0x08, 64 << 4);
         p.write32(LEDC + 0x0c, 1 << 31);
-        p.write32(LEDC + 0x00, 4);
+        p.write32(LEDC, 4);
         assert!(t.check(&p, 30));
         t.events.clear();
         assert!(t.reset(40));
@@ -160,7 +160,7 @@ mod tests {
     fn idle_level_of_a_stopped_channel_is_reported() {
         let mut p = clocked();
         let mut t = PwmTap::new();
-        p.write32(LEDC + 0x00, 8);                                       // HSCH0: output off, IDLE_LV high
+        p.write32(LEDC, 8);                                       // HSCH0: output off, IDLE_LV high
         assert!(t.check(&p, 10));
         let (_, o) = t.events.pop().expect("no change");
         assert_eq!((o.signal, o.enabled, o.idle_high), (LEDC_SIG_OUT0, false, true));
