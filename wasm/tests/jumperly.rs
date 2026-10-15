@@ -1050,7 +1050,11 @@ fn i2s_need(e: &mut Emu, port: u32, cycles: u32) -> (u32, [u32; 8]) {
 /// `ms` of device time in 1 ms slices, feeding I2S0 from `word(frame index) -> (left, right)`
 /// before every slice as the web adapter does. Returns the UART0 text and the last format seen.
 fn run_i2s_mic(host: bool, ms: u64, word: impl Fn(u64) -> [u32; 2]) -> (String, [u32; 8]) {
-    let mut e = Emu::boot("i2s-mic");
+    run_i2s_mic_on(Emu::boot("i2s-mic"), host, ms, word)
+}
+/// `run_i2s_mic` on a booted microphone fixture (the S3's `i2s-mic`, the classic's `esp32-i2s-mic`);
+/// both chips run at 240 MHz.
+fn run_i2s_mic_on(mut e: Emu, host: bool, ms: u64, word: impl Fn(u64) -> [u32; 2]) -> (String, [u32; 8]) {
     assert_eq!(unsafe { esp32sim_i2s_host(e.0, u32::from(host)) }, 0);
     let (mut text, mut fmt, mut k) = (String::new(), [0; 8], 0u64);
     let end = e.cycles() + ms * 1_000 * MHZ;
@@ -1127,13 +1131,20 @@ fn ble_command(e: &mut Emu, cmd: &str) -> u32 { unsafe { esp32sim_ble_virtual_co
 /// The ble-server fixture as a phone would use it: advertising, connect, discover, read, write,
 /// subscribe, notifications; the log of the virtual peer comes to the host, not to stderr.
 fn ble_server_through_the_virtual_peer(chip: &str, mhz: u64) {
-    let elf_name = if chip == "c3" { "fixtures/bin/c3-ble-server.elf" } else { "fixtures/bin/ble-server.elf" };
+    let elf_name = match chip { "c3" => "fixtures/bin/c3-ble-server.elf", "esp32" => "fixtures/bin/esp32-ble-server.elf", _ => "fixtures/bin/ble-server.elf" };
     let elf = read(elf_name);
+    // The classic's BLE library is Bluedroid, which numbers the GATT table differently from the
+    // NimBLE host of the S3/C3 core: (characteristic declaration, value, CCCD).
+    let (declaration, value, cccd) = if chip == "esp32" { ("0x0029", "0x002a", "0x002b") } else { ("0x000f", "0x0010", "0x0011") };
     let enable = |e: *mut esp32sim_wasm::Emu| {
         assert_eq!(unsafe { esp32sim_ble_virtual(e, b"junk".as_ptr(), 4) }, 1, "not an ELF");
         assert_eq!(unsafe { esp32sim_ble_virtual(e, elf.as_ptr(), elf.len()) }, 0);
     };
-    let mut e = if chip == "c3" { Emu::boot_c3_with("c3-ble-server", enable) } else { Emu::boot_with("ble-server", enable) };
+    let mut e = match chip {
+        "c3" => Emu::boot_c3_with("c3-ble-server", enable),
+        "esp32" => Emu::boot_esp32_with("esp32-ble-server", enable),
+        _ => Emu::boot_with("ble-server", enable),
+    };
     let run = |e: &mut Emu, us: u64| {
         let end = e.cycles() + us * mhz;
         let mut text = String::new();
@@ -1152,7 +1163,7 @@ fn ble_server_through_the_virtual_peer(chip: &str, mhz: u64) {
     text += &run(&mut e, 200_000);
     assert_eq!(ble_command(&mut e, "discover"), 0);
     text += &run(&mut e, 400_000);
-    for cmd in ["read 0x0010", "write 0x0010 6869", "subscribe 0x0011"] { assert_eq!(ble_command(&mut e, cmd), 0); }
+    for cmd in [format!("read {value}"), format!("write {value} 6869"), format!("subscribe {cccd}")] { assert_eq!(ble_command(&mut e, &cmd), 0); }
     text += &run(&mut e, 2_500_000);
     log.extend(ble_log(&mut e));
     assert_eq!(ble_command(&mut e, "read nothing"), 1);
@@ -1160,10 +1171,10 @@ fn ble_server_through_the_virtual_peer(chip: &str, mhz: u64) {
     assert!(last.iter().any(|l| l.starts_with("error ")), "{last:?}");
     let has = |s: &str| log.iter().any(|l| l.contains(s));
     assert!(has("connected handle=0x0001 guest=peripheral"), "{log:?}");
-    assert!(has("characteristic declaration=0x000f handle=0x0010 properties=0x1a uuid=beb5483e-36e1-4688-b7f5-ea07361b26a8"), "{log:?}");
-    assert!(has("read handle=0x0010 value="), "{log:?}");
-    assert!(has("write complete handle=0x0010"), "{log:?}");
-    assert!(has("notification handle=0x0010 value="), "{log:?}");
+    assert!(has(&format!("characteristic declaration={declaration} handle={value} properties=0x1a uuid=beb5483e-36e1-4688-b7f5-ea07361b26a8")), "{log:?}");
+    assert!(has(&format!("read handle={value} value=")), "{log:?}");
+    assert!(has(&format!("write complete handle={value}")), "{log:?}");
+    assert!(has(&format!("notification handle={value} value=")), "{log:?}");
     assert!(log.iter().all(|l| l.starts_with("t=")), "{log:?}");
     assert!(text.contains("ble: connected") && text.contains("ble: write hi"), "{text}");
 }
@@ -1360,4 +1371,347 @@ fn a_sketch_asks_the_host_for_a_device_around() {
     assert!(text.contains("client: found c2:11:22:33:44:55"), "{text}");
     assert!(text.contains("client: connect failed"), "{text}");
     assert!(ble_log(&mut e).iter().any(|l| l.contains("remote connect failed addr=c2:11:22:33:44:55")));
+}
+
+// ------------------------------------------------------------------ Jumperly patch J28: the classic ESP32
+
+const ESP32_MHZ: u64 = 240;
+/// RMT_SIG_OUT0 of the classic's GPIO matrix (its LEDC outputs are 71..=86: high-speed 71..=78,
+/// low-speed 79..=86; Arduino's channels 0..7 are the high-speed group).
+const ESP32_RMT_SIGNAL: u32 = 87;
+const ESP32_LEDC_SIGNALS: std::ops::RangeInclusive<u32> = 71..=86;
+
+/// The classic's mask ROM (ECO3): from `ESP32SIM_ROM_DIR` when it has it, else `emulator/rom`.
+fn classic_rom() -> Vec<u8> {
+    if let Some(dir) = std::env::var_os("ESP32SIM_ROM_DIR") {
+        let path = PathBuf::from(dir).join("esp32_rev300_rom.elf");
+        if path.exists() { return std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display())); }
+    }
+    read("rom/esp32_rev300_rom.elf")
+}
+
+/// The classic fixture as a whole-flash image of the NodeMCU-32S's 4 MB: the bootloader at 0x1000
+/// (not 0x0 as on the S3/C3), the partition table at 0x8000, the app at 0x10000.
+fn merged_esp32(app: &str) -> Vec<u8> {
+    let mut flash = vec![0xffu8; 4 << 20];
+    for (off, file) in [(0x1000, format!("fixtures/bin/{app}.bootloader.bin")), (0x8000, format!("fixtures/bin/{app}.partitions.bin")), (0x10000, format!("fixtures/bin/{app}.bin"))] {
+        let d = read(&file);
+        flash[off..off + d.len()].copy_from_slice(&d);
+    }
+    flash
+}
+
+impl Emu {
+    fn boot_esp32(app: &str) -> Emu { Emu::boot_esp32_with(app, |_| {}) }
+    /// `boot_esp32`, calling `setup` after the images are loaded and before boot.
+    fn boot_esp32_with(app: &str, setup: impl FnOnce(*mut esp32sim_wasm::Emu)) -> Emu {
+        let board = "esp32";
+        // SAFETY: the board name is readable for the call; the pointer is checked for null.
+        let e = unsafe { esp32sim_new(board.as_ptr(), board.len(), 4, 0) };
+        assert!(!e.is_null());
+        let emu = Emu(e);
+        let (rom, flash) = (classic_rom(), merged_esp32(app));
+        // SAFETY: `e` is live and exclusively ours; the buffers are readable for each call.
+        unsafe {
+            assert_eq!(esp32sim_jumperly_mode(e), 0);
+            assert_eq!(esp32sim_load(e, 0, rom.as_ptr(), rom.len()), 0);
+            assert_eq!(esp32sim_load(e, 5, flash.as_ptr(), flash.len()), 0);
+        }
+        setup(e);
+        // SAFETY: as above.
+        unsafe { assert_eq!(esp32sim_boot(e, 0), 0) };
+        emu
+    }
+    /// Like `run_c3` at the classic's clock: pin events, RMT frames and UART0 text of `us` µs.
+    fn run_esp32(&mut self, us: u64) -> C3Run {
+        let end = self.cycles() + us * ESP32_MHZ;
+        let (mut ev, mut frames, mut text) = (Vec::new(), Vec::new(), String::new());
+        while self.cycles() < end {
+            let left = (end - self.cycles()).min(u32::MAX as u64) as u32;
+            assert_eq!(self.run(left), 0);
+            ev.extend(self.pin_events());
+            frames.extend(self.rmt_frames());
+            text += &self.uart(0);
+        }
+        (ev, frames, text)
+    }
+    /// Run until UART0 shows `until` or `max_us` pass; the UART0 text.
+    fn run_esp32_until(&mut self, until: &str, max_us: u64) -> String {
+        let end = self.cycles() + max_us * ESP32_MHZ;
+        let mut text = String::new();
+        while self.cycles() < end && !text.contains(until) {
+            text += &self.run_esp32(10_000).2;
+        }
+        text
+    }
+}
+
+/// The value of `key=` in the last line of `text` that has it.
+fn last_value(text: &str, key: &str) -> u32 {
+    let prefix = format!("{key}=");
+    let line = text.lines().rev().find(|l| l.starts_with(&prefix)).unwrap_or_else(|| panic!("no {key}= in {text}"));
+    line[prefix.len()..].split_whitespace().next().unwrap().parse().unwrap_or_else(|_| panic!("{line}"))
+}
+
+/// `esp32sim_dac_take` as (gpio, mV), `u32::MAX` for an output that turned off.
+fn dac_take(e: &mut Emu) -> Vec<(u32, u32)> {
+    let n = unsafe { esp32sim_dac_take(e.0) } as usize;
+    let b = e.buf(n * 8);
+    (0..n).map(|i| (u32::from_le_bytes(b[i * 8..i * 8 + 4].try_into().unwrap()), u32::from_le_bytes(b[i * 8 + 4..i * 8 + 8].try_into().unwrap()))).collect()
+}
+
+#[test]
+fn esp32_blink_prints_on_uart0_and_toggles_gpio2() {
+    let mut e = Emu::boot_esp32("esp32-blink");
+    let (ev, _, text) = e.run_esp32(2_200_000);
+    assert!(text.contains("Ready") && text.contains("led=1") && text.contains("led=0"), "{text}");
+    let edges = level_changes(&ev, 2);
+    let edges: Vec<_> = edges.iter().skip_while(|x| !x.1).collect();   // from the first time it lights
+    assert!(edges.len() >= 4, "{ev:?}");
+    for w in edges.windows(2) {
+        assert_ne!(w[0].1, w[1].1);
+        let us = (w[1].0 - w[0].0) / ESP32_MHZ;
+        assert!((499_000..=501_000).contains(&us), "half period {us} us");
+    }
+    let s2 = ev.iter().rev().find(|x| x.1 == 2).expect("no GPIO2 state").2;
+    assert!(s2 & ENABLE != 0 && (s2 >> 16) & 0x1ff == 0x100, "GPIO2 state {s2:#x}");      // a plain GPIO output
+}
+
+/// `esp32-serial`: UART0 echoes, Serial2 runs at 9600 baud on RX 16 / TX 17 through the matrix.
+#[test]
+fn esp32_serial2_on_pins_16_17_and_the_uart_pads() {
+    let mut e = Emu::boot_esp32("esp32-serial");
+    let (_, _, text) = e.run_esp32(400_000);
+    assert!(text.contains("Ready"), "{text}");
+    let two = e.uart(2);
+    assert!(two.contains("two 1\n"), "{two}");
+    assert_eq!(unsafe { esp32sim_uart_pins(e.0, 2) }, 17 | 16 << 8);
+    assert_eq!(uart_pins(&e, 0), (1, 3));                                  // UART0 on its IO_MUX pads
+    let baud = unsafe { esp32sim_uart_baud(e.0, 2) };
+    assert!(baud.abs_diff(9600) * 100 <= 9600 * 3, "{baud}");
+    unsafe {
+        assert_eq!(esp32sim_uart_in(e.0, 0, b"ping\n".as_ptr(), 5), 5);
+        assert_eq!(esp32sim_uart_in(e.0, 2, b"hi\n".as_ptr(), 3), 3);
+    }
+    let (_, _, text) = e.run_esp32(100_000);
+    assert!(text.contains("ping") && text.contains("rx2=hi"), "{text}");
+    // No USB-Serial/JTAG on the classic: console port 3 has nothing and takes nothing.
+    unsafe {
+        assert_eq!(esp32sim_uart_take(e.0, 3), 0);
+        assert_eq!(esp32sim_uart_in(e.0, 3, b"x".as_ptr(), 1), 0);
+    }
+    assert_eq!(uart_pins(&e, 3), (255, 255));
+}
+
+#[test]
+fn esp32_analog_read_follows_the_pad_voltage() {
+    let mut e = Emu::boot_esp32("esp32-adc");
+    unsafe {
+        assert_eq!(esp32sim_adc_set(e.0, 34, 1550), 0);                   // ADC1 CH6
+        assert_eq!(esp32sim_adc_set(e.0, 4, 3100), 0);                    // ADC2 CH0 (no Wi-Fi here)
+        assert_eq!(esp32sim_adc_set(e.0, 21, 100), 1);                    // not an ADC pin
+    }
+    let (_, _, text) = e.run_esp32(400_000);
+    let line = text.lines().rev().find(|l| l.starts_with("a34=")).unwrap_or_else(|| panic!("no reading: {text}"));
+    assert_eq!(line.trim(), format!("a34={} a4=4095", 1550 * 4095 / 3100));
+    unsafe { assert_eq!(esp32sim_adc_set(e.0, 34, 0), 0) };
+    let (_, _, text) = e.run_esp32(100_000);
+    assert_eq!(last_value(&text, "a34"), 0, "{text}");
+}
+
+#[test]
+fn esp32_ledc_and_tone_appear_as_pwm_outputs() {
+    let mut e = Emu::boot_esp32("esp32-pwm");
+    let mut ev = Vec::new();
+    let mut text = String::new();
+    while !text.contains("tone=0") {
+        assert!(e.cycles() < 2_000_000 * ESP32_MHZ, "{text}");
+        text += &e.run_esp32(10_000).2;
+        ev.extend(pwm_events(&mut e));
+    }
+    let signal5 = signal_of(&e, 5);
+    assert!(ESP32_LEDC_SIGNALS.contains(&signal5), "GPIO5 routed to signal {signal5}");
+    let (en, f, d) = pwm_on_pin(&mut e, &ev, 5);
+    assert!(en && (f - 1000.0).abs() < 1.0 && (d - 0.25).abs() < 1e-6, "pin 5: {en} {f} {d}");
+    // tone(18, 440): a LEDC output at 440 Hz, then noTone turns it off.
+    let on = ev.iter().position(|x| x.2 && (x.3 - 440.0).abs() < 1.0).unwrap_or_else(|| panic!("no 440 Hz output: {ev:?}"));
+    let tone = ev[on].1;
+    assert!(ESP32_LEDC_SIGNALS.contains(&tone) && tone != signal5, "tone on signal {tone}");
+    assert!(ev[on..].iter().any(|x| x.1 == tone && !x.2), "the tone never stopped: {ev:?}");
+}
+
+#[test]
+fn esp32_servo_uses_ledc_at_50_hz() {
+    let mut e = Emu::boot_esp32("esp32-servo");
+    let mut ev = Vec::new();
+    for _ in 0..40 {
+        e.run_esp32(10_000);
+        ev.extend(pwm_events(&mut e));
+    }
+    let signal = signal_of(&e, 13);
+    assert!(ESP32_LEDC_SIGNALS.contains(&signal), "GPIO13 routed to signal {signal}");
+    let (en, f, d) = pwm_on_pin(&mut e, &ev, 13);
+    // write(90): map(90, 0, 180, 544, 2400) = 1472 µs of the 20 ms period
+    assert!(en && (f - 50.0).abs() < 0.01 && (d - 1472.0 / 20_000.0).abs() < 0.002, "pin 13: {en} {f} {d}");
+}
+
+#[test]
+fn esp32_rgb_write_produces_an_rmt_frame_on_gpio4() {
+    let mut e = Emu::boot_esp32("esp32-rgb");
+    let (_, frames, _) = e.run_esp32(400_000);
+    assert!(frames.len() >= 2, "{frames:?}");
+    assert!(frames.iter().all(|f| f.1 == 4 && f.2.len() == 24), "{frames:?}");
+    let byte = |bits: &[bool]| bits.iter().fold(0u8, |b, &x| b << 1 | u8::from(x));
+    let lit = frames.iter().find(|f| f.2.iter().any(|&b| b)).expect("no lit frame");
+    assert_eq!([byte(&lit.2[0..8]), byte(&lit.2[8..16]), byte(&lit.2[16..24])], [20, 10, 30]);   // GRB of (10, 20, 30)
+    assert_eq!(signal_of(&e, 4), ESP32_RMT_SIGNAL);
+}
+
+#[test]
+fn esp32_wire_scan_through_the_host_bridge() {
+    use std::{cell::RefCell, rc::Rc};
+    let mem = Rc::new(RefCell::new(([0u8; 256], 0usize, false)));            // (registers, pointer, expect register)
+    let m = mem.clone();
+    set_native_bus_host(move |_bus, op, arg| {
+        let mut s = m.borrow_mut();
+        match op {
+            0 => { if arg >> 1 != 0x50 { return 0; } s.2 = arg & 1 == 0; 1 }
+            1 => { if s.2 { s.1 = arg as usize; s.2 = false; } else { let p = s.1; s.0[p & 255] = arg as u8; s.1 += 1; } 1 }
+            2 => { let p = s.1; s.1 += 1; u32::from(s.0[p & 255]) }
+            _ => 0,
+        }
+    }, |_host, _tx, _rx| {});
+    let mut e = Emu::boot_esp32("esp32-i2c");
+    assert_eq!(unsafe { esp32sim_bus_host(e.0, 1, 0) }, 0);
+    let start = e.cycles();
+    let text = run_with_bus_service(&mut e, "rd=");
+    assert!(text.contains("found 0x50"), "{text}");
+    assert_eq!(text.matches("found").count(), 1, "{text}");                  // every other address NACKs
+    assert!(text.contains("rd=66"), "{text}");                               // 0x42
+    assert!(e.cycles() - start < 1_000_000 * ESP32_MHZ, "the scan took {} us", (e.cycles() - start) / ESP32_MHZ);
+    assert_eq!(unsafe { esp32sim_gpio_in_pin(e.0, 30) }, 21);                // I2CEXT0_SDA_IN on GPIO21
+}
+
+#[test]
+fn esp32_spi_transfer_through_the_host_bridge_on_vspi() {
+    set_native_bus_host(|_, _, _| 0, |host, tx, rx| { assert_eq!(host, 3); for (r, t) in rx.iter_mut().zip(tx) { *r = !t; } });
+    let mut e = Emu::boot_esp32("esp32-spi");
+    assert_eq!(unsafe { esp32sim_bus_host(e.0, 0, 1) }, 0);
+    let text = run_with_bus_service(&mut e, "spi=");
+    assert!(text.contains("spi=a5"), "{text}");                              // !0x5a
+    assert_eq!(unsafe { esp32sim_gpio_in_pin(e.0, 64) }, 19);                // VSPIQ (MISO) on GPIO19
+}
+
+#[test]
+fn esp32_i2s_mic_reports_the_level_of_the_host_sine() {
+    let (text, fmt) = run_i2s_mic_on(Emu::boot_esp32("esp32-i2s-mic"), true, 600, |k| {
+        let s = (420_426.0 * (2.0 * std::f64::consts::PI * 1000.0 * k as f64 / 16_000.0).sin()).round() as i32;
+        [(s << 8) as u32, 0x7fff_ff00]
+    });
+    assert!(text.contains("Ready"), "{text}");
+    assert_eq!(fmt, [16_000, 32, 32, 1, 2, 0b11, fmt[6], 1_024_000], "rate, slot bits, data bits, left slot, 2 slots, running Philips, queued, BCK");
+    let dbfs = last_report(&text, "dbfs=");
+    assert!((dbfs + 26.0).abs() < 0.2, "{text}");
+    let peak = last_report(&text, "peak=");
+    assert!((peak - 420_426.0).abs() < 2.0, "{text}");
+}
+
+#[test]
+fn esp32_wifi_scan_and_join() {
+    let mut e = Emu::boot_esp32_with("esp32-wifi", |e| assert_eq!(wifi_ap(e, "Jumperly", "", 6), 0));
+    let text = e.run_esp32_until("wifi: connected", 10_000_000);
+    assert!(text.contains("scan: 1 network(s)") && text.contains("Jumperly rssi=-40 ch=6 open"), "{text}");
+    assert!(text.contains("wifi: connected to Jumperly ip=10.0.2.15 mac="), "{text}");
+}
+
+#[test]
+fn esp32_ble_server_through_the_virtual_peer() { ble_server_through_the_virtual_peer("esp32", ESP32_MHZ); }
+
+#[test]
+fn esp32_dac_outputs_reach_the_host() {
+    let mut e = Emu::boot_esp32("esp32-dac");
+    let (mut seen, mut text) = (Vec::new(), String::new());
+    while !text.contains("dac=off") {
+        assert!(e.cycles() < 3_000_000 * ESP32_MHZ, "{text}");
+        text += &e.run_esp32(10_000).2;
+        seen.extend(dac_take(&mut e));
+    }
+    text += &e.run_esp32(10_000).2;
+    seen.extend(dac_take(&mut e));
+    assert_eq!(seen, [(25, 1656), (25, 3300), (25, u32::MAX)], "{text}");    // 128 and 255 of 3.3 V, then off
+}
+
+#[test]
+fn esp32_touch_read_drops_when_the_pad_is_touched() {
+    let mut e = Emu::boot_esp32("esp32-touch");
+    let (_, _, text) = e.run_esp32(500_000);
+    let free = last_value(&text, "t4");
+    unsafe {
+        assert_eq!(esp32sim_touch_set(e.0, 4, 1), 0);
+        assert_eq!(esp32sim_touch_set(e.0, 5, 1), 1);                     // GPIO5 is no touch pad
+    }
+    let (_, _, text) = e.run_esp32(300_000);
+    let touched = last_value(&text, "t4");
+    assert!(touched < free, "untouched {free}, touched {touched}");
+    unsafe { assert_eq!(esp32sim_touch_set(e.0, 4, 0), 0) };
+    let (_, _, text) = e.run_esp32(300_000);
+    assert_eq!(last_value(&text, "t4"), free, "{text}");
+}
+
+/// `esp32-strap` prints `rst=<reason> boot=<GPIO0>` once per boot. With nothing on the strapping
+/// pins a host reset is a power-on reset in normal SPI boot (ROM `boot:0x13`).
+#[test]
+fn esp32_a_host_reset_reboots_the_chip_and_keeps_the_clock() {
+    let mut e = Emu::boot_esp32("esp32-strap");
+    let (_, _, text) = e.run_esp32(600_000);
+    assert_eq!(text.matches("rst=1 boot=1").count(), 1, "{text}");
+    let before = e.cycles();
+    assert_eq!(unsafe { esp32sim_reset(e.0) }, 0);
+    assert!(e.cycles() >= before, "cycles went back: {} < {before}", e.cycles());
+    let (_, _, text) = e.run_esp32(600_000);
+    assert!(text.contains("rst:0x1 (POWERON_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)"), "{text}");
+    assert_eq!(text.matches("rst=1 boot=1").count(), 1, "{text}");
+    assert!(e.cycles() >= before + 600_000 * ESP32_MHZ);
+}
+
+/// IO0 held low through a reset (the BOOT button): GPIO_STRAP latches 0x03 and the ROM waits for
+/// a download instead of starting the app; released, the next reset boots the app again.
+#[test]
+fn esp32_io0_held_at_reset_puts_the_rom_into_download_mode() {
+    let mut e = Emu::boot_esp32("esp32-strap");
+    let (_, _, text) = e.run_esp32(600_000);
+    assert!(text.contains("rst=1 boot=1"), "{text}");
+    unsafe {
+        assert_eq!(esp32sim_gpio_set_input(e.0, 0, 0), 0);
+        assert_eq!(esp32sim_reset(e.0), 0);
+    }
+    let mut text = e.run_esp32_until("waiting for download", 1_000_000);
+    text += &e.run_esp32(500_000).2;
+    assert!(text.contains("boot:0x3 (DOWNLOAD_BOOT(UART0/UART1/SDIO_REI_REO_V2))"), "{text}");
+    assert!(text.contains("waiting for download"), "{text}");
+    assert!(!text.contains("boot="), "the app started: {text}");
+    unsafe {
+        assert_eq!(esp32sim_gpio_set_input(e.0, 0, 1), 0);
+        assert_eq!(esp32sim_reset(e.0), 0);
+    }
+    let (_, _, text) = e.run_esp32(600_000);
+    assert!(text.contains("boot:0x13 (SPI_FAST_FLASH_BOOT)") && text.contains("rst=1 boot=1"), "{text}");
+}
+
+#[test]
+fn esp32_abi_refuses_what_the_chip_lacks() {
+    let board = "esp32";
+    // SAFETY: the board name is readable for the call; the emulator is deleted below.
+    let e = unsafe { esp32sim_new(board.as_ptr(), board.len(), 4, 0) };
+    assert!(!e.is_null());
+    // SAFETY: `e` is live and exclusively ours.
+    unsafe {
+        assert_eq!(esp32sim_flash_octal(e, 1), 1);                        // quad flash only
+        assert_eq!(esp32sim_jumperly_mode(e), 0);
+        assert_eq!(esp32sim_gpio_set_input(e, 40, 1), 1);                 // GPIO0..39
+        assert_eq!(esp32sim_pin_state(e, 40), 0);
+        assert_eq!(esp32sim_touch_set(e, 40, 1), 1);
+        assert_eq!(esp32sim_dac_take(e), 0);
+        esp32sim_delete(e);
+    }
 }
