@@ -1,0 +1,78 @@
+{
+  "base_revision": "ab89dc543bd8aa23b2d39f2cc48348ea5a0793ea",
+  "hello_args": [
+    "--chip",
+    "esp32",
+    "--rom",
+    "web/wasm/fw/esp32_rev300_rom.elf",
+    "--board",
+    "esp32dev",
+    "--boot",
+    "rom",
+    "--no-dump",
+    "--console",
+    "uart0",
+    "--bootloader",
+    "web/wasm/fw/public/classic-hello-bootloader.bin",
+    "--ptable",
+    "web/wasm/fw/public/classic-hello-ptable.bin",
+    "--app",
+    "web/wasm/fw/public/classic-hello_world.bin",
+    "--max-seconds",
+    "3"
+  ],
+  "results": {
+    "hello": {
+      "base": {
+        "core_insns": [
+          4610036,
+          668561
+        ],
+        "console_sha256": "8d8b7d143063e8d3d97b278cc43b326fc0378bf89d6a6ff7091a1f72b4c4c4ff",
+        "events": "3174 exceptions, 597 interrupts",
+        "irq_report": [
+          "[irq] per core, cpu-int: count (peripheral sources mapped to it)",
+          "  core0 int2          4  sources [24]",
+          "  core0 int6        296  sources [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,17,18,19,21,22,23,25,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67]",
+          "  core1 int1          1  sources [25]",
+          "  core1 int6        296  sources [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,21,22,23,24,26,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67]"
+        ]
+      },
+      "candidate": {
+        "core_insns": [
+          4610036,
+          668561
+        ],
+        "console_sha256": "8d8b7d143063e8d3d97b278cc43b326fc0378bf89d6a6ff7091a1f72b4c4c4ff",
+        "events": "3174 exceptions, 597 interrupts",
+        "irq_report": [
+          "[irq] per core, cpu-int: count (peripheral sources mapped to it)",
+          "  core0 int2          4  sources [24]",
+          "  core0 int6        296  sources [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,17,18,19,21,22,23,25,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67]",
+          "  core1 int1          1  sources [25]",
+          "  core1 int6        296  sources [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,21,22,23,24,26,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67]"
+        ]
+      }
+    },
+    "gpio": {
+      "base": {
+        "output": "stop=Halted insns=800000 cycles=2400000 interrupts=0 transactions=0 console=[71]",
+        "output_sha256": "0c487b2dfef8cd8ec14b27c21ce7f8079c9930a340cf775aa0bd7c25e720f8f0"
+      },
+      "candidate": {
+        "output": "stop=Halted insns=800000 cycles=2400000 interrupts=0 transactions=0 console=[71]",
+        "output_sha256": "0c487b2dfef8cd8ec14b27c21ce7f8079c9930a340cf775aa0bd7c25e720f8f0"
+      }
+    },
+    "i2c": {
+      "base": {
+        "output": "stop=Halted insns=800000 cycles=2400000 interrupts=0 transactions=42105 console=[71]",
+        "output_sha256": "5cae569b40308490c173a02e8df1d9d9844ec605d817d41469f98e72fdc43689"
+      },
+      "candidate": {
+        "output": "stop=Halted insns=800000 cycles=2400000 interrupts=0 transactions=42105 console=[71]",
+        "output_sha256": "5cae569b40308490c173a02e8df1d9d9844ec605d817d41469f98e72fdc43689"
+      }
+    }
+  }
+}

@@ -5,7 +5,7 @@
     "disassembly_sha256": "7721a3cf878f267c6cb98fbe917778903bac520af4769268ac65a7d1b008a2bd"
   },
   "candidate": {
-    "commit": "444ca4000c119150558fded052c67fef7c1953e7",
+    "commit": "310fc52492fe79de0b7861ff042edb328bd5d35a",
     "binary_sha256": "b8b2c0fc231653e4ba277f25216855bc84ea835bb8c0a6b51aaa3d5a163283ee",
     "disassembly_sha256": "e92cf361cd3a9e362b0f27dbf1db92830987af441b6f4d17d40e1d80f42d4847"
   },
@@ -20,7 +20,9 @@
     "DIFF 322 316 <esp_periph::i2c::I2c>::tick",
     "DIFF 344 339 <esp_periph::rtc_cntl::RtcCntl>::write",
     "DIFF 422 413 <esp_soc::machine::Machine<esp32c3::soc::C3>>::apply_due_script_events",
-    "DIFF 540 529 <esp_soc::machine::Machine<esp32c6::soc::C6>>::apply_due_script_events"
+    "DIFF 540 529 <esp_soc::machine::Machine<esp32c6::soc::C6>>::apply_due_script_events",
+    "DIFF 424 415 <esp_soc::machine::Machine<esp32s3::soc::S3>>::apply_due_script_events"
   ],
-  "method": "committed classic-core asmcmp.py plus hot.py; Rust 1.99.0 release fat-LTO; no timing"
+  "method": "committed classic-core asmcmp.py plus hot.py; Rust 1.99.0 release fat-LTO; no timing",
+  "provenance": "Candidate hashes match the retained final-build manifest for 310fc52492fe79de0b7861ff042edb328bd5d35a, reachable from upstream main; replacing the earlier rebase-only source label. Re-running hot.py on the retained base/final disassemblies gives 111 same, 8 different, 0 missing, including S3 apply_due_script_events."
 }

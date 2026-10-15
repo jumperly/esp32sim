@@ -288,6 +288,7 @@ impl SocBus {
         for (_, off, len) in std::mem::take(&mut self.periph.spi1.0.dirty) { self.flash_written(off, len); }
     }
     pub fn attach_board_devices(&mut self) {
+        self.irq_dirty = true;
         self.pins_active = self.board.uses_gpio_edges() || self.board.uses_uart_pins();
         for (pin, level) in self.board.input_levels() { self.periph.gpio.set_input(pin, level); }
         if self.pins_active { self.deliver_board_inputs(); }
@@ -511,19 +512,87 @@ impl Bus for SocBus {
             self.deliver_board_inputs();
             for input in self.board.uart_rx(self.cycles) { self.periph.uart_pin_input(&input); self.irq_dirty = true; }
         }
-        self.periph.tick(elapsed);
+        let irq_changed = self.periph.tick(elapsed);
+        self.irq_dirty |= irq_changed;
         self.i2s_step(elapsed);
         self.flush_rmt();
         self.flush_gpio();
 
-        self.wifi_step();
-        1
+        if self.periph.wifi.clock_enabled { self.wifi_step(); }
+        u32::from(self.irq_dirty)
     }
 }
 
 #[cfg(test)]
+#[path = "irq_event_tests.rs"]
+mod irq_event_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn irq_events_idle_polling_is_clean_but_writes_and_inputs_are_dirty() {
+        let mut b = SocBus::new(0, [0; 6]);
+        assert_eq!(b.tick(1), 1, "initial presentation");
+        b.irq_dirty = false;
+        for _ in 0..100 {
+            assert_eq!(b.read32(0x3ff4_403c), Ok(0));
+            assert_eq!(b.tick(64), 0, "idle/polling must not present IRQs");
+            assert!(!b.irq_dirty);
+        }
+        b.write32(0x6000_000c, 1 << 8).unwrap();
+        assert!(b.irq_dirty, "AHB write invalidates source/matrix state");
+        b.irq_dirty = false;
+        esp_soc::SocBus::serial_input(&mut b, b"x");
+        assert!(b.irq_dirty);
+        b.irq_dirty = false;
+        esp_soc::SocBus::gpio_set_input(&mut b, 4, true);
+        assert!(b.irq_dirty);
+    }
+
+    #[test]
+    fn irq_events_timer_alarm_and_clear_keep_both_core_lines_live() {
+        let mut b = SocBus::new(0, [0; 6]);
+        for base in [0x104, 0x218] {
+            b.write32(0x3ff0_0000 + base + 4 * 14, 9).unwrap();
+        }
+        b.write32(0x3ff5_f000, (1 << 31) | (1 << 30) | (1 << 11) | (1 << 10) | (2 << 13)).unwrap();
+        b.write32(0x3ff5_f010, 1000).unwrap();
+        b.write32(0x3ff5_f098, 1).unwrap();
+        b.irq_dirty = false;
+        assert_eq!(b.tick(1), 0, "timer before alarm");
+        assert_ne!(b.tick(6000), 0, "clocked alarm must invalidate presentation");
+        let mut lines = [0; 2];
+        b.periph.all_cpu_lines(&mut lines);
+        assert_eq!(lines, [1 << 9; 2]);
+        b.irq_dirty = false;
+        assert_eq!(b.tick(1), 0, "unchanged asserted source is clean");
+        b.write32(0x3ff5_f0a4, 1).unwrap();
+        assert!(b.irq_dirty, "clearing source must present its falling edge");
+        b.periph.all_cpu_lines(&mut lines);
+        assert_eq!(lines, [0; 2]);
+    }
+
+    #[test]
+    fn irq_events_uart_fifo_reads_stay_sticky_until_clear_on_all_aliases() {
+        for (base, alias, port) in [(0x3ff4_0000, 0x6000_0000, 0), (0x3ff5_0000, 0x6001_0000, 1), (0x3ff6_e000, 0x6002_e000, 2)] {
+            for addr in [base, alias] {
+                let mut b = SocBus::new(0, [0; 6]);
+                b.write32(base + 0x24, 1).unwrap();
+                b.write32(base + 0xc, 1).unwrap();
+                esp_soc::SocBus::uart_input(&mut b, port, b"x");
+                assert_ne!(b.periph.uart[port].irq_sources(), 0);
+                b.irq_dirty = false;
+                assert_eq!(b.read8(addr), Ok(b'x'));
+                assert_ne!(b.periph.uart[port].irq_sources(), 0, "FIFO interrupt is sticky");
+                assert!(!b.irq_dirty, "FIFO read does not change source level");
+                b.write32(base + 0x10, 1).unwrap();
+                assert_eq!(b.periph.uart[port].irq_sources(), 0);
+                assert!(b.irq_dirty, "clear write must invalidate presentation");
+            }
+        }
+    }
 
     struct I2cBoard;
     impl esp_soc::BoardModel for I2cBoard {
@@ -534,6 +603,40 @@ mod tests {
     }
 
     const SPI2: u32 = 0x3ff6_4000;
+
+    #[test]
+    fn classic_idle_gates_skip_adapter_calls() {
+        let mut b = SocBus::new(4 << 20, [0; 6]);
+        for _ in 0..100 { b.tick(64); }
+        assert_eq!(b.periph.ledc.tick_calls, 0);
+        assert_eq!(b.periph.rmt.tick_calls, 0);
+        assert_eq!(b.periph.wifi.step_calls, 0);
+        // Clock-on but no work must not enter the LEDC/RMT engines either.
+        b.write32(0x3ff0_00c0, (1 << 11) | (1 << 9)).unwrap();
+        for _ in 0..100 { b.tick(64); }
+        assert_eq!(b.periph.ledc.tick_calls, 0);
+        assert_eq!(b.periph.rmt.tick_calls, 0);
+    }
+
+    #[test]
+    fn classic_wifi_clock_and_reset_skip_step() {
+        let mut b = SocBus::new(4 << 20, [0; 6]);
+        b.tick(64);
+        assert_eq!(b.periph.wifi.step_calls, 0);
+        b.write32(0x3ff0_00cc, 0x406).unwrap();
+        b.tick(64);
+        assert_eq!(b.periph.wifi.step_calls, 1);
+        b.write32(0x3ff0_00cc, 0x402).unwrap();
+        b.tick(64);
+        assert_eq!(b.periph.wifi.step_calls, 1);
+        b.write32(0x3ff0_00cc, 0x406).unwrap();
+        b.write32(0x3ff0_00d0, 4).unwrap();
+        b.tick(64);
+        assert_eq!(b.periph.wifi.step_calls, 0); // MAC reset clears counters too.
+        b.write32(0x3ff0_00d0, 0).unwrap();
+        b.tick(64);
+        assert_eq!(b.periph.wifi.step_calls, 1);
+    }
 
     #[test]
     fn pro_mmu_maps_classic_drom_and_irom() {

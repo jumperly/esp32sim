@@ -215,7 +215,7 @@ impl<S: Soc> Machine<S> {
                 CoreState::Running => {
                     if self.core_held[i] {
                         self.core_held[i] = false;
-                        S::reset_core(&mut self.cores[i], i);
+                        S::reset_core_with_bus(&mut self.cores[i], &mut self.bus, i);
                         self.model_ready_at[i] = self.bus.cycles();
                         if trace { eprintln!("          ** core{} released from reset", i); }
                         let facts = LifecycleFacts { kind: LifecycleKind::CoreReset(i), chip: S::NAME, cores: S::CORES, cpu_hz: S::CPU_HZ };

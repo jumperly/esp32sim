@@ -1,0 +1,146 @@
+{
+  "base": [
+    {
+      "name": "hello",
+      "insns": 4294665,
+      "console_sha256": "bf00ebd11cd193595caf036d160649604bd3d10ab92f54be0a452b1d13923b5a",
+      "frames": 0
+    },
+    {
+      "name": "c3-hello",
+      "insns": 480000000,
+      "console_sha256": "8cf866562dcf23ea12c9fa261e981381729de88595bebef19e4ffd70ec542216",
+      "frames": 0
+    },
+    {
+      "name": "c6-hello",
+      "insns": 480000000,
+      "console_sha256": "99c699ac9a273e1871b3cd793a71381d87af80eacd7cea53640a47ab8b03c2ad",
+      "frames": 0
+    },
+    {
+      "name": "c6-energy-scan",
+      "insns": 480000000,
+      "console_sha256": "025f156fbda5e368c0724ca147bf7b87e0e48951e19dde2ab80a71048080294c",
+      "frames": 141
+    },
+    {
+      "name": "c6-contiki",
+      "insns": 1920000000,
+      "console_sha256": "430790595468c89d2e07b569e19c267ccea69a703c92b957979866f066b643ee",
+      "frames": 17
+    },
+    {
+      "name": "c6-contiki-net",
+      "nodes": [
+        {
+          "insns": 4800000000,
+          "console_sha256": "5664b83628088145822c49a88492a688460ac70242978241b4009e85d01ae216",
+          "tx": 5,
+          "rx": 5
+        },
+        {
+          "insns": 4592000000,
+          "console_sha256": "a7f7b2a5844cf37120d1b033c16e01511e72cef6c2a36e7dc14314044397d14e",
+          "tx": 5,
+          "rx": 5
+        }
+      ]
+    },
+    {
+      "name": "c6-rpl-net",
+      "nodes": [
+        {
+          "insns": 14400000000,
+          "console_sha256": "9b9096543382d7cf7c21653fbe54dbb3e6c88c758412f35fc6175ce7e5176468",
+          "tx": 27,
+          "rx": 27
+        },
+        {
+          "insns": 14192000000,
+          "console_sha256": "468263a4b313c1d1ea7a95e33c857f98305a9c0d39f183a5833a2291e105f2cd",
+          "tx": 27,
+          "rx": 27
+        }
+      ]
+    },
+    {
+      "name": "panel",
+      "insns": 145906583,
+      "console_sha256": "c55e56e99d4ba3de50b2ff7ca744e707aad0934f3b8d53d2cb7168f447e05724",
+      "frames": 210
+    }
+  ],
+  "candidate": [
+    {
+      "name": "hello",
+      "insns": 4294665,
+      "console_sha256": "bf00ebd11cd193595caf036d160649604bd3d10ab92f54be0a452b1d13923b5a",
+      "frames": 0
+    },
+    {
+      "name": "c3-hello",
+      "insns": 480000000,
+      "console_sha256": "8cf866562dcf23ea12c9fa261e981381729de88595bebef19e4ffd70ec542216",
+      "frames": 0
+    },
+    {
+      "name": "c6-hello",
+      "insns": 480000000,
+      "console_sha256": "99c699ac9a273e1871b3cd793a71381d87af80eacd7cea53640a47ab8b03c2ad",
+      "frames": 0
+    },
+    {
+      "name": "c6-energy-scan",
+      "insns": 480000000,
+      "console_sha256": "025f156fbda5e368c0724ca147bf7b87e0e48951e19dde2ab80a71048080294c",
+      "frames": 141
+    },
+    {
+      "name": "c6-contiki",
+      "insns": 1920000000,
+      "console_sha256": "430790595468c89d2e07b569e19c267ccea69a703c92b957979866f066b643ee",
+      "frames": 17
+    },
+    {
+      "name": "c6-contiki-net",
+      "nodes": [
+        {
+          "insns": 4800000000,
+          "console_sha256": "5664b83628088145822c49a88492a688460ac70242978241b4009e85d01ae216",
+          "tx": 5,
+          "rx": 5
+        },
+        {
+          "insns": 4592000000,
+          "console_sha256": "a7f7b2a5844cf37120d1b033c16e01511e72cef6c2a36e7dc14314044397d14e",
+          "tx": 5,
+          "rx": 5
+        }
+      ]
+    },
+    {
+      "name": "c6-rpl-net",
+      "nodes": [
+        {
+          "insns": 14400000000,
+          "console_sha256": "9b9096543382d7cf7c21653fbe54dbb3e6c88c758412f35fc6175ce7e5176468",
+          "tx": 27,
+          "rx": 27
+        },
+        {
+          "insns": 14192000000,
+          "console_sha256": "468263a4b313c1d1ea7a95e33c857f98305a9c0d39f183a5833a2291e105f2cd",
+          "tx": 27,
+          "rx": 27
+        }
+      ]
+    },
+    {
+      "name": "panel",
+      "insns": 145906583,
+      "console_sha256": "c55e56e99d4ba3de50b2ff7ca744e707aad0934f3b8d53d2cb7168f447e05724",
+      "frames": 210
+    }
+  ]
+}

@@ -9,11 +9,14 @@ pub struct ClassicLedc {
     regs: RegRam,
     dirty: u16,
     pub clock_enabled: bool,
+    #[cfg(test)]
+    pub(crate) tick_calls: u64,
 }
 impl Default for ClassicLedc { fn default() -> Self { Self::new() } }
 impl ClassicLedc {
     pub fn new() -> Self {
-        Self { groups: std::array::from_fn(|_| Ledc::new_classic()), regs: RegRam::new(), dirty: u16::MAX, clock_enabled: false }
+        Self { groups: std::array::from_fn(|_| Ledc::new_classic()), regs: RegRam::new(), dirty: u16::MAX, clock_enabled: false,
+            #[cfg(test)] tick_calls: 0 }
     }
     fn source(apb: bool, conf: u32) -> u64 {
         if conf & (1 << 25) == 0 { 1_000_000 } else if apb { APB_HZ } else { 8_500_000 }
@@ -80,6 +83,7 @@ impl Device for ClassicLedc {
         (self.clock_enabled && self.groups.iter().any(|g| g.any_timer())).then_some(ClockDomain::Apb)
     }
     fn tick(&mut self, ticks: u64) {
+        #[cfg(test)] { self.tick_calls += 1; }
         if !self.clock_enabled { return; }
         for (g, group) in self.groups.iter_mut().enumerate() {
             let apb = g == 0 || self.regs.read(0x190) & 1 != 0;

@@ -29,6 +29,9 @@ pub struct WifiMac {
     pub rx_next: u32,
     pub rx_last: u32,
     pub link: wifi::StationLink,
+    pub(crate) clock_enabled: bool,
+    #[cfg(test)]
+    pub(crate) step_calls: u64,
 }
 
 impl WifiMac {
@@ -155,11 +158,10 @@ impl Device for WifiMac {
 impl SocBus {
     #[inline]
     pub(crate) fn wifi_step(&mut self) {
+        #[cfg(test)] { self.periph.wifi.step_calls += 1; }
         // IDF v5.5.4 register/soc/dport_reg.h:1040-1043 (DPORT_WIFI_CLK_WIFI_EN) and
         // 1064,1069 (DPORT_CORE_RST_EN_REG, DPORT_WIFIMAC_RST).
-        if self.periph.dport.ram.read(0xcc) & 0x406 != 0x406
-            || self.periph.dport.ram.read(0xd0) & (1 << 2) != 0
-        {
+        if !self.periph.wifi.clock_enabled {
             return;
         }
         self.periph.wifi.now_cycles = self.cycles;
@@ -170,7 +172,10 @@ impl SocBus {
                 continue;
             }
             let Ok((_, d)) = self.read_dma_descriptor(desc) else { continue };
-            if !d.owner_dma || d.length > d.size { continue; }
+            // libpp's general TX convention: length is the TX byte count, not size.
+            // ESP-IDF v5.5.2 soc/include/soc/lldesc.h:32: "Size (or length for TX)".
+            // Keep ownership and bound the entire length against mapped DRAM below.
+            if !d.owner_dma { continue; }
             let Some(range) = dma_range(d.buf, d.length as usize) else {
                 continue;
             };
@@ -252,17 +257,68 @@ mod tests {
     use super::*;
 
     #[test]
-    fn invalid_tx_descriptors_never_publish_completion() {
-        let mut b = SocBus::new(0, [0; 6]);
-        b.periph.write32(0x3ff0_00cc, 0x406);
-        for (control, buffer) in [(24 << 12 | 24, 0x3ffb_1000),
-            (1 << 31 | 25 << 12 | 24, 0x3ffb_1000),
-            (1 << 31 | 24 << 12 | 24, DRAM_HIGH - 4)] {
-            b.dma_write_word(0x3ffb_0000, control);
-            b.dma_write_word(0x3ffb_0004, buffer);
-            b.periph.wifi.write(0xd20, 0xc00b_0000);
+    fn authentication_tx_reads_full_length_not_buffer_capacity() {
+        // A complete open-system authentication request is 30 bytes. Truncating
+        // to the libpp descriptor's size=28 silently prevents an AP response.
+        for size in [28, 30, 32] {
+            let mut b = SocBus::new(0, [0; 6]);
+            let cfg = wifi::ApConfig::parse("").unwrap();
+            let sta = [2, 0, 0, 0, 0, 1];
+            let mut frame = [0u8; 32];
+            frame[0] = 0xb0;
+            frame[4..10].copy_from_slice(&cfg.bssid);
+            frame[10..16].copy_from_slice(&sta);
+            frame[16..22].copy_from_slice(&cfg.bssid);
+            frame[26] = 1;
+            frame[30..].fill(0xa5); // Beyond length: must not be transmitted.
+            b.periph.wifi.link.attach(Some(VirtualAp::new(cfg, false)), None);
+            b.periph.write32(0x3ff0_00cc, 0x406);
+            let desc = 0x3ffb_0000;
+            let buf = DRAM_HIGH - 32;
+            for (i, word) in frame.as_chunks::<4>().0.iter().enumerate() {
+                b.dma_write_word(buf + 4 * i as u32, u32::from_le_bytes(*word));
+            }
+            let control = (1 << 31) | (30 << 12) | size;
+            b.dma_write_word(desc, control);
+            b.dma_write_word(desc + 4, buf);
+            b.periph.wifi.write(TXQ0, 0xc00b_0000);
             b.wifi_step();
-            assert_eq!(b.periph.wifi.events, 0);
+            assert_eq!(b.periph.wifi.events, EVENT_TX, "size={size}");
+            assert_eq!(b.periph.wifi.txq_complete, 1);
+            assert_eq!(b.periph.wifi.read(TXQ0) >> 30, 0);
+            assert!(b.irq_dirty);
+            assert_eq!(b.periph.wifi.link.tx_frames(), 1);
+            assert_eq!(b.dma_read_word(desc), Some(control));
+            let replies = &b.periph.wifi.link.ap().unwrap().queue;
+            assert_eq!(replies.len(), 1, "size={size}");
+            assert_eq!(replies[0].at_us, 300);
+            assert_eq!(replies[0].frame.len(), 30);
+            assert_eq!(replies[0].frame[0], 0xb0);
+            assert_eq!(&replies[0].frame[4..10], &sta);
+            assert_eq!(&replies[0].frame[24..], &[0, 0, 2, 0, 0, 0]);
+        }
+    }
+
+    #[test]
+    fn invalid_tx_descriptors_never_publish_completion() {
+        // Including length>size in each negative pins the checks that remain
+        // necessary after removing the RX-capacity interpretation from TX.
+        for (desc, control, buffer) in [
+            (0x3ffb_0000, 30 << 12 | 28, 0x3ffb_1000),
+            (0x3ffb_0000, 1 << 31 | 30 << 12 | 28, DRAM_HIGH - 28),
+            (0x3ffb_0000, 1 << 31 | 30 << 12 | 28, ROM_DRAM_LOW - 4),
+            (0x3ffb_0000, 1 << 31 | 30 << 12 | 28, u32::MAX - 4),
+            (DRAM_HIGH - 8, 1 << 31 | 30 << 12 | 28, 0x3ffb_1000),
+        ] {
+            let mut b = SocBus::new(0, [0; 6]);
+            b.periph.write32(0x3ff0_00cc, 0x406);
+            b.dma_write_word(desc, control);
+            b.dma_write_word(desc + 4, buffer);
+            b.periph.wifi.write(TXQ0, 0xc000_0000 | (desc & 0xf_ffff));
+            b.wifi_step();
+            assert_eq!(b.periph.wifi.events, 0, "desc={desc:#x} buffer={buffer:#x}");
+            assert_eq!(b.periph.wifi.txq_complete, 0);
+            assert_eq!(b.periph.wifi.read(TXQ0) >> 30, 3);
             assert_eq!(b.periph.wifi.link.tx_frames(), 0);
         }
     }

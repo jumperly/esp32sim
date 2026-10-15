@@ -63,6 +63,10 @@ pub trait Soc: 'static {
     fn new_core_with_bus(i: usize, _bus: &Self::Bus) -> Self::Core { Self::new_core(i) }
     /// Bring core `i` back to its reset state (after a chip reset or a release from reset).
     fn reset_core(core: &mut Self::Core, i: usize);
+    /// Reset a core and invalidate any bus-owned presentation state erased by that reset.
+    /// The default only resets the core; event-driven buses must specialize it to invalidate IRQs.
+    #[inline]
+    fn reset_core_with_bus(core: &mut Self::Core, _bus: &mut Self::Bus, i: usize) { Self::reset_core(core, i); }
     /// Set a core up to start the app image at `entry` as the 2nd-stage bootloader would have.
     fn boot_core(core: &mut Self::Core, entry: u32);
     /// The interrupt input of every core, from the bus's current source state.
