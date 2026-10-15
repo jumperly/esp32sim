@@ -48,16 +48,11 @@ impl Ledc {
     /// update that PARA_UP has queued counts at once instead of at the next timer overflow, so the
     /// circuit sees a `tone()` or `analogWrite()` when the firmware calls it (`output` is unchanged).
     pub fn tap_output(&self, channel: usize) -> Option<(f64, f64)> {
-        let (period, divider) = self.channel_timer_settings(channel)?;
+        let timer = self.channel_timer_settings(channel)?;
         let hz = self.source_hz();
         if hz == 0 { return None; }
-        let full = period * 16;
-        let duty = if self.pending[channel] { self.regs.read(channel as u32 * 0x14 + 8) } else { self.duty[channel] };
-        let high = (duty as u64).min(full);
-        Some((hz as f64 * 256.0 / divider as f64 / period as f64, high as f64 / full as f64))
+        Some(self.tap_wave(channel, timer, hz))
     }
-    /// Jumperly patch J4: CHn_CONF0 IDLE_LV, the level of a disabled channel.
-    pub fn channel_idle_high(&self, channel: usize) -> bool { self.regs.read(channel as u32 * 0x14) & (1 << 3) != 0 }
 }
 
 /// Classic speed groups: their source clock and matrix signals are chosen by the classic adapter.
@@ -71,6 +66,13 @@ impl Ledc<true> {
     }
     pub fn channel_timer(&self, channel: usize) -> usize { (self.regs.read(channel as u32 * 0x14) & 3) as usize }
     pub fn timer_conf(&self, timer: usize) -> u32 { self.timer_params[timer] }
+    /// Jumperly patch J28: `Ledc::tap_output` for a classic speed group, whose source clock `hz`
+    /// the classic adapter chooses.
+    pub fn tap_output(&self, channel: usize, hz: u64) -> Option<(f64, f64)> {
+        let timer = self.channel_timer_settings(channel)?;
+        if hz == 0 { return None; }
+        Some(self.tap_wave(channel, timer, hz))
+    }
     pub fn signal_level(&self, channel: usize) -> (bool, bool) {
         let conf = self.regs.read(channel as u32 * 0x14);
         let enabled = conf & 4 != 0 && !self.unsupported_fade[channel];
@@ -131,6 +133,18 @@ impl Ledc<$classic> {
         let duty = ((high * 65535 + full / 2) / full) as u32;
         (hz as f64 * 256.0 / divider as f64 / period as f64, duty)
     }
+    /// Jumperly patch J4: frequency and exact duty fraction of a channel clocked at `hz`; a duty
+    /// update PARA_UP has queued counts at once (see `Ledc::tap_output`).
+    #[inline(always)]
+    fn tap_wave(&self, channel: usize, (period, divider): (u64, u64), hz: u64) -> (f64, f64) {
+        let full = period * 16;
+        let duty = if self.pending[channel] { self.regs.read(channel as u32 * 0x14 + 8) } else { self.duty[channel] };
+        let high = (duty as u64).min(full);
+        (hz as f64 * 256.0 / divider as f64 / period as f64, high as f64 / full as f64)
+    }
+    /// Jumperly patch J4 (shared with the classic groups by J28): CHn_CONF0 IDLE_LV, the level of
+    /// a disabled channel.
+    pub fn channel_idle_high(&self, channel: usize) -> bool { self.regs.read(channel as u32 * 0x14) & (1 << 3) != 0 }
     /// Advance the timers, each clocked at `source(timer, timer_conf)` Hz.
     #[inline(always)]
     pub fn tick_with_source(&mut self, ticks: u64, source: impl Fn(usize, u32) -> u64) {

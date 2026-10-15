@@ -160,7 +160,7 @@ impl Device for ClassicSpi {
 // IDF v5.5.4 register/soc/io_mux_reg.h:41-66: pulls bits 7/8, input bit 9, function bits 12-14.
 // Pad offsets and function selectors: io_mux_reg.h:90-359.
 const IOMUX: u32 = 0x1000;
-const IOMUX_OFFSETS: [u32; 40] = [
+pub(crate) const IOMUX_OFFSETS: [u32; 40] = [   // Jumperly patch J28: crate-visible for the host hooks
     0x44, 0x88, 0x40, 0x84, 0x48, 0x6c, 0x60, 0x64,
     0x68, 0x54, 0x58, 0x5c, 0x34, 0x38, 0x30, 0x3c,
     0x4c, 0x50, 0x70, 0x74, 0x78, 0x7c, 0x80, 0x8c,
@@ -216,7 +216,8 @@ impl ClassicGpio {
             _ => off,
         }
     }
-    pub(crate) fn mux(&self, pin: usize) -> u32 {
+    /// IO_MUX_GPIOn_REG of `pin`, 0 for an unbonded pad (public for the Jumperly pin view, patch J28).
+    pub fn mux(&self, pin: usize) -> u32 {
         IOMUX_OFFSETS
             .get(pin)
             .filter(|&&off| off != u32::MAX)

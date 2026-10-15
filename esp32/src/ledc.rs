@@ -38,6 +38,17 @@ impl ClassicLedc {
         let hz = Self::source(group == 0 || self.regs.read(0x190) & 1 != 0, self.groups[group].timer_conf(timer));
         self.groups[group].channel_output(ch % 8, hz)
     }
+    /// Jumperly patch J28: frequency and exact duty fraction of `channel` (HS 0..7, LS 8..15) for
+    /// the host tap, a queued duty update included; `None` while the channel is off.
+    pub fn tap_output(&self, channel: usize) -> Option<(f64, f64)> {
+        if channel >= 16 || !self.clock_enabled { return None; }
+        let group = channel / 8;
+        let timer = self.groups[group].channel_timer(channel % 8);
+        let hz = Self::source(group == 0 || self.regs.read(0x190) & 1 != 0, self.groups[group].timer_conf(timer));
+        self.groups[group].tap_output(channel % 8, hz)
+    }
+    /// Jumperly patch J28: CHn_CONF0 IDLE_LV of `channel` (HS 0..7, LS 8..15).
+    pub fn channel_idle_high(&self, channel: usize) -> bool { self.groups[channel / 8].channel_idle_high(channel % 8) }
 }
 impl Device for ClassicLedc {
     fn read(&mut self, off: u32) -> u32 {
