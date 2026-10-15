@@ -49,7 +49,12 @@ impl ClassicI2s {
         let supported = clock & (1 << 21) == 0 && bck != 0 && [16, 24, 32].contains(&bits);
         Device::write(&mut self.inner, 0x30, (clock & 255) | (2 << 27) | if supported { 1 << 26 } else { 0 });
         Device::write(&mut self.inner, 0x38, div);
-        Device::write(&mut self.inner, 0x28, (bck.saturating_sub(1) << 7) | (bits.saturating_sub(1) << 13) | ((if bits <= 16 { 15 } else { 31 }) << 18));
+        let half = if bits <= 16 { 15 } else { 31 };
+        // Jumperly patch J28: the host's RX format reads the slot width from RX_TDM_CHAN_BITS (bits
+        // 24..28, the half frame the rate uses) and the Philips one-BCK delay from RX_MSB_SHIFT (bit
+        // 29), which is CONF bit 11 on the classic (i2s_reg.h:59-62); the receiver itself ignores both.
+        let host_format = (half << 24) | (((conf >> 11) & 1) << 29);
+        Device::write(&mut self.inner, 0x28, (bck.saturating_sub(1) << 7) | (bits.saturating_sub(1) << 13) | (half << 18) | host_format);
         // RX_CHAN_MOD 1/2 selects one slot and RX_MSB_RIGHT (CONF bit 17) decides which:
         // IDF v5.5.4 hal/esp32/include/hal/i2s_ll.h:859-875 writes RIGHT as msb_right ? 1 : 2
         // and LEFT as msb_right ? 2 : 1. The shared TDM mask has left in bit 0, right in bit 1.
@@ -270,6 +275,20 @@ mod tests {
             i.write(8, 1 << 5);
             assert_eq!(i.inner.rx_data(1_000, false, |_| [1, 2]).is_empty(), restarts, "reset bit {reset:#x}");
         }
+    }
+
+    /// Jumperly patch J28: the host's RX format (`esp32sim_i2s_rx_need`) on the classic: the slot
+    /// is as wide as the half frame the rate uses, and RX_MSB_SHIFT (CONF bit 11, i2s_reg.h:59-62)
+    /// is the Philips one-BCK delay.
+    #[test]
+    fn the_host_format_has_the_slot_width_and_the_philips_delay() {
+        for (bits, slot) in [(16, 16), (24, 32), (32, 32)] {
+            let i = receiver(bits, (1 << 5) | (1 << 11));
+            let f = i.inner.host_format();
+            assert_eq!([f[1], f[2], f[4], f[5]], [slot, bits, 2, 0b11], "{bits}-bit");
+            assert_eq!(f[7], f[0] * 2 * slot, "BCK of {bits}-bit");
+        }
+        assert_eq!(receiver(32, 1 << 5).inner.host_format()[5], 0b01, "MSB-justified: no delay");
     }
 
     /// Classic keeps 24-bit samples in 32-bit words, as IDF sizes them; 16/32-bit are unchanged.
