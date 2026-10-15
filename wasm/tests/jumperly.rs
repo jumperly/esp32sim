@@ -1,5 +1,6 @@
 //! Jumperly ABI (patches J1–J4) on real Arduino firmware: pin states with cycles, the slice yield,
-//! GPIO input, raw UART, RMT frames, PWM outputs. Firmware: `emulator/fixtures/bin`; ROM: `emulator/rom`.
+//! GPIO input, raw UART, RMT frames, PWM outputs. Firmware: `emulator/fixtures/bin`; ROM: `emulator/rom`
+//! (the classic ESP32's `esp32_rev300_rom.elf` from `ESP32SIM_ROM_DIR` when that has it).
 use esp32sim_wasm::*;
 use std::path::PathBuf;
 
