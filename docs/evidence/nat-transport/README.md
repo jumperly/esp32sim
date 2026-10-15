@@ -92,7 +92,11 @@ C3 hello −14.39% (2/7) and C6 hello −10.00% (2/7). By the receipt rules' fla
 least 6/7 pairs, or non-overlapping ranges) nothing is flagged, and the S3 result is reported
 as is rather than explained away: a maintainer measurement on the usual Apple-silicon setup,
 and a static hot-function comparison (not possible on this MSVC build, which has no symbols for
-`llvm-objdump`), would settle whether it is placement or noise.
+`llvm-objdump`), would settle whether it is placement or noise; the A/A control below says noise.
+
+### A/A control, started 2026-10-15T18:22:02
+
+The same protocol with main's binary against a byte-identical copy of itself (SHA-256 equal), S3 hello only, idle desktop: "main" median 31.8281 s (27.8438–32.6875), "copy" median 32.3594 s (28.9531–33.3906), change +1.67%, the copy slower in 5/7 pairs; identical instructions and console hashes. Pairs (main / copy, warmup first): 31.781 / 32.828; 31.906 / 32.359; 31.828 / 33.391; 32.688 / 31.906; 32.281 / 32.828; 29.953 / 29.141; 27.844 / 28.953; 29.766 / 32.859. So this setup produces a 5/7 asymmetry and a few percent between identical binaries; the +3–4% above is within that.
 
 ### run 1, started 2026-10-15T17:57:06
 

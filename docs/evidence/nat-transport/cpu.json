@@ -365,6 +365,88 @@
      ]
     }
    }
+  },
+  {
+   "label": "A/A control: main vs a byte-identical copy of main",
+   "started": "2026-10-15T18:22:02",
+   "finished": "2026-10-15T18:31:02",
+   "machine": {
+    "cpu": "AMD64 Family 26 Model 68 Stepping 0, AuthenticAMD",
+    "os": "Windows-11-10.0.26200-SP0",
+    "python": "3.14.5"
+   },
+   "workloads": {
+    "s3-hello": {
+     "main_median": 31.828125,
+     "main_range": [
+      27.84375,
+      32.6875
+     ],
+     "pr_median": 32.359375,
+     "pr_range": [
+      28.953125,
+      33.390625
+     ],
+     "change_pct": 1.6691212567501168,
+     "pr_slower_in": 5,
+     "identical_work_and_console": true,
+     "insns": [
+      1134713226,
+      655106431
+     ],
+     "console_sha256": "98de90e19cbd85e91103f4ae97797135bdf03a9669f9c370a5c924cc5d376887",
+     "pairs": [
+      {
+       "label": "warmup",
+       "order": "B>M",
+       "main_user": 31.78125,
+       "copy_user": 32.828125
+      },
+      {
+       "label": "pair1",
+       "order": "M>B",
+       "main_user": 31.90625,
+       "copy_user": 32.359375
+      },
+      {
+       "label": "pair2",
+       "order": "B>M",
+       "main_user": 31.828125,
+       "copy_user": 33.390625
+      },
+      {
+       "label": "pair3",
+       "order": "M>B",
+       "main_user": 32.6875,
+       "copy_user": 31.90625
+      },
+      {
+       "label": "pair4",
+       "order": "B>M",
+       "main_user": 32.28125,
+       "copy_user": 32.828125
+      },
+      {
+       "label": "pair5",
+       "order": "M>B",
+       "main_user": 29.953125,
+       "copy_user": 29.140625
+      },
+      {
+       "label": "pair6",
+       "order": "B>M",
+       "main_user": 27.84375,
+       "copy_user": 28.953125
+      },
+      {
+       "label": "pair7",
+       "order": "M>B",
+       "main_user": 29.765625,
+       "copy_user": 32.859375
+      }
+     ]
+    }
+   }
   }
  ]
 }
