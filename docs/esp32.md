@@ -37,6 +37,7 @@ The core includes DRAM, IRAM, RTC RAM, flash MMUs, DPORT interrupt routing and
 secondary-core control, eFuse, SPI flash, three UARTs, GPIO/IO_MUX, RTC control,
 and timer groups including LACT. `none` and `esp32dev` select the bare module.
 The default board option also selects the bare module for this chip.
+`ttgo-tdisplay` (alias `tdisplay`) is the LilyGO TTGO T-Display, see below.
 WASM accepts the `esp32` chip identifier. Boot applications through ROM.
 
 T0/T1 and LACT use 64-bit counters and the shared timer stepping logic.
@@ -44,7 +45,8 @@ LACT sleep-time RTC stepping and timer-group watchdog execution are not modeled.
 
 Classic peripheral extensions include I2C0/1, sixteen LEDC channels,
 SPI2/3 with controller-local DMA, and eight RMT channels. SPI and RMT feed
-the existing board/display/WS2812 interfaces. `esp32dev-loopback` supplies a loopback board fixture. Hardware fade and RMT receive
+the existing board/display/WS2812 interfaces. `esp32dev-loopback` supplies a loopback board fixture; `ttgo-tdisplay`
+hangs an ST7789 on SPI3 (below). Hardware fade and RMT receive
 are not implemented; transaction-level SPI has no bit-level timing.
 
 Classic Wi-Fi uses the shared `StationLink` access point, network and Ethernet
@@ -72,3 +74,35 @@ words, as IDF allocates them on classic. The descriptor owner check follows
 LC_CONF CHECK_OWNER (off at reset, as IDF leaves it). APLL, slave clocks and
 bit-level I2S timing are not modeled. An inline DPORT clock/channel gate guards
 receive work. See EX229 for checks and limits.
+
+## The board: `--board ttgo-tdisplay`
+
+The LilyGO TTGO T-Display (ESP32-D0WDQ6-V3, 4 MB flash, no PSRAM) wires an ST7789V 1.14"
+135×240 panel to VSPI through the GPIO matrix (SCLK 18, MOSI 19, no MISO) with CS 5, D/C 16,
+RST 23 and the backlight on GPIO 4; two buttons, GPIO 35 (right, input only, pulled up on the
+board) and GPIO 0 (left, BOOT); the battery divider on GPIO 34 with its enable on GPIO 14.
+`esp32/src/board/tdisplay.rs` is the board: a `DcsPanel::st7789()` fed the bytes of every SPI
+transaction whose routes are SCLK 18 / MOSI 19 while GPIO 5 is low (MicroPython's `SPI(2)` and
+TFT_eSPI both use VSPI, but the selection is by pins, so HSPI routed to the same GPIOs works
+too), D/C and RST from the GPIO edges, the buttons as released inputs (`press boot 150`,
+`press right 150` in a script).
+
+The glass shows RAM columns 52..186 and rows 40..279 of the controller's 240×320, as a portrait
+135×240 frame (`--tft-png`, the page's panel). That window is derived from how the drivers
+address it: st7789py's 135×240 table puts rotation 0 (MADCTL 0x00) at column offset 52, row
+offset 40, and rotation 2 (MADCTL 0xC0, MX|MY) at offsets 53/40, which is the same rectangle
+mirrored around column 239 and row 319. Rotation 1 (MADCTL 0x60, the usual landscape) draws
+its 240×135 with the top edge on the glass's right: the page rotates the frame 270° for this
+board by default (`?rotate=`, the panel's selector). Red and blue are exchanged unless MADCTL's
+BGR bit is set, as on the Waveshare C6 module; INVON is not applied (it compensates the IPS
+polarity). The orientation of the glass relative to the module (which edge is "up") is taken
+from the drivers' rotation 0, not measured on a board.
+
+Checked end to end with official MicroPython v1.29.0 (IDF 5.5.2) and a pure-Python ST7789
+application: the `machine.SPI(2)` driver's CPU and DMA transactions through SPI3, the window and
+pixel writes landing where the driver addresses them, Wi-Fi join and HTTPS fetch through the
+virtual access point. That application is [`examples/ttgo-tdisplay`](../examples/ttgo-tdisplay/README.md),
+and the browser runs it as the `tdisplay-prices` demo (`run.html?wasm&fw=tdisplay-prices`): the
+official MicroPython image fetched by `tools/fetch-micropython.sh`, the app's LittleFS image in
+`web/wasm/fw/public/`, demo prices instead of a fetch because the browser has no sockets.
+

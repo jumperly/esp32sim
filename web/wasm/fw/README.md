@@ -10,7 +10,8 @@ Put images here for `run.html?wasm&fw=<name>`, described by `<name>.json`:
 ```
 
 `kind` names: `rom`, `bootloader`, `ptable`, `app`, `elf` (one or a list), `flash` (whole image),
-`script`, `picture`. `flash_at` writes files into flash at hex offsets (a data partition's contents). `terminal: true` opens the page on the xterm.js terminal tab (UART0) instead of the plain console log. `line_hint` is the example shown in the console's line box (default: the board's, JSON actions on the Atech board, otherwise a plain line); the tab title is the demo's name from `demos.json`. `display_rotate` (0, 90, 180 or 270, clockwise) turns the panel view for a firmware that draws rotated into its panel — pocket-tank renders landscape into the portrait AMOLED, so it sets 90; touch is mapped back, and `?rotate=` or the panel's selector overrides it. `stubs` are `NAME[=value]` function stubs — resolved through the ELF, or through a `symbols` map (`{"NAME": "0xaddr"}`) when no ELF is shipped; `wifi` an AP spec. `demos.json` lists the manifests the page offers as links. Everything else in this directory is git-ignored except `public/` (hello_world and the Atech firmware — our own code — plus pocket-tank's bootloader, partition table and app, MIT, with `pocket-tank-LICENSE.txt`; and the WiFi station of `examples/c6-wifi-station`, our own code, built for the S3, C3 and C6 as the WiFi goldens' input — the binaries also contain ESP-IDF, Espressif's WiFi, PHY and coexistence libraries and third-party code such as FreeRTOS, lwIP, Mbed TLS, wpa_supplicant and newlib, with their licences in `wifi-station-NOTICE.txt`) and the manifests: the mask ROM
+`script`, `picture`. `flash_at` writes files into flash at hex offsets (a data partition's contents, or
+a combined bootloader + partition table + app image at its offset, as the MicroPython demo does). `terminal: true` opens the page on the xterm.js terminal tab (UART0) instead of the plain console log. `line_hint` is the example shown in the console's line box (default: the board's, JSON actions on the Atech board, otherwise a plain line); the tab title is the demo's name from `demos.json`. `display_rotate` (0, 90, 180 or 270, clockwise) turns the panel view for a firmware that draws rotated into its panel — pocket-tank renders landscape into the portrait AMOLED, so it sets 90; touch is mapped back, and `?rotate=` or the panel's selector overrides it. `stubs` are `NAME[=value]` function stubs — resolved through the ELF, or through a `symbols` map (`{"NAME": "0xaddr"}`) when no ELF is shipped; `wifi` an AP spec. `demos.json` lists the manifests the page offers as links. Everything else in this directory is git-ignored except `public/` (hello_world and the Atech firmware — our own code — plus pocket-tank's bootloader, partition table and app, MIT, with `pocket-tank-LICENSE.txt`; and the WiFi station of `examples/c6-wifi-station`, our own code, built for the S3, C3 and C6 as the WiFi goldens' input — the binaries also contain ESP-IDF, Espressif's WiFi, PHY and coexistence libraries and third-party code such as FreeRTOS, lwIP, Mbed TLS, wpa_supplicant and newlib, with their licences in `wifi-station-NOTICE.txt`) and the manifests: the mask ROM
 is Espressif's and firmware is whoever built it — host them only where you may.
 
 The committed `public/c3-ble-*` files are the C3 NimBLE advertiser and GATT server from
@@ -31,3 +32,12 @@ accompany them. They are native CI fixtures; no new browser manifest is required
 The classic ESP32 hello inputs are `public/classic-hello-*`, built from
 [`examples/hello_world-classic`](../../../examples/hello_world-classic/README.md).
 `classic-hello-NOTICE.txt` lists only linked firmware components.
+
+`tdisplay-prices.json` is the LilyGO TTGO T-Display demo on the classic ESP32: stock MicroPython
+v1.29.0 (`ESP32_GENERIC-20260824-v1.29.0.bin`, MIT, fetched from micropython.org by
+`tools/fetch-micropython.sh` and pinned by SHA-256; not committed) written whole at flash 0x1000 through
+`flash_at`, and `public/tdisplay-vfs.bin`, the LittleFS filesystem of
+[`examples/ttgo-tdisplay`](../../../examples/ttgo-tdisplay/README.md) (our app, Russ Hughes's MIT
+st7789py driver and fonts, `public/tdisplay-NOTICE.txt`) in the vfs partition at 0x200000. The
+manifest's `min_frames` makes `tools/wasm-test.mjs` require that many panel frames besides the
+console line, so a demo that boots but never draws fails.

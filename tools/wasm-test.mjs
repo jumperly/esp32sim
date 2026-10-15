@@ -11,7 +11,8 @@
 //
 // A manifest (web/wasm/fw/<name>.json) names the board, sizes, stubs and files exactly as the
 // page reads them. Each run boots and executes `seconds` (3) of emulated time in 2 M-cycle
-// slices, then expects a `board` message, the expected console line, and a clean run.
+// slices, then expects a `board` message, the expected console line, at least `min_frames` panel
+// frames when the manifest says so, and a clean run.
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -189,6 +190,7 @@ async function runManifest(name) {
   if (panics.length) problems.push(`panicked: ${panics[0]}`);
   if (!board) problems.push('no board message');
   if (!text.includes(m.expect || EXPECT.console)) problems.push(`console never showed ${JSON.stringify(m.expect || EXPECT.console)}; got ${text.length} bytes`);
+  if (m.min_frames !== undefined && frames < m.min_frames) problems.push(`${frames} binary frames, wanted ${m.min_frames}: the firmware never drew its panel`);
   const insns = w.esp32sim_insns(emu);
   if (w.esp32sim_profile_report && (process.env.CENSUS_OUT || process.env.CENSUS_STDOUT)) {
     const at = logs.length;

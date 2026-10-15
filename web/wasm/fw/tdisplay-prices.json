@@ -1,0 +1,17 @@
+{
+ "board": "ttgo-tdisplay",
+ "flash_mb": 4,
+ "psram_mb": 0,
+ "files": {
+  "rom": "esp32_rev300_rom.elf"
+ },
+ "flash_at": {
+  "0x1000": "ESP32_GENERIC-20260824-v1.29.0.bin",
+  "0x200000": "public/tdisplay-vfs.bin"
+ },
+ "expect": "DRAWN demo",
+ "min_frames": 1,
+ "seconds": 8,
+ "display_rotate": 270,
+ "_note": "Stock MicroPython v1.29.0 (ESP32_GENERIC, micropython.org, fetched by tools/fetch-micropython.sh) booted by the ROM from the combined image at 0x1000, with the demo's LittleFS filesystem (examples/ttgo-tdisplay, built by its build-vfs.sh) in the vfs partition at 0x200000: main.py imports app, a pure-Python spot-price screen on st7789py. Its config.json has no ssid, so the app skips Wi-Fi and draws demo_prices.json at once — the browser has no sockets. The console prints PRICES demo and DRAWN demo; the panel is drawn landscape (MADCTL 0x68), shown rotated 270 degrees."
+}

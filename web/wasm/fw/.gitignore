@@ -5,6 +5,9 @@
 # holds pocket-tank's bootloader, partition table and app (MIT, with its LICENSE), whose model is fetched,
 # and the WiFi station built for the classic ESP32, S3, C3 and C6 (the WiFi goldens' input, with its NOTICE).
 # The C3 BLE advertiser/server inputs c3-ble-* and c3-ble-NOTICE.txt are also public (examples/c3-ble-advertiser and examples/c3-ble-server).
+# The T-Display demo's filesystem image public/tdisplay-vfs.bin (examples/ttgo-tdisplay: our app, MIT
+# st7789py and fonts, tdisplay-NOTICE.txt) is public; the MicroPython image it boots is fetched
+# (tools/fetch-micropython.sh).
 # The mask ROM ELF (Apache-2.0, espressif/esp-rom-elfs) and the Linux-on-esp32-S3 image (GPL-3.0,
 # svermigo/Linux-on-esp32-S3, pinned by commit and SHA-256) are fetched by the Pages workflow.
 *
@@ -18,6 +21,7 @@
 !c6-contiki.json
 !c6-contiki-net.json
 !c6-rpl-net.json
+!tdisplay-prices.json
 !linux.json
 !linux-login.json
 !linux-login.txt

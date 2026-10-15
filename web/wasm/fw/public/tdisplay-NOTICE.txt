@@ -1,0 +1,50 @@
+Licences of the T-Display spot-price demo (tdisplay-prices.json)
+================================================================
+
+Files: tdisplay-vfs.bin (this directory) — a LittleFS image of examples/ttgo-tdisplay, built by
+examples/ttgo-tdisplay/build-vfs.sh; and ESP32_GENERIC-20260824-v1.29.0.bin (web/wasm/fw/, not
+committed: fetched from micropython.org by tools/fetch-micropython.sh, SHA-256
+e67ad6015a0a504c1fec9aa9bbf589d0432ed28e62546f4f8dd8a147f8bd95f6), the official MicroPython
+v1.29.0 image for the generic ESP32 board, which the Pages site serves next to this file.
+
+tdisplay-vfs.bin contains
+-------------------------
+- app.mpy, main.py, config.json, demo_prices.json: this repository's demo (MIT, LICENSE at the
+  root); demo_prices.json is one day of spot prices in the format of elprisetjustnu.se's API.
+- st7789py.mpy: russhughes/st7789py_mpy (st7789py.py), MIT, Copyright (c) 2020-2023 Russ Hughes,
+  Copyright (c) 2019 Ivan Belokobylskiy (based on devbis/st7789py_mpy).
+- vga1_8x16.mpy, vga2_16x32.mpy: the bitmap fonts of russhughes/st7789py_mpy (fonts/bitmap,
+  converted from the classic PC BIOS text-mode fonts), MIT, same copyright.
+The sources are in examples/ttgo-tdisplay with their notices.
+
+MicroPython
+-----------
+MicroPython is Copyright (c) 2013-2026 Damien P. George and contributors, licensed under the MIT
+License. The ESP32_GENERIC image is built with ESP-IDF v5.5.2 (per the strings in the image) and
+links Espressif's components: ESP-IDF, Mbed TLS and Espressif's binary Wi-Fi, PHY, coexistence
+and Bluetooth libraries (Apache-2.0), FreeRTOS (MIT), lwIP and newlib (BSD), and other third-party
+code listed in ESP-IDF's docs/en/COPYRIGHT.rst and MicroPython's LICENSE file (ports/esp32). This
+inventory is taken from those documents, not from a link map of the image.
+
+MIT License (st7789py_mpy, the fonts, MicroPython)
+--------------------------------------------------
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+The Apache License 2.0 text for ESP-IDF and Espressif's libraries is in
+wifi-station-NOTICE.txt in this directory.

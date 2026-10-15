@@ -822,6 +822,12 @@ impl Peripherals {
         };
         if let Some(bus) = i2c.filter(|_| addr & 0xfff == 0x04 && v & (1 << 5) != 0) {
             let (scl, sda) = I2C_SIGNALS[bus];
+            // Reuse the shared physical route decoder before the synchronous classic
+            // command list. IDF v5.5.4 esp32/include/soc/gpio_sig_map.h:73-76,200-203
+            // gives I2CEXT0/1 SCL/SDA input/output signals; no new addressing path.
+            let routes = esp_soc::pins::ChipPins::ESP32.routes(&self.gpio.gpio, &self.gpio.route_mux);
+            let pins = routes.i2c_pin(sda).zip(routes.i2c_pin(scl));
+            self.i2c[bus].set_pins(pins);
             if self.gpio.signal_input(scl) != Some(true) || self.gpio.signal_input(sda) != Some(true) {
                 self.i2c[bus].int_raw |= esp_periph::i2c::INT_TIMEOUT;
                 v &= !(1 << 5);

@@ -28,6 +28,7 @@
     esp32c3: { soc: 'ESP32-C3 rev 3', cpu: '1× RISC-V RV32IMC @ 160 MHz', board: 'Bare ESP32-C3', peripherals: 'UART · USB-Serial/JTAG · timers · flash' },
     esp32c6: { soc: 'ESP32-C6 rev 0', cpu: '1× RISC-V RV32IMAC @ 160 MHz', board: 'Bare ESP32-C6', peripherals: 'UART · USB-Serial/JTAG · timers · flash' },
     'waveshare-c6-lcd147': { soc: 'ESP32-C6 rev 0', cpu: '1× RISC-V RV32IMAC @ 160 MHz', board: 'Waveshare C6-LCD-1.47', peripherals: 'ST7789 172×320 · SPI2/GDMA · WS2812 · 802.15.4' },
+    'ttgo-tdisplay': { soc: 'ESP32-D0WD rev 3', cpu: '2× Xtensa LX6 @ 240 MHz', board: 'LilyGO TTGO T-Display', peripherals: 'ST7789 135×240 · VSPI · two buttons' },
     none: { soc: 'ESP32-S3 rev 0', cpu: '2× Xtensa LX7 @ 240 MHz', board: 'Bare ESP32-S3', peripherals: 'UART · USB-Serial/JTAG · timers · flash' },
   };
   const HINTS = {
@@ -47,7 +48,7 @@
     'c3-hello': ['The RISC-V mask ROM boots the app', 'Open UART0 for the console', 'Verified line for line against a real C3'],
     'c6-hello': ['The C6 mask ROM boots the app', 'Open UART0 for the console', 'Verified against a Waveshare C6-LCD-1.47'],
   };
-  const CHIP = { esp32c3: 'c3', esp32c6: 'c6', 'waveshare-c6-lcd147': 'c6' };
+  const CHIP = { esp32c3: 'c3', esp32c6: 'c6', 'waveshare-c6-lcd147': 'c6', 'ttgo-tdisplay': 'esp32' };
   // The board the running machine announced (run.html's `board` message): a native --web run has no
   // manifest or Configure form, and a board picked in Configure can change after the rail is built.
   let liveBoard = null, renderMachine = null;
@@ -56,7 +57,7 @@
     if (!manifest) return 'esp32sim --board ' + boardName + ' --boot rom --bootloader build/bootloader/bootloader.bin \\\n  --ptable build/partition_table/partition-table.bin --app build/app.bin --max-seconds 5';
     const chip = CHIP[boardName]; const f = manifest.files || {};
     const parts = ['esp32sim' + (chip ? ' --chip ' + chip : ''), '--boot rom'];
-    if (!chip || boardName === 'waveshare-c6-lcd147') parts.splice(1, 0, '--board ' + boardName);   // the RISC-V chips refuse --board except for their own board
+    if (!chip || boardName === 'waveshare-c6-lcd147' || boardName === 'ttgo-tdisplay') parts.splice(1, 0, '--board ' + boardName);   // the RISC-V chips refuse --board except for their own board
     if (f.rom) parts.push('--rom web/wasm/fw/' + f.rom);
     if (f.flash) parts.push('--flash-image web/wasm/fw/' + f.flash);
     for (const k of ['bootloader', 'ptable', 'app']) if (f[k]) parts.push('--' + k + ' web/wasm/fw/' + f[k]);
@@ -68,7 +69,7 @@
     if (f.script) parts.push('--script web/wasm/fw/' + f.script);
     parts.push('--max-seconds ' + (manifest.seconds || 8));
     if (manifest.nodes) return '# two nodes: ' + fw + '.json lists each mote; the CLI runs one at a time\n' + parts.join(' \\\n  ');
-    if (boardName !== 'none' && !chip || boardName === 'waveshare-c6-lcd147') parts.push('--tft-png ' + fw + '.png');
+    if (boardName !== 'none' && !chip || boardName === 'waveshare-c6-lcd147' || boardName === 'ttgo-tdisplay') parts.push('--tft-png ' + fw + '.png');
     return parts.join(' \\\n  ');
   }
 

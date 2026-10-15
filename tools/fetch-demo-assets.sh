@@ -5,7 +5,9 @@
 #     SHA-256; tools/fetch-rom-elfs.sh) into web/wasm/fw/ — every demo boots from the ROM;
 #   - xterm.js for the Terminal tab (MIT, pinned; tools/fetch-web-vendor.sh);
 #   - the Linux-on-esp32-S3 flash image (GPL-3.0, svermigo/Linux-on-esp32-S3, release 0.7, pinned by
-#     commit and SHA-256) for the linux demos; 16 MB, skipped with --no-linux.
+#     commit and SHA-256) for the linux demos; 16 MB, skipped with --no-linux;
+#   - the official MicroPython ESP32_GENERIC v1.29.0 image (MIT, micropython.org, pinned by SHA-256;
+#     tools/fetch-micropython.sh) for the T-Display demo.
 # The module itself comes from tools/wasm-build.sh.
 #   tools/fetch-demo-assets.sh [--no-linux]
 set -e
@@ -31,6 +33,8 @@ trap 'rm -rf "$tmp"' EXIT
 tools/fetch-rom-elfs.sh "$FW"
 
 tools/fetch-web-vendor.sh
+
+tools/fetch-micropython.sh "$FW"
 
 if [ "$linux" = 1 ]; then
   if [ -f "$FW/linux-esp32s3-native-full.bin" ] && sha256_ok "$FW/linux-esp32s3-native-full.bin" "$LINUX_SHA"; then
