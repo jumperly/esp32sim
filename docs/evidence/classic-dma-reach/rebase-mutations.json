@@ -1,0 +1,92 @@
+[
+  {
+    "mutation": "reject-empty-TX-buffer",
+    "test": "bus::tests::classic_spi_dma_empty_nodes_do_not_access_a_buffer",
+    "exit_code": 101,
+    "killed": true
+  },
+  {
+    "mutation": "reject-empty-RX-buffer",
+    "test": "bus::tests::classic_spi_dma_empty_nodes_do_not_access_a_buffer",
+    "exit_code": 101,
+    "killed": true
+  },
+  {
+    "mutation": "allow-ROM-prefix",
+    "test": "bus::tests::classic_spi_dma_reach_descriptors_and_payloads",
+    "exit_code": 101,
+    "killed": true
+  },
+  {
+    "mutation": "allow-ROM-prefix",
+    "test": "wifi::tests::classic_wifi_dma_reach_descriptors_and_payloads",
+    "exit_code": 101,
+    "killed": true
+  },
+  {
+    "mutation": "allow-ROM-prefix",
+    "test": "i2s::tests::classic_i2s_dma_reach_reads_and_writes",
+    "exit_code": 101,
+    "killed": true
+  },
+  {
+    "mutation": "reject-first-valid-byte",
+    "test": "bus::tests::classic_spi_dma_reach_descriptors_and_payloads",
+    "exit_code": 101,
+    "killed": true
+  },
+  {
+    "mutation": "reject-first-valid-byte",
+    "test": "wifi::tests::classic_wifi_dma_reach_descriptors_and_payloads",
+    "exit_code": 101,
+    "killed": true
+  },
+  {
+    "mutation": "reject-first-valid-byte",
+    "test": "i2s::tests::classic_i2s_dma_reach_reads_and_writes",
+    "exit_code": 101,
+    "killed": true
+  },
+  {
+    "mutation": "omit-TX-buffer-reach",
+    "test": "bus::tests::classic_spi_dma_reach_descriptors_and_payloads",
+    "exit_code": 101,
+    "killed": true
+  },
+  {
+    "mutation": "omit-RX-buffer-reach",
+    "test": "bus::tests::classic_spi_dma_reach_descriptors_and_payloads",
+    "exit_code": 101,
+    "killed": true
+  },
+  {
+    "mutation": "omit-word-preflight",
+    "test": "bus::tests::classic_spi_dma_reach_descriptors_and_payloads",
+    "exit_code": 101,
+    "killed": true
+  },
+  {
+    "mutation": "wifi-private-prefix-rule",
+    "test": "wifi::tests::classic_wifi_dma_reach_descriptors_and_payloads",
+    "exit_code": 101,
+    "killed": true
+  },
+  {
+    "mutation": "TX-payload-prefix",
+    "test": "wifi::tests::classic_wifi_dma_reach_tx_payload_engine",
+    "exit_code": 101,
+    "killed": true
+  },
+  {
+    "mutation": "RX-payload-prefix",
+    "test": "wifi::tests::classic_wifi_dma_reach_rx_payload_engine",
+    "exit_code": 101,
+    "killed": true
+  },
+  {
+    "mutation": "allow-SRAM1-IRAM-alias",
+    "test": "bus::tests::classic_dma_reach_rejects_sram1_iram_alias",
+    "exit_code": 101,
+    "killed": true
+  }
+]

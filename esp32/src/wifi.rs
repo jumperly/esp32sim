@@ -2,7 +2,9 @@
 //! MAC and PHY meanings are inferred from Arduino-ESP32 3.3.8 libpp/libphy;
 //! no public MAC register header or hardware timing validation is claimed.
 
-use crate::bus::{SocBus, DRAM_HIGH, ROM_DRAM_LOW};
+use crate::bus::{SocBus, dma_range};
+#[cfg(test)]
+use crate::bus::{DRAM_HIGH, ROM_DRAM_LOW};
 use crate::periph::CPU_HZ;
 use esp_periph::{Device, RegRam, WriteEffect};
 use esp_soc::wifi;
@@ -246,15 +248,126 @@ impl SocBus {
     }
 }
 
-fn dma_range(addr: u32, len: usize) -> Option<std::ops::Range<usize>> {
-    let off = addr.checked_sub(ROM_DRAM_LOW)? as usize;
-    let end = off.checked_add(len)?;
-    (end <= (DRAM_HIGH - ROM_DRAM_LOW) as usize).then_some(off..end)
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn classic_wifi_dma_reach_descriptors_and_payloads() {
+        for address in [crate::bus::DRAM_LOW, DRAM_HIGH - 12, ROM_DRAM_LOW,
+            crate::bus::DRAM_LOW - 12, DRAM_HIGH - 11, 0x4008_0000, 0x3ff8_0000, 0x5000_0000, u32::MAX] {
+            let allowed = address == crate::bus::DRAM_LOW || address == DRAM_HIGH - 12;
+            assert_eq!(dma_range(address, 12).is_some(), allowed, "descriptor {address:#x}");
+            let mut b = SocBus::new(0, [0; 6]);
+            assert_eq!(b.read_dma_descriptor(address).is_ok(), allowed, "read {address:#x}");
+        }
+        assert!(dma_range(DRAM_HIGH - 1, 1).is_some());
+        assert!(dma_range(DRAM_HIGH - 1, 2).is_none());
+        assert!(dma_range(ROM_DRAM_LOW, 1).is_none());
+        assert!(dma_range(crate::bus::DRAM_LOW, usize::MAX).is_none());
+    }
+
+    #[test]
+    fn classic_wifi_dma_reach_tx_payload_engine() {
+        use xtensa_lx7::bus::Bus;
+        let frame = [0u8; 24];
+        for (buffer, valid) in [
+            (ROM_DRAM_LOW, false),
+            (crate::bus::DRAM_LOW, true),
+            (DRAM_HIGH - frame.len() as u32, true),
+            (DRAM_HIGH - frame.len() as u32 + 1, false),
+        ] {
+            let mut b = SocBus::new(0, [0; 6]);
+            b.periph.wifi.link.attach(
+                Some(VirtualAp::new(wifi::ApConfig::parse("").unwrap(), false)),
+                Some(esp_soc::net::VirtualNet::new(false)),
+            );
+            b.periph.write32(0x3ff0_00cc, 0x406);
+            let desc = 0x3ffb_0000;
+            let control = (1 << 31) | (24 << 12) | 24;
+            b.write32(desc, control).unwrap();
+            b.write32(desc + 4, buffer).unwrap();
+            b.write32(desc + 8, 0).unwrap();
+            // Seed via the CPU backing, not the DMA helper under test. The
+            // crossing case seeds only its in-range bytes.
+            let off = (buffer - ROM_DRAM_LOW) as usize;
+            let count = frame.len().min(b.dram.len() - off);
+            b.dram[off..off + count].copy_from_slice(&frame[..count]);
+            let before = b.dram.clone();
+            let queue_control = 0xc000_0000 | (desc & 0xf_ffff);
+            b.periph.wifi.write(TXQ0, queue_control);
+            b.periph.wifi.write(0xc40, EVENT_TX);
+            b.irq_dirty = false;
+            b.wifi_step();
+            assert_eq!(b.periph.wifi.link.tx_frames(), u64::from(valid), "{buffer:#x}");
+            assert_eq!(b.periph.wifi.events, if valid { EVENT_TX } else { 0 }, "{buffer:#x}");
+            assert_eq!(b.periph.wifi.txq_complete, u32::from(valid), "{buffer:#x}");
+            assert_eq!(b.periph.wifi.read(TXQ0), if valid { queue_control & !(3 << 30) } else { queue_control });
+            assert_eq!(b.periph.wifi.irq_sources(), u64::from(valid));
+            assert_eq!(b.irq_dirty, valid);
+            assert_eq!(b.dram, before, "TX must not write payload or descriptor at {buffer:#x}");
+        }
+    }
+
+    #[test]
+    fn classic_wifi_dma_reach_rx_payload_engine() {
+        use xtensa_lx7::bus::Bus;
+        let mut frame = [0u8; 24];
+        frame[0] = 0x80;
+        frame[4..10].fill(0xff);
+        let total = 28 + frame.len() + 4;
+        for (buffer, valid) in [
+            (ROM_DRAM_LOW, false),
+            (crate::bus::DRAM_LOW, true),
+            (DRAM_HIGH - total as u32, true),
+            (DRAM_HIGH - total as u32 + 1, false),
+        ] {
+            let mut b = SocBus::new(0, [0; 6]);
+            b.periph.wifi.link.attach(
+                Some(VirtualAp::new(wifi::ApConfig::parse("").unwrap(), false)),
+                Some(esp_soc::net::VirtualNet::new(false)),
+            );
+            b.dram.fill(0xa5);
+            let desc = 0x3ffb_0000;
+            let next = desc + 12;
+            let control = (1 << 31) | total as u32;
+            b.write32(desc, control).unwrap();
+            b.write32(desc + 4, buffer).unwrap();
+            b.write32(desc + 8, next).unwrap();
+            b.periph.wifi.write(0x088, desc);
+            b.periph.wifi.write(0x084, 1 << 31);
+            b.periph.wifi.write(0xc40, EVENT_RX);
+            b.irq_dirty = false;
+            let mut expected = b.dram.clone();
+            // Build the expected classic RX header/frame/FCS independently of
+            // dma_range; invalid transfers must leave the entire backing alone.
+            if valid {
+                let mut bytes = Vec::new();
+                for word in [0x1000_0038u32, 0, 0xa6 | (6 << 16), 1234, 0, 0, 28] {
+                    bytes.extend_from_slice(&word.to_le_bytes());
+                }
+                bytes.extend_from_slice(&frame);
+                bytes.extend_from_slice(&wifi::fcs(&frame).to_le_bytes());
+                let off = (buffer - ROM_DRAM_LOW) as usize;
+                expected[off..off + total].copy_from_slice(&bytes);
+                let off = (desc - ROM_DRAM_LOW) as usize;
+                expected[off..off + 4].copy_from_slice(&(control | ((total as u32) << 12) | (1 << 30)).to_le_bytes());
+            }
+            assert_eq!(b.wifi_rx_fill(&frame, 1234, false).is_some(), valid, "{buffer:#x}");
+            assert!(b.dram == expected, "RX payload/descriptor writes at {buffer:#x}");
+            assert_eq!(b.periph.wifi.rx_base, desc);
+            assert_eq!(b.periph.wifi.rx_next, if valid { next } else { desc });
+            assert_eq!(b.periph.wifi.rx_last, if valid { desc } else { 0 });
+            assert_eq!(b.periph.wifi.read(0x084), 1 << 31);
+            assert_eq!(b.periph.wifi.events, if valid { EVENT_RX } else { 0 });
+            assert_eq!(b.periph.wifi.link.last_rx_desc(), if valid { desc } else { 0 });
+            assert_eq!(b.periph.wifi.link.rx_frames(), u64::from(valid));
+            assert_eq!(b.periph.wifi.link.rx_dropped(), 0);
+            assert_eq!(b.periph.wifi.irq_sources(), u64::from(valid));
+            assert_eq!(b.irq_dirty, valid);
+        }
+    }
 
     #[test]
     fn authentication_tx_reads_full_length_not_buffer_capacity() {

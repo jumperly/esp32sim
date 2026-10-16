@@ -1,0 +1,873 @@
+{
+  "previous_head": "afb8575434bd6b8c6266e06f59e1cc8b1031200a",
+  "base": "ab89dc543bd8aa23b2d39f2cc48348ea5a0793ea",
+  "sources": [
+    {
+      "path": "esp32/src/bus.rs",
+      "bytes": 41414,
+      "sha256": "b2526413cf66d410b5c7b4df14b36e84d2a5544912903a2f425331bbb2f2f9cc"
+    },
+    {
+      "path": "esp32/src/wifi.rs",
+      "bytes": 25475,
+      "sha256": "11e5d3bc2619aae0ae3db416f67dc87fd4a1d41c56d34e4f8c9336b9208d1b49"
+    },
+    {
+      "path": "esp32/src/i2s.rs",
+      "bytes": 12382,
+      "sha256": "a4d84f295b213fc15087333a1bbef0e0f438a4aa43789440ef8e363a9d6c0a09"
+    }
+  ],
+  "unchanged_tracked_golden_firmware_count": 136,
+  "check_logs": [
+    {
+      "path": "RX-payload-prefix-wifi.log",
+      "bytes": 984,
+      "sha256": "5af13b685249117a0d0b0a3e08b77f0d0ee35c173a557f1c045ebc073e91b07d"
+    },
+    {
+      "path": "TX-payload-prefix-wifi.log",
+      "bytes": 977,
+      "sha256": "1fd77665c5718729f4b38b94e67fac2b9f4bf3bf87b530e71abd1f6f8e07e900"
+    },
+    {
+      "path": "allow-ROM-prefix-bus.log",
+      "bytes": 1014,
+      "sha256": "a1ffb2414eb8a304437311734f58e3a31e1a7f39697c68e801bdac781d276b04"
+    },
+    {
+      "path": "allow-ROM-prefix-i2s.log",
+      "bytes": 875,
+      "sha256": "4dcbd7796a9b1ea29fa458599657642e654661c0e5791a23cfc9a645a3226d00"
+    },
+    {
+      "path": "allow-ROM-prefix-wifi.log",
+      "bytes": 922,
+      "sha256": "9c57199ebdb354012c6620ab860bbc60a8ffda4e9efda0e6848f5b102735291b"
+    },
+    {
+      "path": "allow-SRAM1-IRAM-alias-bus.log",
+      "bytes": 963,
+      "sha256": "b22af31d14f48b1d249b2f0900dc3c853393c95d93dc32be022f8f2c024b3926"
+    },
+    {
+      "path": "assets.log",
+      "bytes": 500,
+      "sha256": "6b15c346964a658123050fb27dc063c6e13daa4c462bf51f4e844d97da0281a0"
+    },
+    {
+      "path": "base-build.log",
+      "bytes": 1128,
+      "sha256": "9b6916ec33808a0b073c743e894aa66942f4cb89ccc51af2b7846d287af78954"
+    },
+    {
+      "path": "clippy-native.log",
+      "bytes": 72,
+      "sha256": "4cf86278c1e6d659943a46a3d7e3da429ac15be90f0f17742e24ef85228e7d3e"
+    },
+    {
+      "path": "clippy-wasm.log",
+      "bytes": 74,
+      "sha256": "b8b733f7762537ab8d643fc1b287393990e13c7f7d640afe0669a85cdf8a8a6c"
+    },
+    {
+      "path": "head-build.log",
+      "bytes": 276,
+      "sha256": "8b28b515b47574986a5d75855b613041911e8121325cfbb0134f89d1095619aa"
+    },
+    {
+      "path": "mutation-control.log",
+      "bytes": 1416,
+      "sha256": "a400e1b656463c071304540bab94b44c549a0a35ecc599a671ac8c47e56923cd"
+    },
+    {
+      "path": "omit-RX-buffer-reach-bus.log",
+      "bytes": 1013,
+      "sha256": "e509a7e6997641d0d22c16c3273c5d938adf1caf2f3e61e964c1708152b31569"
+    },
+    {
+      "path": "omit-TX-buffer-reach-bus.log",
+      "bytes": 1013,
+      "sha256": "a40200bd8f6efc403f0a78675d532c37348ec1bec36f554e828078a4c8ab2184"
+    },
+    {
+      "path": "omit-word-preflight-bus.log",
+      "bytes": 993,
+      "sha256": "108dc7b2a248b3386485b2045f985a478a36b41662c0c6f26750d2b6a1a8b30a"
+    },
+    {
+      "path": "privacy.log",
+      "bytes": 130,
+      "sha256": "f1c2fcca6b21053b4099576f8dfb923ebe38760832c7aed24d6b9860726f8999"
+    },
+    {
+      "path": "reject-empty-RX-buffer-bus.log",
+      "bytes": 1017,
+      "sha256": "0c210cb84b26f3011a9ade3adaf5d53434e58c305777482b17fd4f75b43aa76a"
+    },
+    {
+      "path": "reject-empty-TX-buffer-bus.log",
+      "bytes": 1135,
+      "sha256": "2343d64e7ed5a7a6cd9c0194b02683ee573104435eba2b9297214d447dd6e09b"
+    },
+    {
+      "path": "reject-first-valid-byte-bus.log",
+      "bytes": 1014,
+      "sha256": "2a7b452b4f0ea220cb4a989806f17868942860b1b4048c45ae5f18776e235cb7"
+    },
+    {
+      "path": "reject-first-valid-byte-i2s.log",
+      "bytes": 875,
+      "sha256": "24b187ea584e4841fcf814f8124125af77ee72a07d2936d77cd52810a0c43171"
+    },
+    {
+      "path": "reject-first-valid-byte-wifi.log",
+      "bytes": 922,
+      "sha256": "72ef8430a617ec10afc7bf25b4df6f783a5984b4e3ab68d15b4969c7124a469d"
+    },
+    {
+      "path": "static-firmware.log",
+      "bytes": 5778,
+      "sha256": "6b018287d9385ca71209157c807aa3b032c7c80c15648c57a38530b0de9d2e14"
+    },
+    {
+      "path": "test-plain-empty-home.log",
+      "bytes": 93819,
+      "sha256": "61bc8c339e2b785d640f43949fdf687c7cc3aedcd016e02b784f1013b6943d6e"
+    },
+    {
+      "path": "test-rom-empty-home.log",
+      "bytes": 105355,
+      "sha256": "8056cbe0a50208b73a07fa8dc071bd2d32c79264749589810e56d15e5709c31c"
+    },
+    {
+      "path": "wasm-build-test.log",
+      "bytes": 1110,
+      "sha256": "051a834c903aa6b6c897d7f53401429a7d5b4e5c4e2195689d9dd1913c189c8f"
+    },
+    {
+      "path": "wifi-private-prefix-rule-wifi.log",
+      "bytes": 1023,
+      "sha256": "20bb527568fba3f33f822b8f3097dba8e1a545afa9bd373d3053a139a092dabe"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "baseline/esp32sim",
+      "bytes": 2891288,
+      "sha256": "dc4abd10f0affe33820bbe5038cf1a9e9ed9676e79c8aa3084686c7729b2d2e4"
+    },
+    {
+      "path": "baseline/esp32sim-c3",
+      "bytes": 2891328,
+      "sha256": "50a9a55f9e459fe85f155b8af3bdb44f95d728d77b059c077145f57001c5544f"
+    },
+    {
+      "path": "baseline/esp32sim-c6",
+      "bytes": 2891328,
+      "sha256": "187f260a2dd56ae9b55ef831f5de531d4172dc87223e52bd3e3d5c4072f4490a"
+    },
+    {
+      "path": "target/release/esp32sim",
+      "bytes": 2874776,
+      "sha256": "a3f8a242aa44d18e4380da9d33cde80e6687c70dc6ff465d63a65eba6cc47ac4"
+    },
+    {
+      "path": "target/release/esp32sim-c3",
+      "bytes": 2874816,
+      "sha256": "4ab638b397bcfb91397193082e179160d6fc2b2a268ab096caeaf830ed5a409a"
+    },
+    {
+      "path": "target/release/esp32sim-c6",
+      "bytes": 2874816,
+      "sha256": "d0db785dca9780d834b2b7a2c38f53c4417d9baed8b9e08b4e5bc4daa6d15373"
+    },
+    {
+      "path": "web/wasm/esp32sim.wasm",
+      "bytes": 3390355,
+      "sha256": "5b8adfcb1b75f14db379979623f4799a65c865936616e4ec70d139f6c019ce11"
+    }
+  ],
+  "fixture_hashes": [
+    {
+      "path": "cli/tests/goldens.rs",
+      "bytes": 23872,
+      "sha256": "5f6180cfd616df192d013852aeea03acf0f3fa73de280136301ec3ce66f21b1d"
+    },
+    {
+      "path": "tests/golden/atech-script1.console.txt",
+      "bytes": 2419,
+      "sha256": "94d949d7d5725a9ace98b4632b5c22cbf8660b56cd9631ce8ea6ee02f3dfd71f"
+    },
+    {
+      "path": "tests/golden/atech-script1.insns",
+      "bytes": 10,
+      "sha256": "26f4db766ab184bd749655fdc9206ffbf06f04762c5187bf15b9e8da0967a6d3"
+    },
+    {
+      "path": "tests/golden/atech-script1.wav.sha256",
+      "bytes": 65,
+      "sha256": "6905ea6bc4e596fd9da0947ca66c60889453de5f29e10594b7ac3d5354766bd8"
+    },
+    {
+      "path": "tests/golden/atech-sid.console.txt",
+      "bytes": 1186,
+      "sha256": "4f136956867427f16515c50430f44ba87985364569518c7b32ab73a757e73b68"
+    },
+    {
+      "path": "tests/golden/atech-sid.insns",
+      "bytes": 10,
+      "sha256": "ecf11b2b30761c028e002343c303bc94360809f2d821cb318bc76d4b771cc795"
+    },
+    {
+      "path": "tests/golden/atech-sid.wav.sha256",
+      "bytes": 65,
+      "sha256": "09211fb640f360d7c71e471cb757385eae04e7f414adb5ebdf34d0b2ffe617be"
+    },
+    {
+      "path": "tests/golden/ble-advertiser-c3.console.txt",
+      "bytes": 3948,
+      "sha256": "8062480f91f442bef822264338048797de013ffcfaf5266b22f6dfa13b97f740"
+    },
+    {
+      "path": "tests/golden/ble-advertiser-c3.insns",
+      "bytes": 10,
+      "sha256": "22ac9168a4c4e3c484007185095ede7dc0c930797b43788f0f922cc139aca763"
+    },
+    {
+      "path": "tests/golden/ble-advertiser-c3.observer.txt",
+      "bytes": 9618,
+      "sha256": "839acae9b8807e15b9da8881770a5a3d780578eed6b187f8c9db66fd13b5154d"
+    },
+    {
+      "path": "tests/golden/ble-advertiser-c3.report.txt",
+      "bytes": 208,
+      "sha256": "0c487cd74e25ce25113067871fb93a6b893fd11346dbfd3c2a9cad46cf392e27"
+    },
+    {
+      "path": "tests/golden/ble-server-c3-false-false.console.txt",
+      "bytes": 4429,
+      "sha256": "b75d46f97cb420fb120aefc1180c4a0ec95e56ac99de53080dbad6e2b1f9f011"
+    },
+    {
+      "path": "tests/golden/ble-server-c3-false-false.report.txt",
+      "bytes": 181,
+      "sha256": "9d528feef4b31c9f942f62bbd6b4b6790ed9d648f5ca42321a5337e227290c25"
+    },
+    {
+      "path": "tests/golden/ble-server-c3-true-false.console.txt",
+      "bytes": 4429,
+      "sha256": "b75d46f97cb420fb120aefc1180c4a0ec95e56ac99de53080dbad6e2b1f9f011"
+    },
+    {
+      "path": "tests/golden/ble-server-c3-true-false.report.txt",
+      "bytes": 181,
+      "sha256": "2cd1d1ec7514c5222aef279937760eafa8483ae8d51cbfe18ab13f5ca796e9b0"
+    },
+    {
+      "path": "tests/golden/ble-server-c3-true-true.console.txt",
+      "bytes": 4696,
+      "sha256": "167513d4eb485e179bb4fe529ef33516a59ebce06ec51771965ba96602c25324"
+    },
+    {
+      "path": "tests/golden/ble-server-c3-true-true.report.txt",
+      "bytes": 181,
+      "sha256": "e37440889b49a5fa1c04f7ea48b0ddfd0a9983652c0869094af006c01f52f499"
+    },
+    {
+      "path": "tests/golden/cooja-ack.ndjson",
+      "bytes": 1295,
+      "sha256": "8c4c6bfce6cd0dfe64fd9cc46633c5fca8206d1d5eff3aa2eed599def6e0d96b"
+    },
+    {
+      "path": "tests/golden/cooja-echo.ndjson",
+      "bytes": 706,
+      "sha256": "088979eec6e3923f0983349ce563dd4f9235e36b48c3cd6b241e050bf42fb99d"
+    },
+    {
+      "path": "tests/golden/cooja-nullnet-c6.ndjson",
+      "bytes": 68771,
+      "sha256": "c5dad4cb8376729fd6e43827514fa6ee364a59bb9993c04c6f4bb551af78c5fa"
+    },
+    {
+      "path": "tests/golden/crypto-tls-c3.console.txt",
+      "bytes": 351,
+      "sha256": "3ebb2fe4a4c76f644b71433196e574385cb52336dd343a39c61c04255b95d5a2"
+    },
+    {
+      "path": "tests/golden/crypto-tls-c3.report.txt",
+      "bytes": 464,
+      "sha256": "ea78aad277fe0868814005c258622faf4f5532fb4daaacee3c3b40c14b33dfa9"
+    },
+    {
+      "path": "tests/golden/crypto-tls-c6.console.txt",
+      "bytes": 439,
+      "sha256": "3f97b67049bf63650c76d849069fdb03e5b71fcae78860c1a6debd7f9877ed58"
+    },
+    {
+      "path": "tests/golden/crypto-tls-c6.report.txt",
+      "bytes": 464,
+      "sha256": "8e263a73883cc44cb33e8fbd6f40615a8b39257b9fbe970c78dfadacbc3c1fd2"
+    },
+    {
+      "path": "tests/golden/energy-scan-c6.console.txt",
+      "bytes": 3785,
+      "sha256": "7f0d1b52c81d08c645ee1565e95116993664b92f4423048bfc08755dc0dea99b"
+    },
+    {
+      "path": "tests/golden/energy-scan-c6.insns",
+      "bytes": 10,
+      "sha256": "e39e6eb1255bb782f3e96ea9cb045c06b8ed5dc9e69ea9a8edc716f49dfbe245"
+    },
+    {
+      "path": "tests/golden/hello-c3-reboot.console.txt",
+      "bytes": 6511,
+      "sha256": "24cb57e2d2560da7602a497d64fce437b8d487c8d47a15691ea497608249af44"
+    },
+    {
+      "path": "tests/golden/hello-c3-reboot.insns",
+      "bytes": 11,
+      "sha256": "c814f0c20d4a896c148be36777613d6f28d80e9f144f1325486d4ea3b0de3e25"
+    },
+    {
+      "path": "tests/golden/hello-c3.console.txt",
+      "bytes": 3166,
+      "sha256": "a2d0b0be22a9ef5cdf134e1c472438d7d9621871d48e395442002e22f1f85ec0"
+    },
+    {
+      "path": "tests/golden/hello-c3.insns",
+      "bytes": 10,
+      "sha256": "4d0483b48a3d0a721e235d0fd9ca5a8b0c32c8c8bb665d8cf377104fa8d9d368"
+    },
+    {
+      "path": "tests/golden/hello-c6-reboot.console.txt",
+      "bytes": 6263,
+      "sha256": "1de2a636ed6aaf9dbb957bf92d4979a6345405ef03b00e119e0b2f4a6dba1366"
+    },
+    {
+      "path": "tests/golden/hello-c6-reboot.insns",
+      "bytes": 11,
+      "sha256": "c814f0c20d4a896c148be36777613d6f28d80e9f144f1325486d4ea3b0de3e25"
+    },
+    {
+      "path": "tests/golden/hello-c6.console.txt",
+      "bytes": 3032,
+      "sha256": "a6648e618396b83cb2e0a56e79f0a838cbc0d141d864526d9350cddb610b6622"
+    },
+    {
+      "path": "tests/golden/hello-c6.insns",
+      "bytes": 10,
+      "sha256": "4d0483b48a3d0a721e235d0fd9ca5a8b0c32c8c8bb665d8cf377104fa8d9d368"
+    },
+    {
+      "path": "tests/golden/hello-classic.console.txt",
+      "bytes": 2991,
+      "sha256": "8d8b7d143063e8d3d97b278cc43b326fc0378bf89d6a6ff7091a1f72b4c4c4ff"
+    },
+    {
+      "path": "tests/golden/hello-classic.report.txt",
+      "bytes": 542,
+      "sha256": "799c4dbafde24dc1ac614e3afa9fdb491d8c24ae844bb07f4b1316ac87e14e37"
+    },
+    {
+      "path": "tests/golden/hello-s3-reboot.console.txt",
+      "bytes": 6716,
+      "sha256": "2a002e0d096f7af9a37757b4afd98a558a260b810aa0c898d43d289f3b332652"
+    },
+    {
+      "path": "tests/golden/hello-s3-reboot.insns",
+      "bytes": 9,
+      "sha256": "bc56d0cdebd666886391ceab6f8c6b23422e9d2b99d542c90aeff72aba90f20a"
+    },
+    {
+      "path": "tests/golden/hello-s3.console.txt",
+      "bytes": 3182,
+      "sha256": "7ceb58f34295a5a79ea32580b0e69643438ae15d409af8d9c22820f572f2face"
+    },
+    {
+      "path": "tests/golden/hello-s3.insns",
+      "bytes": 8,
+      "sha256": "ff946e8ab4203f74ae43f6730115839d1ab187f607fa176617e493f41bc65f3c"
+    },
+    {
+      "path": "tests/golden/panel-sid.console.txt",
+      "bytes": 5126,
+      "sha256": "942ce18d2c00e8738f36be7ce3a1d318b7ab363dd8fa0090dfc8e147fd0f92d2"
+    },
+    {
+      "path": "tests/golden/panel-sid.insns",
+      "bytes": 10,
+      "sha256": "4e7305ef61cbe1439444065e63b5d9d1725897ed11e2b5e030e3314f03a3b9fc"
+    },
+    {
+      "path": "tests/golden/panel-sid.report.txt",
+      "bytes": 378,
+      "sha256": "010aceb281cc819f3c2c9b386e12eb5066bd4a342a6add5d2ff7dc623917fdc0"
+    },
+    {
+      "path": "tests/golden/panel-sid.wav.sha256",
+      "bytes": 65,
+      "sha256": "d76a1dbdcc7aef23b0c7283d8439262a4948799fa52316c731dc49e431197ebb"
+    },
+    {
+      "path": "tests/golden/wifi-station-c3.console.txt",
+      "bytes": 5704,
+      "sha256": "7703b8446578bca52794e5815a81fb669f0b4f922c69117167355814eb43e518"
+    },
+    {
+      "path": "tests/golden/wifi-station-c3.insns",
+      "bytes": 11,
+      "sha256": "b9d3629b27a162b6ad700cc542a49946e6d62ae306d5db9e38ad02c57c2c31a2"
+    },
+    {
+      "path": "tests/golden/wifi-station-c3.report.txt",
+      "bytes": 313,
+      "sha256": "f1eafb9066d1defa8839704bad4e74382fa6e6b77a05e6853638329985264083"
+    },
+    {
+      "path": "tests/golden/wifi-station-c3.station.txt",
+      "bytes": 450,
+      "sha256": "04449460683f1f704fcbc3ecb119a8744b121de28373ef243d7841f2234e2bf9"
+    },
+    {
+      "path": "tests/golden/wifi-station-c6.console.txt",
+      "bytes": 6368,
+      "sha256": "1a3c299d0ac86531f1896e60e99550bd4c2968c4efb9555d9d8af27c8f225bcd"
+    },
+    {
+      "path": "tests/golden/wifi-station-c6.insns",
+      "bytes": 11,
+      "sha256": "b9d3629b27a162b6ad700cc542a49946e6d62ae306d5db9e38ad02c57c2c31a2"
+    },
+    {
+      "path": "tests/golden/wifi-station-c6.report.txt",
+      "bytes": 313,
+      "sha256": "69d68c07842ca4af83b584bc8223ba435475daa8c63a1f8118842ad9aa81ccd3"
+    },
+    {
+      "path": "tests/golden/wifi-station-c6.station.txt",
+      "bytes": 450,
+      "sha256": "04449460683f1f704fcbc3ecb119a8744b121de28373ef243d7841f2234e2bf9"
+    },
+    {
+      "path": "tests/golden/wifi-station-s3.console.txt",
+      "bytes": 5774,
+      "sha256": "e6021b9d39204f2ccf32ff9dfc085d4eadfb2f722b9092daa88e27180094e872"
+    },
+    {
+      "path": "tests/golden/wifi-station-s3.insns",
+      "bytes": 9,
+      "sha256": "fe4d7172a8d96755b27cb66c139c3ad7d8acc4e17cfd8c6e1f03874c39157703"
+    },
+    {
+      "path": "tests/golden/wifi-station-s3.report.txt",
+      "bytes": 317,
+      "sha256": "c70be8c395db66e0f31dcb7b6a33a153af7ae28ad6755f8c78bec1b2ea963cb7"
+    },
+    {
+      "path": "tests/golden/wifi-station-s3.station.txt",
+      "bytes": 450,
+      "sha256": "04449460683f1f704fcbc3ecb119a8744b121de28373ef243d7841f2234e2bf9"
+    },
+    {
+      "path": "tools/bench-goldens.sh",
+      "bytes": 1499,
+      "sha256": "c5f2144c2aa5e612aed52dff328e4cafd99a388077c2ae15a7642e57aeb40acb"
+    },
+    {
+      "path": "web/wasm/fw/.gitignore",
+      "bytes": 1286,
+      "sha256": "883af865ef2b8775965bc353755755da7dbe2a6f0627d2e2858406a57429757b"
+    },
+    {
+      "path": "web/wasm/fw/atech-sid.json",
+      "bytes": 517,
+      "sha256": "468f1853ece2c48312d6d19d6b488a0f68325c6958120270bf588c7b43091f1a"
+    },
+    {
+      "path": "web/wasm/fw/atech.json",
+      "bytes": 519,
+      "sha256": "5ec0ac31b26997a2bdbc58b9221cbe4b459cc67f90fb3dace0eac24787f85a11"
+    },
+    {
+      "path": "web/wasm/fw/c3-hello.json",
+      "bytes": 363,
+      "sha256": "87dfa2297c18be37992657f35e0c62e1d0314fe3827cc8b30ca640965d93cb22"
+    },
+    {
+      "path": "web/wasm/fw/c6-contiki-net.json",
+      "bytes": 1092,
+      "sha256": "d0f6b719a1c9bdda04eb5087d6303463be178959541079f1394a376c9bb7f447"
+    },
+    {
+      "path": "web/wasm/fw/c6-contiki.json",
+      "bytes": 863,
+      "sha256": "fe6fd4c7fa5f5ad1a413018db57b765d9ddaa9eeb68466c5f6e64c0564b04f96"
+    },
+    {
+      "path": "web/wasm/fw/c6-energy-scan.json",
+      "bytes": 821,
+      "sha256": "a5ba91a9e8eb4a9a2a92b4e72895116df436ec4a6d8aa65a83aefd0a6a1e7411"
+    },
+    {
+      "path": "web/wasm/fw/c6-hello.json",
+      "bytes": 373,
+      "sha256": "e27476ddb020e09a57d02b05f274b1aa7f02e9e5c5b9f21aa38688da6c5f27e8"
+    },
+    {
+      "path": "web/wasm/fw/c6-rpl-net.json",
+      "bytes": 1237,
+      "sha256": "4fb0bd0ee84c151ab84400c3e89e1b23ac4df63d201bca05a0b75547586edf82"
+    },
+    {
+      "path": "web/wasm/fw/demos.json",
+      "bytes": 3998,
+      "sha256": "ad811a55fc2c3ff43b0f928940f7520b8715b8e262a8a440c7a77cb5bb428afe"
+    },
+    {
+      "path": "web/wasm/fw/hello.json",
+      "bytes": 211,
+      "sha256": "effb7f5d7fb33dcbabbe8ef8310c2b32ae875594553c056cde09c3fa762e5412"
+    },
+    {
+      "path": "web/wasm/fw/linux-login.json",
+      "bytes": 810,
+      "sha256": "17625eab54a9d59275f5e4ce552ca2b863563994404c3a5447677a3eebc606fa"
+    },
+    {
+      "path": "web/wasm/fw/linux-login.txt",
+      "bytes": 53,
+      "sha256": "fc1c02b19ec4bb7cff7ea47ddeb38e7cc831e6a24833da8cc3f059bde0fd6a52"
+    },
+    {
+      "path": "web/wasm/fw/linux-term.json",
+      "bytes": 828,
+      "sha256": "ed15938359634a033e0e996e9782f7b184fe47c523d18fa46711bc15905419dd"
+    },
+    {
+      "path": "web/wasm/fw/linux-term.txt",
+      "bytes": 84,
+      "sha256": "6c9dce0f09bc432fbf86bbe79ba43e9670a179d857bedb468e739e891c34b527"
+    },
+    {
+      "path": "web/wasm/fw/linux.json",
+      "bytes": 766,
+      "sha256": "ffefd037b4269aef6708803fce8471d99f461f01178353b19d04c2c14b16a11f"
+    },
+    {
+      "path": "web/wasm/fw/panel-sid.json",
+      "bytes": 493,
+      "sha256": "68cfb78127a1cda1bf197e45dd96a1724b4719a02ad7abbf1ed3a31e8fae6275"
+    },
+    {
+      "path": "web/wasm/fw/panel.json",
+      "bytes": 457,
+      "sha256": "cfc51b851a7a666f66860e5ba6e35ea6abc01c1160eca75b6b90a19f8dd0fb75"
+    },
+    {
+      "path": "web/wasm/fw/pocket-tank.json",
+      "bytes": 723,
+      "sha256": "af3a571b4cba0e65a1259171bc8e7906f1e421f0ea7f2f4832056e926ef1e101"
+    },
+    {
+      "path": "web/wasm/fw/public/atech-bootloader.bin",
+      "bytes": 14032,
+      "sha256": "876f58f4c5e2b2a3eae9e025b29096f034af99f6617edae3676817306d306dcf"
+    },
+    {
+      "path": "web/wasm/fw/public/atech-firmware.bin",
+      "bytes": 426064,
+      "sha256": "8f6561133b844bc918da71b43875c6b4ed421c96e9bbd7e0622f7dbde3148e6f"
+    },
+    {
+      "path": "web/wasm/fw/public/atech-ptable.bin",
+      "bytes": 3072,
+      "sha256": "1d9cca96de0fe07ad7fc0648b9878ddecd9ce565e38b589ad20fea698ed4c80c"
+    },
+    {
+      "path": "web/wasm/fw/public/atech-script1.txt",
+      "bytes": 170,
+      "sha256": "53f404f05590a41ce68ee16f04700c9e378a58cf148035f6267b71d2d37b3458"
+    },
+    {
+      "path": "web/wasm/fw/public/atech-sid.txt",
+      "bytes": 177,
+      "sha256": "6aaf9b926968c8383d6370ba1ab34130fe8361ae53e5d9ae838ac75e001f42a3"
+    },
+    {
+      "path": "web/wasm/fw/public/c3-ble-NOTICE.txt",
+      "bytes": 61575,
+      "sha256": "edc137c189273cac9c25d5f6fc5a3428bf2d4b00d18194e7467d70afeea1e8ca"
+    },
+    {
+      "path": "web/wasm/fw/public/c3-ble-advertiser.bin",
+      "bytes": 387840,
+      "sha256": "7d130e7f2f356111884d545c5c9c4eae496ac13d2e85d1cc262c400feb6cd9bd"
+    },
+    {
+      "path": "web/wasm/fw/public/c3-ble-bootloader.bin",
+      "bytes": 20896,
+      "sha256": "6a2ec68d72c552e9399da762f8789a305e982fd9208b7414e66fe17c990e2296"
+    },
+    {
+      "path": "web/wasm/fw/public/c3-ble-ptable.bin",
+      "bytes": 3072,
+      "sha256": "7f00b6c042a89b15b0cac534f82ed988caf29278ff5700b0c511eb1b5bb7c820"
+    },
+    {
+      "path": "web/wasm/fw/public/c3-ble-server.bin",
+      "bytes": 458432,
+      "sha256": "2f3b4d834392518c9a93e1ace389774dcd795280d7773ea7a17a9f1bc279b64c"
+    },
+    {
+      "path": "web/wasm/fw/public/c3-crypto-tls-bootloader.bin",
+      "bytes": 19536,
+      "sha256": "d4a87d86e17457c5d9e6d9b6c83f1af5ab0122a58545aaab392af1135a01f00a"
+    },
+    {
+      "path": "web/wasm/fw/public/c3-crypto-tls-ptable.bin",
+      "bytes": 3072,
+      "sha256": "148b959cbff1c38aa8e1d5c0ba9d612c54997b945e56a63f41223eef650653a1"
+    },
+    {
+      "path": "web/wasm/fw/public/c3-crypto-tls.bin",
+      "bytes": 985728,
+      "sha256": "1ee66e403f2cc1b91d0c55e102e4543f8364f9166b8a05c553b9f6ff6dcfdf6e"
+    },
+    {
+      "path": "web/wasm/fw/public/c3-hello-bootloader.bin",
+      "bytes": 20960,
+      "sha256": "3eaeaa5fb91d462a6ce6dbd8f8d488c8dc059216bc5841e50b784aea8348eb7b"
+    },
+    {
+      "path": "web/wasm/fw/public/c3-hello-ptable.bin",
+      "bytes": 3072,
+      "sha256": "7f00b6c042a89b15b0cac534f82ed988caf29278ff5700b0c511eb1b5bb7c820"
+    },
+    {
+      "path": "web/wasm/fw/public/c3-hello_world.bin",
+      "bytes": 137104,
+      "sha256": "3fd8606fd2fb10d2387ed4d238e16e7f80cd4832f380da02f0128f7bf4e0e8be"
+    },
+    {
+      "path": "web/wasm/fw/public/c3-wifi-bootloader.bin",
+      "bytes": 20944,
+      "sha256": "38f8adbf585b815dc67667fc8911ba2572570934c43d5ffc630ea13eaf7d76c9"
+    },
+    {
+      "path": "web/wasm/fw/public/c3-wifi-ptable.bin",
+      "bytes": 3072,
+      "sha256": "5295e8c42d6fb5f95e4e8a185932c6191d27cfc5078322475347e40e71af815a"
+    },
+    {
+      "path": "web/wasm/fw/public/c3-wifi_station.bin",
+      "bytes": 743728,
+      "sha256": "3e336a2c48c29807b6c0794a564df67b0a5ab51017063219a863f47a558b17c4"
+    },
+    {
+      "path": "web/wasm/fw/public/c6-contiki-bootloader.bin",
+      "bytes": 22464,
+      "sha256": "e0a1599ef9d5f4c8447868c813154af6c2ec4a77c9c28792bdd0c2c555a26da8"
+    },
+    {
+      "path": "web/wasm/fw/public/c6-contiki-ptable.bin",
+      "bytes": 3072,
+      "sha256": "7f00b6c042a89b15b0cac534f82ed988caf29278ff5700b0c511eb1b5bb7c820"
+    },
+    {
+      "path": "web/wasm/fw/public/c6-contiki.bin",
+      "bytes": 582704,
+      "sha256": "d3057dfa272d74c0b61638b892e2ef89f5f86049615d5a14e6be209881cbe47b"
+    },
+    {
+      "path": "web/wasm/fw/public/c6-crypto-tls-bootloader.bin",
+      "bytes": 20720,
+      "sha256": "02f53243e1ded001d79f109e938846d72bd85a91bee7a3513e4094d7c090975c"
+    },
+    {
+      "path": "web/wasm/fw/public/c6-crypto-tls-ptable.bin",
+      "bytes": 3072,
+      "sha256": "148b959cbff1c38aa8e1d5c0ba9d612c54997b945e56a63f41223eef650653a1"
+    },
+    {
+      "path": "web/wasm/fw/public/c6-crypto-tls.bin",
+      "bytes": 1008640,
+      "sha256": "4de547121c72dfc15a3bf3b013299ff71cb57fe1860f88a5b4167887d6391506"
+    },
+    {
+      "path": "web/wasm/fw/public/c6-energy-bootloader.bin",
+      "bytes": 22400,
+      "sha256": "8388ab65141d7a2abb818a114fab747902a8bf6b9f049654e5e4add7d82b4979"
+    },
+    {
+      "path": "web/wasm/fw/public/c6-energy-ptable.bin",
+      "bytes": 3072,
+      "sha256": "7f00b6c042a89b15b0cac534f82ed988caf29278ff5700b0c511eb1b5bb7c820"
+    },
+    {
+      "path": "web/wasm/fw/public/c6-energy_scan.bin",
+      "bytes": 542864,
+      "sha256": "a1f68b7cc05363d7f9b5408b655647b2886aaa40ee719d212ef321ff938055dd"
+    },
+    {
+      "path": "web/wasm/fw/public/c6-hello-bootloader.bin",
+      "bytes": 22464,
+      "sha256": "88fd358b406ebc874cda1f4d14c1fd50d37cd064a1826192ee275ce67741ff75"
+    },
+    {
+      "path": "web/wasm/fw/public/c6-hello-ptable.bin",
+      "bytes": 3072,
+      "sha256": "7f00b6c042a89b15b0cac534f82ed988caf29278ff5700b0c511eb1b5bb7c820"
+    },
+    {
+      "path": "web/wasm/fw/public/c6-hello_world.bin",
+      "bytes": 120848,
+      "sha256": "e302a3769d3122759ea85ed6caff857da36f558f83f9bf0eb652276657de0131"
+    },
+    {
+      "path": "web/wasm/fw/public/c6-rpl-bootloader.bin",
+      "bytes": 22464,
+      "sha256": "54d0b4969f68b0dbdb55195c5fb082b3c5b0f02578a428be9e2960b6a8deee8b"
+    },
+    {
+      "path": "web/wasm/fw/public/c6-rpl-client.bin",
+      "bytes": 647296,
+      "sha256": "0bdf8c0fcff25b6dc58c10ba8effabf71228b399a91bca660d74605068db89d6"
+    },
+    {
+      "path": "web/wasm/fw/public/c6-rpl-ptable.bin",
+      "bytes": 3072,
+      "sha256": "7f00b6c042a89b15b0cac534f82ed988caf29278ff5700b0c511eb1b5bb7c820"
+    },
+    {
+      "path": "web/wasm/fw/public/c6-rpl-server.bin",
+      "bytes": 646768,
+      "sha256": "f6cccd2db59bfd559ff26acf2d8692074f1f277892af622602e3999a7c1613b8"
+    },
+    {
+      "path": "web/wasm/fw/public/c6-wifi-bootloader.bin",
+      "bytes": 22384,
+      "sha256": "b91489116632110eba96470ce38034fb4c0b49264be4ecbc2e1efe9efe820ddf"
+    },
+    {
+      "path": "web/wasm/fw/public/c6-wifi-ptable.bin",
+      "bytes": 3072,
+      "sha256": "5295e8c42d6fb5f95e4e8a185932c6191d27cfc5078322475347e40e71af815a"
+    },
+    {
+      "path": "web/wasm/fw/public/c6-wifi_station.bin",
+      "bytes": 801136,
+      "sha256": "a7286982027e21e6a310dee6f473fd6c1990480556d062f56b95eede491188fc"
+    },
+    {
+      "path": "web/wasm/fw/public/classic-hello-NOTICE.txt",
+      "bytes": 100642,
+      "sha256": "6b7e1dba0e2a35b215f67f11f1ae9d7ea90cee93bb4144054d0103582ed35d03"
+    },
+    {
+      "path": "web/wasm/fw/public/classic-hello-bootloader.bin",
+      "bytes": 26096,
+      "sha256": "faa4ac0961a9ec6c02d865c874c82bfe0a01225491b89d54fe4b7393f712be2a"
+    },
+    {
+      "path": "web/wasm/fw/public/classic-hello-ptable.bin",
+      "bytes": 3072,
+      "sha256": "7f00b6c042a89b15b0cac534f82ed988caf29278ff5700b0c511eb1b5bb7c820"
+    },
+    {
+      "path": "web/wasm/fw/public/classic-hello_world.bin",
+      "bytes": 162832,
+      "sha256": "fa4307fe9545e6599155ac38ad61205946b3f56e92890ad10a69c1592e120cdd"
+    },
+    {
+      "path": "web/wasm/fw/public/crypto-tls-NOTICE.txt",
+      "bytes": 2531,
+      "sha256": "73075095356515d7bed50d63850e24e380dd3eb480eac26ccae763733828012f"
+    },
+    {
+      "path": "web/wasm/fw/public/crypto-tls-runtime-licenses.txt",
+      "bytes": 66433,
+      "sha256": "ced5bb06f846fbe76ecff78635b4e8ac5c8b42a0c9e27af293e903a3099a3f25"
+    },
+    {
+      "path": "web/wasm/fw/public/energydata.json",
+      "bytes": 2846,
+      "sha256": "aa8d5326406a83aa254d953d16f18f644c0112d523ef2e2e66b3ab1add4ff0cb"
+    },
+    {
+      "path": "web/wasm/fw/public/hello-bootloader.bin",
+      "bytes": 20832,
+      "sha256": "7efecb4df4463ece11ab286068a505ecd174f66fd4aacc53d887fcb9c18f0579"
+    },
+    {
+      "path": "web/wasm/fw/public/hello-ptable.bin",
+      "bytes": 3072,
+      "sha256": "7f00b6c042a89b15b0cac534f82ed988caf29278ff5700b0c511eb1b5bb7c820"
+    },
+    {
+      "path": "web/wasm/fw/public/hello_world.bin",
+      "bytes": 161712,
+      "sha256": "d9142e72453e8b71f6903f4dd869a4ee09c34d94cfafcb4f4309f8d2bf9040c9"
+    },
+    {
+      "path": "web/wasm/fw/public/panel-bootloader.bin",
+      "bytes": 22272,
+      "sha256": "f804e8ef245d68ee0932650062e8f4d6b14df22d61fb39ba50f5e33977127801"
+    },
+    {
+      "path": "web/wasm/fw/public/panel-demo.bin",
+      "bytes": 1651104,
+      "sha256": "8094e4be95f8d92c7ce41fe1acbbecbcdb3b31725fc292a1eef63cfcc22cf5a0"
+    },
+    {
+      "path": "web/wasm/fw/public/panel-ptable.bin",
+      "bytes": 3072,
+      "sha256": "fb462bc675bf6928afe8de87977f72c7dfce38491d32aa89a9204b6d4d5b1066"
+    },
+    {
+      "path": "web/wasm/fw/public/panel-sid.txt",
+      "bytes": 477,
+      "sha256": "bb6e0b1f1d5945265f0310f2a40b59b03602b257b412f52f649fc2c66823f420"
+    },
+    {
+      "path": "web/wasm/fw/public/pocket-tank-LICENSE.txt",
+      "bytes": 1068,
+      "sha256": "fbe57105e2d7cf36b9f14a9e86168f10a292c0afd50539c3c739c8652ea772ec"
+    },
+    {
+      "path": "web/wasm/fw/public/pocket-tank-bootloader.bin",
+      "bytes": 22464,
+      "sha256": "9556d59f3a10f6b04fa6d75f3142a66034339afafffbd4bbc3d9a127eaa73859"
+    },
+    {
+      "path": "web/wasm/fw/public/pocket-tank-ptable.bin",
+      "bytes": 3072,
+      "sha256": "7af5b28608c91167e00778b7f20622f3b47849efebeb3e64117162d73f3e0508"
+    },
+    {
+      "path": "web/wasm/fw/public/pocket-tank.bin",
+      "bytes": 470096,
+      "sha256": "443dd24aed14a509e6df597eb3a02635cc07e0fbee6f04db85a62f4d4dadb113"
+    },
+    {
+      "path": "web/wasm/fw/public/s3-wifi-bootloader.bin",
+      "bytes": 20784,
+      "sha256": "0c09693237647d665ee018508b300cb28903a693abef060ec36294bfcab3457d"
+    },
+    {
+      "path": "web/wasm/fw/public/s3-wifi-ptable.bin",
+      "bytes": 3072,
+      "sha256": "5295e8c42d6fb5f95e4e8a185932c6191d27cfc5078322475347e40e71af815a"
+    },
+    {
+      "path": "web/wasm/fw/public/s3-wifi_station.bin",
+      "bytes": 699536,
+      "sha256": "f721ed2261bc40203dc84eb09c02ee21eb33377d5517c2c259ec0ef2529909fc"
+    },
+    {
+      "path": "web/wasm/fw/public/wifi-station-NOTICE.txt",
+      "bytes": 68517,
+      "sha256": "8cb48a36fb19e7527a6925b7fcdf06a9760846e88586a00bcd89b29aaa1a9bb1"
+    }
+  ]
+}

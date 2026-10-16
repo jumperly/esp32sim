@@ -1,0 +1,236 @@
+[
+  {
+    "binary": "esp32sim",
+    "common": 2199,
+    "identical": 2193,
+    "identical_after_zero_pageoff_normalization": 2198,
+    "relocation_only_functions": [
+      "<esp32::periph::Peripherals>::new",
+      "<esp32s3::approximate_cache::CacheTiming>::new",
+      "<esp32s3::approximate_timing::ApproximateCostModel as emu_core::core::CostModel>::lifecycle",
+      "<esp32s3::memory_cost_model::MemoryCostModel as emu_core::core::CostModel>::lifecycle",
+      "<esp_soc::machine::Machine<esp32s3::soc::S3>>::reboot"
+    ],
+    "hot_functions_identical": [
+      "<esp32::bus::SocBus as emu_core::bus::Bus>::read32",
+      "<esp32::bus::SocBus as emu_core::bus::Bus>::read8",
+      "<esp32::bus::SocBus as emu_core::bus::Bus>::tick",
+      "<esp32::periph::Peripherals>::read32",
+      "<esp32c3::bus::SocBus as emu_core::bus::Bus>::read32",
+      "<esp32c3::bus::SocBus as emu_core::bus::Bus>::read8",
+      "<esp32c3::bus::SocBus as emu_core::bus::Bus>::tick",
+      "<esp32c3::bus::SocBus as esp_soc::soc::SocBus>::refresh_irq",
+      "<esp32c3::periph::Peripherals>::read32",
+      "<esp32c3::periph::Peripherals>::refresh_pin_lines",
+      "<esp32c6::bus::SocBus as emu_core::bus::Bus>::read32",
+      "<esp32c6::bus::SocBus as emu_core::bus::Bus>::read8",
+      "<esp32c6::bus::SocBus as emu_core::bus::Bus>::tick",
+      "<esp32c6::bus::SocBus as esp_soc::soc::SocBus>::refresh_irq",
+      "<esp32c6::periph::Peripherals>::read32",
+      "<esp32s3::bus::SocBus as emu_core::bus::Bus>::read32",
+      "<esp32s3::bus::SocBus as emu_core::bus::Bus>::tick",
+      "<esp32s3::bus::SocBus as esp_soc::soc::SocBus>::refresh_irq",
+      "<esp32s3::bus::SocBus>::read32_access::<false>",
+      "<esp32s3::bus::SocBus>::read8_access::<false>",
+      "<esp32s3::bus::SocBus>::read8_access::<true>",
+      "<esp_soc::machine::modeled::RecordingBus<esp32::bus::SocBus> as emu_core::bus::Bus>::read32",
+      "<esp_soc::machine::modeled::RecordingBus<esp32::bus::SocBus> as emu_core::bus::Bus>::read8",
+      "<esp_soc::machine::modeled::RecordingBus<esp32c3::bus::SocBus> as emu_core::bus::Bus>::read32",
+      "<esp_soc::machine::modeled::RecordingBus<esp32c3::bus::SocBus> as emu_core::bus::Bus>::read8",
+      "<esp_soc::machine::modeled::RecordingBus<esp32c6::bus::SocBus> as emu_core::bus::Bus>::read32",
+      "<esp_soc::machine::modeled::RecordingBus<esp32c6::bus::SocBus> as emu_core::bus::Bus>::read8",
+      "<esp_soc::machine::modeled::RecordingBus<esp32s3::bus::SocBus> as emu_core::bus::Bus>::read32",
+      "<esp_soc::machine::modeled::RecordingBus<esp32s3::bus::SocBus> as emu_core::bus::Bus>::read8"
+    ],
+    "classic_tick": {
+      "instructions": 1770,
+      "prologue": [
+        "sub\tsp, sp, #0x1e0",
+        "stp\td9, d8, [sp, #0x170]",
+        "stp\tx28, x27, [sp, #0x180]",
+        "stp\tx26, x25, [sp, #0x190]",
+        "stp\tx24, x23, [sp, #0x1a0]",
+        "stp\tx22, x21, [sp, #0x1b0]",
+        "stp\tx20, x19, [sp, #0x1c0]",
+        "stp\tx29, x30, [sp, #0x1d0]",
+        "add\tx29, sp, #0x1d0"
+      ]
+    },
+    "changed": [
+      {
+        "name": "<esp32::bus::SocBus>::store",
+        "base_instructions": 3166,
+        "head_instructions": 2943
+      },
+      {
+        "name": "<esp32::periph::Peripherals>::new",
+        "base_instructions": 1882,
+        "head_instructions": 1882
+      },
+      {
+        "name": "<esp32s3::approximate_cache::CacheTiming>::new",
+        "base_instructions": 185,
+        "head_instructions": 185
+      },
+      {
+        "name": "<esp32s3::approximate_timing::ApproximateCostModel as emu_core::core::CostModel>::lifecycle",
+        "base_instructions": 147,
+        "head_instructions": 147
+      },
+      {
+        "name": "<esp32s3::memory_cost_model::MemoryCostModel as emu_core::core::CostModel>::lifecycle",
+        "base_instructions": 129,
+        "head_instructions": 129
+      },
+      {
+        "name": "<esp_soc::machine::Machine<esp32s3::soc::S3>>::reboot",
+        "base_instructions": 1388,
+        "head_instructions": 1388
+      }
+    ]
+  },
+  {
+    "binary": "esp32sim-c3",
+    "common": 2199,
+    "identical": 2196,
+    "identical_after_zero_pageoff_normalization": 2198,
+    "relocation_only_functions": [
+      "<esp32::periph::Peripherals>::new",
+      "<esp32s3::board::atech14::Atech14>::new"
+    ],
+    "hot_functions_identical": [
+      "<esp32::bus::SocBus as emu_core::bus::Bus>::read32",
+      "<esp32::bus::SocBus as emu_core::bus::Bus>::read8",
+      "<esp32::bus::SocBus as emu_core::bus::Bus>::tick",
+      "<esp32::periph::Peripherals>::read32",
+      "<esp32c3::bus::SocBus as emu_core::bus::Bus>::read32",
+      "<esp32c3::bus::SocBus as emu_core::bus::Bus>::read8",
+      "<esp32c3::bus::SocBus as emu_core::bus::Bus>::tick",
+      "<esp32c3::bus::SocBus as esp_soc::soc::SocBus>::refresh_irq",
+      "<esp32c3::periph::Peripherals>::read32",
+      "<esp32c3::periph::Peripherals>::refresh_pin_lines",
+      "<esp32c6::bus::SocBus as emu_core::bus::Bus>::read32",
+      "<esp32c6::bus::SocBus as emu_core::bus::Bus>::read8",
+      "<esp32c6::bus::SocBus as emu_core::bus::Bus>::tick",
+      "<esp32c6::bus::SocBus as esp_soc::soc::SocBus>::refresh_irq",
+      "<esp32c6::periph::Peripherals>::read32",
+      "<esp32s3::bus::SocBus as emu_core::bus::Bus>::read32",
+      "<esp32s3::bus::SocBus as emu_core::bus::Bus>::tick",
+      "<esp32s3::bus::SocBus as esp_soc::soc::SocBus>::refresh_irq",
+      "<esp32s3::bus::SocBus>::read32_access::<false>",
+      "<esp32s3::bus::SocBus>::read8_access::<false>",
+      "<esp32s3::bus::SocBus>::read8_access::<true>",
+      "<esp_soc::machine::modeled::RecordingBus<esp32::bus::SocBus> as emu_core::bus::Bus>::read32",
+      "<esp_soc::machine::modeled::RecordingBus<esp32::bus::SocBus> as emu_core::bus::Bus>::read8",
+      "<esp_soc::machine::modeled::RecordingBus<esp32c3::bus::SocBus> as emu_core::bus::Bus>::read32",
+      "<esp_soc::machine::modeled::RecordingBus<esp32c3::bus::SocBus> as emu_core::bus::Bus>::read8",
+      "<esp_soc::machine::modeled::RecordingBus<esp32c6::bus::SocBus> as emu_core::bus::Bus>::read32",
+      "<esp_soc::machine::modeled::RecordingBus<esp32c6::bus::SocBus> as emu_core::bus::Bus>::read8",
+      "<esp_soc::machine::modeled::RecordingBus<esp32s3::bus::SocBus> as emu_core::bus::Bus>::read32",
+      "<esp_soc::machine::modeled::RecordingBus<esp32s3::bus::SocBus> as emu_core::bus::Bus>::read8"
+    ],
+    "classic_tick": {
+      "instructions": 1770,
+      "prologue": [
+        "sub\tsp, sp, #0x1e0",
+        "stp\td9, d8, [sp, #0x170]",
+        "stp\tx28, x27, [sp, #0x180]",
+        "stp\tx26, x25, [sp, #0x190]",
+        "stp\tx24, x23, [sp, #0x1a0]",
+        "stp\tx22, x21, [sp, #0x1b0]",
+        "stp\tx20, x19, [sp, #0x1c0]",
+        "stp\tx29, x30, [sp, #0x1d0]",
+        "add\tx29, sp, #0x1d0"
+      ]
+    },
+    "changed": [
+      {
+        "name": "<esp32::bus::SocBus>::store",
+        "base_instructions": 3166,
+        "head_instructions": 2943
+      },
+      {
+        "name": "<esp32::periph::Peripherals>::new",
+        "base_instructions": 1882,
+        "head_instructions": 1882
+      },
+      {
+        "name": "<esp32s3::board::atech14::Atech14>::new",
+        "base_instructions": 115,
+        "head_instructions": 115
+      }
+    ]
+  },
+  {
+    "binary": "esp32sim-c6",
+    "common": 2199,
+    "identical": 2196,
+    "identical_after_zero_pageoff_normalization": 2198,
+    "relocation_only_functions": [
+      "<esp32::periph::Peripherals>::new",
+      "<esp32s3::board::atech14::Atech14>::new"
+    ],
+    "hot_functions_identical": [
+      "<esp32::bus::SocBus as emu_core::bus::Bus>::read32",
+      "<esp32::bus::SocBus as emu_core::bus::Bus>::read8",
+      "<esp32::bus::SocBus as emu_core::bus::Bus>::tick",
+      "<esp32::periph::Peripherals>::read32",
+      "<esp32c3::bus::SocBus as emu_core::bus::Bus>::read32",
+      "<esp32c3::bus::SocBus as emu_core::bus::Bus>::read8",
+      "<esp32c3::bus::SocBus as emu_core::bus::Bus>::tick",
+      "<esp32c3::bus::SocBus as esp_soc::soc::SocBus>::refresh_irq",
+      "<esp32c3::periph::Peripherals>::read32",
+      "<esp32c3::periph::Peripherals>::refresh_pin_lines",
+      "<esp32c6::bus::SocBus as emu_core::bus::Bus>::read32",
+      "<esp32c6::bus::SocBus as emu_core::bus::Bus>::read8",
+      "<esp32c6::bus::SocBus as emu_core::bus::Bus>::tick",
+      "<esp32c6::bus::SocBus as esp_soc::soc::SocBus>::refresh_irq",
+      "<esp32c6::periph::Peripherals>::read32",
+      "<esp32s3::bus::SocBus as emu_core::bus::Bus>::read32",
+      "<esp32s3::bus::SocBus as emu_core::bus::Bus>::tick",
+      "<esp32s3::bus::SocBus as esp_soc::soc::SocBus>::refresh_irq",
+      "<esp32s3::bus::SocBus>::read32_access::<false>",
+      "<esp32s3::bus::SocBus>::read8_access::<false>",
+      "<esp32s3::bus::SocBus>::read8_access::<true>",
+      "<esp_soc::machine::modeled::RecordingBus<esp32::bus::SocBus> as emu_core::bus::Bus>::read32",
+      "<esp_soc::machine::modeled::RecordingBus<esp32::bus::SocBus> as emu_core::bus::Bus>::read8",
+      "<esp_soc::machine::modeled::RecordingBus<esp32c3::bus::SocBus> as emu_core::bus::Bus>::read32",
+      "<esp_soc::machine::modeled::RecordingBus<esp32c3::bus::SocBus> as emu_core::bus::Bus>::read8",
+      "<esp_soc::machine::modeled::RecordingBus<esp32c6::bus::SocBus> as emu_core::bus::Bus>::read32",
+      "<esp_soc::machine::modeled::RecordingBus<esp32c6::bus::SocBus> as emu_core::bus::Bus>::read8",
+      "<esp_soc::machine::modeled::RecordingBus<esp32s3::bus::SocBus> as emu_core::bus::Bus>::read32",
+      "<esp_soc::machine::modeled::RecordingBus<esp32s3::bus::SocBus> as emu_core::bus::Bus>::read8"
+    ],
+    "classic_tick": {
+      "instructions": 1770,
+      "prologue": [
+        "sub\tsp, sp, #0x1e0",
+        "stp\td9, d8, [sp, #0x170]",
+        "stp\tx28, x27, [sp, #0x180]",
+        "stp\tx26, x25, [sp, #0x190]",
+        "stp\tx24, x23, [sp, #0x1a0]",
+        "stp\tx22, x21, [sp, #0x1b0]",
+        "stp\tx20, x19, [sp, #0x1c0]",
+        "stp\tx29, x30, [sp, #0x1d0]",
+        "add\tx29, sp, #0x1d0"
+      ]
+    },
+    "changed": [
+      {
+        "name": "<esp32::bus::SocBus>::store",
+        "base_instructions": 3166,
+        "head_instructions": 2943
+      },
+      {
+        "name": "<esp32::periph::Peripherals>::new",
+        "base_instructions": 1882,
+        "head_instructions": 1882
+      },
+      {
+        "name": "<esp32s3::board::atech14::Atech14>::new",
+        "base_instructions": 115,
+        "head_instructions": 115
+      }
+    ]
+  }
+]
