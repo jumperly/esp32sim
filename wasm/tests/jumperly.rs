@@ -1,6 +1,7 @@
 //! Jumperly ABI (patches J1–J4) on real Arduino firmware: pin states with cycles, the slice yield,
-//! GPIO input, raw UART, RMT frames, PWM outputs. Firmware: `emulator/fixtures/bin`; ROM: `emulator/rom`
-//! (the classic ESP32's `esp32_rev300_rom.elf` from `ESP32SIM_ROM_DIR` when that has it).
+//! GPIO input, raw UART, RMT frames, PWM outputs. Firmware: `emulator/fixtures/bin`, or `bin/` of
+//! `JUMPERLY_FIXTURES_DIR` (a checkout of jumperly/fixtures, as in CI); ROMs: `ESP32SIM_ROM_DIR` when
+//! it has the file, else `emulator/rom`.
 use esp32sim_wasm::*;
 use std::path::PathBuf;
 
@@ -10,14 +11,29 @@ const ENABLE: u32 = 2;
 const PULL_UP: u32 = 4;
 
 fn emulator_dir() -> PathBuf { PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..") }
-fn read(rel: &str) -> Vec<u8> { std::fs::read(emulator_dir().join(rel)).unwrap_or_else(|e| panic!("{rel}: {e}")) }
+/// `fixtures/…` and `rom/…` as the monorepo's `emulator/` lays them out, or from the directories
+/// the environment names (the fork's CI has no monorepo around it).
+fn path(rel: &str) -> PathBuf {
+    if let (Some(rest), Some(dir)) = (rel.strip_prefix("fixtures/"), std::env::var_os("JUMPERLY_FIXTURES_DIR")) {
+        return PathBuf::from(dir).join(rest);
+    }
+    if let (Some(name), Some(dir)) = (rel.strip_prefix("rom/"), std::env::var_os("ESP32SIM_ROM_DIR")) {
+        let rom = PathBuf::from(dir).join(name);
+        if rom.exists() { return rom; }
+    }
+    emulator_dir().join(rel)
+}
+fn read(rel: &str) -> Vec<u8> {
+    let path = path(rel);
+    std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+}
 /// Pin events, RMT frames and UART text of a C3 run (`Emu::run_c3`).
 type C3Run = (Vec<(u64, u8, u32)>, Vec<(u64, u32, Vec<bool>)>, String);
 /// A merged image of `flash_mb`; a sketch built with FQBN options may have its own bootloader and
 /// partition table (`fixtures/bin/<app>.bootloader.bin`, emulator/fixtures/build.sh).
 fn merged_sized(app: &str, flash_mb: usize) -> Vec<u8> {
     let mut flash = vec![0xffu8; flash_mb << 20];
-    let own = |f: &str| if emulator_dir().join(format!("fixtures/bin/{app}.{f}")).exists() { format!("fixtures/bin/{app}.{f}") } else { format!("fixtures/bin/{f}") };
+    let own = |f: &str| if path(&format!("fixtures/bin/{app}.{f}")).exists() { format!("fixtures/bin/{app}.{f}") } else { format!("fixtures/bin/{f}") };
     for (off, file) in [(0x0, own("bootloader.bin")), (0x8000, own("partitions.bin")), (0x10000, format!("fixtures/bin/{app}.bin"))] {
         let d = read(&file);
         flash[off..off + d.len()].copy_from_slice(&d);
@@ -1382,14 +1398,8 @@ const ESP32_MHZ: u64 = 240;
 const ESP32_RMT_SIGNAL: u32 = 87;
 const ESP32_LEDC_SIGNALS: std::ops::RangeInclusive<u32> = 71..=86;
 
-/// The classic's mask ROM (ECO3): from `ESP32SIM_ROM_DIR` when it has it, else `emulator/rom`.
-fn classic_rom() -> Vec<u8> {
-    if let Some(dir) = std::env::var_os("ESP32SIM_ROM_DIR") {
-        let path = PathBuf::from(dir).join("esp32_rev300_rom.elf");
-        if path.exists() { return std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display())); }
-    }
-    read("rom/esp32_rev300_rom.elf")
-}
+/// The classic's mask ROM (ECO3).
+fn classic_rom() -> Vec<u8> { read("rom/esp32_rev300_rom.elf") }
 
 /// The classic fixture as a whole-flash image of the NodeMCU-32S's 4 MB: the bootloader at 0x1000
 /// (not 0x0 as on the S3/C3), the partition table at 0x8000, the app at 0x10000.

@@ -17,6 +17,8 @@
 
 Base of `jumperly` at the split: upstream `9890ac55` (2026-10-15, "Merge pull request #234"). Rust 1.99.0 (`cargo +1.99.0`), ROMs from `tools/fetch-rom-elfs.sh roms` (`ESP32SIM_ROM_DIR=roms`).
 
+The fork's ABI tests (`wasm/tests/jumperly.rs`) boot the Arduino sketches of the private `jumperly/fixtures`: from the monorepo's `emulator/fixtures` (the submodule checkout), or from `bin/` under `JUMPERLY_FIXTURES_DIR`; ROMs from `ESP32SIM_ROM_DIR` when it has the file, else `emulator/rom`. The fork's CI checks the fixtures out with a read-only deploy key of `jumperly/fixtures`, kept in this repository's `FIXTURES_DEPLOY_KEY` secret.
+
 ## Patch branches
 
 | Branch | Patch | Upstream PR | Fork PR | Receipt |
