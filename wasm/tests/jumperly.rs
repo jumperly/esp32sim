@@ -198,7 +198,7 @@ fn rgb_led_write_produces_an_rmt_frame_on_gpio48() {
 }
 
 #[test]
-fn jumperly_mode_is_s3_and_c3_only_and_before_boot() {
+fn jumperly_mode_is_refused_on_the_c6() {
     let board = "esp32c6";
     let e = unsafe { esp32sim_new(board.as_ptr(), board.len(), 4, 0) };
     assert!(!e.is_null());
@@ -1105,7 +1105,7 @@ fn i2s_mic_without_the_host_reads_silence_at_16_khz() {
 }
 
 #[test]
-fn i2s_host_is_s3_only_and_bad_ports_need_nothing() {
+fn i2s_host_is_refused_on_the_c3_and_bad_ports_need_nothing() {
     let mut e = Emu::boot("blink");
     assert_eq!(i2s_need(&mut e, 0, 1_000_000).0, 0, "the receiver is off");
     assert_eq!(i2s_need(&mut e, 2, 1_000_000).0, 0);
