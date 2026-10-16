@@ -198,7 +198,7 @@ fn rgb_led_write_produces_an_rmt_frame_on_gpio48() {
 }
 
 #[test]
-fn jumperly_mode_is_s3_and_c3_only_and_before_boot() {
+fn jumperly_mode_is_refused_on_the_c6() {
     let board = "esp32c6";
     let e = unsafe { esp32sim_new(board.as_ptr(), board.len(), 4, 0) };
     assert!(!e.is_null());
@@ -1105,7 +1105,7 @@ fn i2s_mic_without_the_host_reads_silence_at_16_khz() {
 }
 
 #[test]
-fn i2s_host_is_s3_only_and_bad_ports_need_nothing() {
+fn i2s_host_is_refused_on_the_c3_and_bad_ports_need_nothing() {
     let mut e = Emu::boot("blink");
     assert_eq!(i2s_need(&mut e, 0, 1_000_000).0, 0, "the receiver is off");
     assert_eq!(i2s_need(&mut e, 2, 1_000_000).0, 0);
@@ -1697,6 +1697,77 @@ fn esp32_io0_held_at_reset_puts_the_rom_into_download_mode() {
     }
     let (_, _, text) = e.run_esp32(600_000);
     assert!(text.contains("boot:0x13 (SPI_FAST_FLASH_BOOT)") && text.contains("rst=1 boot=1"), "{text}");
+}
+
+/// `esp32sim_gpio_set_input` level 2: the strapping pins float (nothing in the circuit drives
+/// them), so a host reset takes the chip's reset pulls — `boot:0x13` with the ROM log — and not a
+/// driven low; IO0 driven low gives download mode, floating again normal boot.
+#[test]
+fn esp32_floating_strapping_pins_take_the_reset_pulls_at_a_host_reset() {
+    let mut e = Emu::boot_esp32("esp32-strap");
+    let (_, _, text) = e.run_esp32(600_000);
+    assert!(text.contains("rst=1 boot=1"), "{text}");
+    let set = |e: &Emu, pin: u32, level: u32| unsafe { esp32sim_gpio_set_input(e.0, pin, level) };
+    let reset = |e: &Emu| assert_eq!(unsafe { esp32sim_reset(e.0) }, 0);
+    for pin in [0, 2, 4, 5, 12, 15] { assert_eq!(set(&e, pin, 2), 0); }
+    assert_eq!(set(&e, 0, 3), 1, "levels are 0, 1 and 2");
+    reset(&e);
+    let (_, _, text) = e.run_esp32(600_000);
+    assert!(text.contains("rst:0x1 (POWERON_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)"), "{text}");
+    assert!(text.contains("rst=1 boot="), "{text}");
+    assert_eq!(set(&e, 0, 0), 0);
+    reset(&e);
+    let text = e.run_esp32_until("waiting for download", 1_000_000);
+    assert!(text.contains("boot:0x3 (DOWNLOAD_BOOT(UART0/UART1/SDIO_REI_REO_V2))"), "{text}");
+    assert_eq!(set(&e, 0, 2), 0);                                           // let go of IO0: the pull again
+    reset(&e);
+    let (_, _, text) = e.run_esp32(600_000);
+    assert!(text.contains("boot:0x13 (SPI_FAST_FLASH_BOOT)") && text.contains("rst=1 boot="), "{text}");
+}
+
+/// The power-on strap comes from the circuit too: IO0 low after `esp32sim_boot` and before the
+/// first run latches download mode on the very first boot.
+#[test]
+fn esp32_io0_low_before_the_first_run_latches_download_mode() {
+    let mut e = Emu::boot_esp32("esp32-strap");
+    assert_eq!(unsafe { esp32sim_gpio_set_input(e.0, 0, 0) }, 0);
+    let mut text = e.run_esp32_until("waiting for download", 1_000_000);
+    text += &e.run_esp32(300_000).2;
+    assert!(text.contains("rst:0x1 (POWERON_RESET),boot:0x3 (DOWNLOAD_BOOT(UART0/UART1/SDIO_REI_REO_V2))"), "{text}");
+    assert!(text.contains("waiting for download") && !text.contains("boot="), "{text}");
+}
+
+/// The host's reset is EN (a power-on reset): the DAC powers down with the RTC domain and
+/// `esp32sim_dac_take` reports it off once.
+#[test]
+fn esp32_a_host_reset_turns_the_dac_off() {
+    let mut e = Emu::boot_esp32("esp32-dac");
+    let (mut seen, mut text) = (Vec::new(), String::new());
+    while !text.contains("dac=255") {
+        assert!(e.cycles() < 2_000_000 * ESP32_MHZ, "{text}");
+        text += &e.run_esp32(10_000).2;
+        seen.extend(dac_take(&mut e));
+    }
+    assert_eq!(seen.last(), Some(&(25, 3300)), "{text}");
+    assert_eq!(unsafe { esp32sim_reset(e.0) }, 0);
+    assert_eq!(dac_take(&mut e), [(25, u32::MAX)]);
+    assert!(dac_take(&mut e).is_empty(), "reported once");
+}
+
+/// `esp_deep_sleep_start()` is not modelled: the chip stops, and the host log gets one line.
+#[test]
+fn esp32_deep_sleep_logs_one_line() {
+    take_native_log();
+    let mut e = Emu::boot_esp32("esp32-sleep");
+    let mut text = e.run_esp32_until("wake=0", 1_000_000);
+    text += &e.run_esp32(500_000).2;
+    assert!(text.contains("wake=0") && !text.contains("wake=4"), "{text}");
+    let notes: Vec<String> = take_native_log().into_iter().filter(|l| l.contains("sleep")).collect();
+    assert_eq!(notes, ["[emu] deep sleep is not modelled: the chip stops here"]);
+    assert!(!notes[0].to_lowercase().contains("reset"), "the adapter would take it for a chip reset");
+    let mut strap = Emu::boot_esp32("esp32-strap");
+    strap.run_esp32(300_000);
+    assert!(!take_native_log().iter().any(|l| l.contains("sleep")), "no note without sleep");
 }
 
 #[test]

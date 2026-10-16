@@ -9,6 +9,9 @@ use esp_soc::SocBus;
 /// UART0..2; console port 3 (USB-Serial/JTAG on the S3 and C3) does not exist here.
 const UARTS: u32 = 3;
 const ALL_PINS: u64 = (1u64 << PINS) - 1;
+/// The host log line for a guest that starts deep sleep (no "reset" in it: the adapter takes a
+/// warning with that word for a chip reset).
+pub(crate) const DEEP_SLEEP_NOTE: &str = "[emu] deep sleep is not modelled: the chip stops here";
 
 impl JumperlyChip for ::esp32::Machine {
     fn pins(&self) -> u32 { PINS as u32 }
@@ -38,7 +41,14 @@ impl JumperlyChip for ::esp32::Machine {
         self.bus.pin_watch.as_mut().map(|w| std::mem::take(&mut w.events)).unwrap_or_default()
     }
 
-    fn gpio_set_input(&mut self, pin: u8, level: bool) { self.bus.gpio_set_input(pin, level); }
+    /// A floating pad leaves the driven pads, so the strap at a reset takes its reset pull; before
+    /// the first instruction an input also re-latches the power-on strap.
+    fn gpio_set_input(&mut self, pin: u8, level: Option<bool>) {
+        match level {
+            Some(level) => self.bus.gpio_set_input(pin, level),
+            None => self.bus.gpio_float_input(pin),
+        }
+    }
 
     /// The classic's GPIO_FUNCn_IN_SEL_CFG has the S3 layout (SIG_IN_SEL bit 7, the pad in bits
     /// 0..5); `input_pin` also finds a peripheral on its IO_MUX pad (VSPI MISO on GPIO19 when the
@@ -87,7 +97,17 @@ impl JumperlyChip for ::esp32::Machine {
         true
     }
 
-    fn reset(&mut self) { crate::machine::reboot(self); }
+    /// The host's reset is EN (CHIP_PU), a power-on reset: unlike a guest's software reset it also
+    /// clears the RTC domain, so the DACs power down (RTC_IO PAD_DAC1/2 XPD_DAC bit 18 and
+    /// DAC_XPD_FORCE bit 10, ESP-IDF v5.5.4 `rtc_io_reg.h:783,826`) and `take_dac` reports them
+    /// off. The other RTC registers keep the guest's values (the trait's reset keeps them).
+    fn reset(&mut self) {
+        crate::machine::reboot(self);
+        for reg in [0x3ff4_8484, 0x3ff4_8488] {
+            let v = self.bus.periph.read32(reg);
+            self.bus.periph.write32(reg, v & !((1 << 18) | (1 << 10)));
+        }
+    }
 
     /// Two I2C controllers, HSPI and VSPI. A transfer the host still has finishes with 0xFF.
     fn bus_host(&mut self, i2c: bool, spi: bool) {
@@ -145,6 +165,11 @@ impl JumperlyChip for ::esp32::Machine {
     /// Touch pads T0..T9: GPIO4, 0, 2, 15, 13, 12, 14, 27, 33, 32.
     fn touch_set(&mut self, gpio: u32, touched: bool) -> bool {
         gpio < PINS as u32 && self.bus.periph.adc.set_touch_input(gpio as u8, touched)
+    }
+
+    /// Deep sleep is not modelled: once per boot, a line when the guest starts it.
+    fn take_notes(&mut self) -> Vec<&'static str> {
+        if self.bus.periph.take_deep_sleep() { vec![DEEP_SLEEP_NOTE] } else { Vec::new() }
     }
 }
 
@@ -217,6 +242,28 @@ mod tests {
         let s3 = unsafe { esp32sim_new(board.as_ptr(), board.len(), 4, 0) };
         assert_eq!(unsafe { (esp32sim_touch_set(s3, 4, 1), esp32sim_dac_take(s3)) }, (1, 0));
         unsafe { esp32sim_delete(s3) };
+    }
+
+    /// Jumperly patch J28: a guest's software reset (`esp_restart`) keeps the RTC domain and with it
+    /// the DAC; the host's reset (EN, a power-on reset) turns it off, reported once.
+    #[test]
+    fn the_host_reset_turns_the_dac_off_and_a_software_reset_does_not() {
+        use xtensa_lx7::bus::Bus;
+        let e = classic();
+        // SAFETY: the test owns the live emulator until it deletes it.
+        let emu = unsafe { &mut *e };
+        {
+            let crate::machine::MachineKind::Esp32(m) = &mut emu.m else { panic!("the classic") };
+            m.bus.write32(0x3ff4_8484, (255 << 19) | (1 << 18) | (1 << 10)).unwrap();   // DAC1 (GPIO25) on
+            assert_eq!(m.bus.periph.adc.take_dac_changes(), [(25, 3300)]);
+            crate::machine::reboot(m.as_mut());                                     // the guest's reset path
+            assert!(m.bus.periph.adc.take_dac_changes().is_empty(), "esp_restart keeps the DAC");
+        }
+        let c = emu.m.chip_mut().unwrap();
+        c.reset();
+        assert_eq!(c.take_dac(), [(25, u32::MAX)]);
+        assert!(c.take_dac().is_empty());
+        unsafe { esp32sim_delete(e) };
     }
 
     /// Jumperly patch J28: the classic's module has 4 MB of flash whatever the host asks for.

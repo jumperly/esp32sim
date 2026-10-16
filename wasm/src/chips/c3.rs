@@ -37,7 +37,7 @@ impl JumperlyChip for esp32c3::Machine {
         self.bus.pin_watch.as_mut().map(|w| std::mem::take(&mut w.events)).unwrap_or_default()
     }
 
-    fn gpio_set_input(&mut self, pin: u8, level: bool) { self.bus.gpio_set_input(pin, level); }
+    fn gpio_set_input(&mut self, pin: u8, level: Option<bool>) { self.bus.gpio_set_input(pin, level.unwrap_or(false)); }
 
     /// Jumperly patch J19: the C3 has SIG_IN_SEL at bit 6 and the pad in bits 0..4 (the S3: 7, 0..5).
     fn gpio_in_pin(&self, signal: u32) -> u32 {

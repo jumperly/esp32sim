@@ -89,7 +89,9 @@ pub unsafe extern "C" fn esp32sim_pin_events_take(e: *mut Emu) -> u32 {
     events.len() as u32
 }
 
-/// Set the level the circuit applies to `pin`'s input.
+/// Set the level the circuit applies to `pin`'s input: 0 low, 1 high, 2 floating (nothing drives
+/// the net; Jumperly patch J28). A floating pad reads low; on the classic ESP32 it is no driven pad,
+/// so the strap at a reset takes its reset pull. Returns 1 for another level, pin or chip.
 ///
 /// # Safety
 /// `e` must point to a live emulator to which the caller has exclusive access.
@@ -98,8 +100,9 @@ pub unsafe extern "C" fn esp32sim_gpio_set_input(e: *mut Emu, pin: u32, level: u
     // SAFETY: the caller provides exclusive access to a live emulator.
     let e = unsafe { &mut *e };
     let Some(c) = e.m.chip_mut() else { return 1 };
+    let level = match level { 0 => Some(false), 1 => Some(true), 2 => None, _ => return 1 };
     if pin >= c.pins() { return 1; }
-    c.gpio_set_input(pin as u8, level != 0);
+    c.gpio_set_input(pin as u8, level);
     0
 }
 

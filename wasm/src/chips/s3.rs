@@ -34,7 +34,7 @@ impl JumperlyChip for esp32s3::Machine {
         self.bus.pin_watch.as_mut().map(|w| std::mem::take(&mut w.events)).unwrap_or_default()
     }
 
-    fn gpio_set_input(&mut self, pin: u8, level: bool) { self.bus.gpio_set_input(pin, level); }
+    fn gpio_set_input(&mut self, pin: u8, level: Option<bool>) { self.bus.gpio_set_input(pin, level.unwrap_or(false)); }
 
     fn gpio_in_pin(&self, signal: u32) -> u32 {
         match self.bus.periph.gpio.func_in_sel.get(signal as usize).copied() { Some(sel) if sel & 0x80 != 0 => sel & 0x3f, _ => 255 }
