@@ -134,6 +134,24 @@ impl SocBus {
     }
     /// Jumperly patch J28: drop a transfer the host still has (the chip reset its controller).
     pub(crate) fn drop_spi_wait(&mut self) { self.spi_wait = None; }
+    /// Jumperly patch J28: nothing in the circuit drives `pin` (`ClassicGpio::float_input`).
+    pub fn gpio_float_input(&mut self, pin: u8) {
+        self.periph.gpio.float_input(pin);
+        self.irq_dirty = true;
+        if let Some(ev) = &mut self.gpio_events {
+            ev.push((self.cycles, pin, self.periph.gpio.gpio.input & (1 << pin) != 0));
+        }
+        self.sample_power_on_strap();
+    }
+    /// Jumperly patch J28: the power-on reset samples the strapping pins from the circuit too. Until
+    /// the first instruction runs (the ROM reads GPIO_STRAP_REG first thing) the host's inputs
+    /// re-latch the strap; afterwards only a chip reset does (`reboot`). Without a host circuit
+    /// (no pin watch) the strap stays the board's wiring.
+    pub(crate) fn sample_power_on_strap(&mut self) {
+        if self.cycles == 0 && self.pin_watch.is_some() {
+            self.periph.gpio.gpio.strap = self.periph.strap_from_pads();
+        }
+    }
     /// Jumperly patch J28: a GPIO or IO_MUX register changed — record pin states, end the slice.
     pub(crate) fn note_pin_write(&mut self) {
         if let Some(w) = &mut self.pin_watch {
@@ -1320,6 +1338,69 @@ mod tests {
         b.gpio_release_input(0);
         b.reboot([0; 6]);
         assert_eq!(b.periph.gpio.gpio.strap, 0x13);
+    }
+
+    /// Jumperly patch J28: a pad the circuit leaves floating reads low (or its own IO_MUX pull) but
+    /// is no driven pad: the strap takes its reset pull, and it stays floating across a reset.
+    #[test]
+    fn floating_pads_strap_with_their_reset_pulls_and_stay_floating() {
+        use esp_soc::SocBus as _;
+        let mut b = SocBus::new(4 << 20, [0; 6]);
+        b.pin_watch = Some(PinWatch::new(&b.periph, 1));
+        b.cycles = 1;                                                       // past the power-on strap
+        for pin in [0, 5, 15] { b.gpio_set_input(pin, false); }
+        assert_eq!(b.periph.strap_from_pads(), 0x00);
+        for pin in [0, 5, 15] { b.gpio_float_input(pin); }
+        assert_eq!(b.periph.strap_from_pads(), 0x13, "floating: the reset pulls");
+        assert_eq!(b.gpio_input() & (1 << 0 | 1 << 5 | 1 << 15), 0, "a floating pad reads low");
+        b.reboot([0; 6]);
+        assert_eq!(b.periph.gpio.gpio.strap, 0x13);
+        assert_eq!(b.gpio_input() & (1 << 0 | 1 << 5 | 1 << 15), 0, "still floating after the reset");
+        b.gpio_set_input(0, false);
+        b.reboot([0; 6]);
+        assert_eq!(b.periph.gpio.gpio.strap, 0x03, "driven again: IO0 low");
+        b.write32(0x3ff4_906c, 1 << 8).unwrap();                            // IO_MUX_GPIO5_REG FUN_WPU
+        b.gpio_float_input(5);
+        assert_ne!(b.gpio_input() & (1 << 5), 0, "a floating pad with its pull-up reads high");
+    }
+
+    /// Jumperly patch J28: before the first instruction the host's inputs latch the power-on strap
+    /// (with the pin watch only); afterwards only a chip reset samples it.
+    #[test]
+    fn the_power_on_strap_follows_the_inputs_until_the_first_cycle() {
+        use esp_soc::SocBus as _;
+        let mut b = SocBus::new(4 << 20, [0; 6]);
+        b.gpio_set_input(0, false);
+        assert_eq!(b.periph.gpio.gpio.strap, 0x13, "no host circuit: board wiring");
+        b.pin_watch = Some(PinWatch::new(&b.periph, 1));
+        b.gpio_set_input(0, false);
+        assert_eq!(b.periph.gpio.gpio.strap, 0x03, "IO0 low at power-on: download boot");
+        b.gpio_float_input(0);
+        assert_eq!(b.periph.gpio.gpio.strap, 0x13);
+        b.cycles = 1;
+        b.gpio_set_input(0, false);
+        assert_eq!(b.periph.gpio.gpio.strap, 0x13, "running: the latched strap stays");
+    }
+
+    /// Jumperly patch J28: the first step of deep sleep (RTC_MEM_CRC_START) or SLEEP_EN is noted
+    /// once per boot; nothing else changes.
+    #[test]
+    fn deep_sleep_is_noted_once_per_boot() {
+        use esp_soc::SocBus as _;
+        let mut b = SocBus::new(4 << 20, [0; 6]);
+        b.write32(0x3ff4_8100, 0).unwrap();
+        b.write32(0x3ff4_8018, 1 << 23).unwrap();
+        assert!(!b.periph.take_deep_sleep());
+        b.write32(0x3ff4_8100, 1 << 8).unwrap();                            // RTC_MEM_CRC_START
+        b.write32(0x3ff4_8018, 1 << 31).unwrap();                           // SLEEP_EN
+        assert!(b.periph.take_deep_sleep());
+        assert!(!b.periph.take_deep_sleep(), "once per boot");
+        b.write32(0x3ff4_8018, 1 << 31).unwrap();
+        assert!(!b.periph.take_deep_sleep());
+        b.reboot([0; 6]);
+        assert!(!b.periph.take_deep_sleep());
+        b.write32(0x3ff4_8018, 1 << 31).unwrap();
+        assert!(b.periph.take_deep_sleep(), "the next boot notes it again");
     }
 
     #[test]

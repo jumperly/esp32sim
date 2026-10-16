@@ -38,9 +38,17 @@ extern "C" { fn host_log(ptr: *const u8, len: usize); }
 #[cfg(not(target_arch = "wasm32"))]
 unsafe fn host_log(ptr: *const u8, len: usize) {
     // SAFETY: The caller provides a readable string pointer for exactly `len` bytes.
-    let message = unsafe { std::slice::from_raw_parts(ptr, len) };
-    eprintln!("{}", String::from_utf8_lossy(message));
+    let message = String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(ptr, len) }).into_owned();
+    eprintln!("{message}");
+    NATIVE_LOG.with(|l| l.borrow_mut().push(message));
 }
+#[cfg(not(target_arch = "wasm32"))]
+thread_local! {
+    static NATIVE_LOG: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+/// Native builds (tests): the host log lines this thread's emulators wrote since the last call.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn take_native_log() -> Vec<String> { NATIVE_LOG.with(|l| std::mem::take(&mut *l.borrow_mut())) }
 
 fn log(s: &str) {
     // SAFETY: `s` is readable for its length and the host does not retain the pointer.
@@ -313,7 +321,9 @@ pub unsafe extern "C" fn esp32sim_run(e: *mut Emu, cycles: u32, unix_ms: f64) ->
     if !e.booted { return 9; }
     #[cfg(target_arch = "wasm32")] esp_soc::host::set_unix_time_ms(unix_ms as u64);
     let _ = unix_ms;
-    e.m.run_slice(cycles)
+    let stop = e.m.run_slice(cycles);
+    if let Some(c) = e.m.chip_mut() { for note in c.take_notes() { log(note); } }   // Jumperly patch J28
+    stop
 }
 
 /// The emulated CPU clock, so the driver paces the right chip: 240 MHz on the S3, 160 on the C3.

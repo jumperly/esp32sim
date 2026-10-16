@@ -26,8 +26,10 @@ pub(crate) trait JumperlyChip {
     fn pin_state(&self, pin: u32) -> u32;
     /// The pin changes since the last call (cycle, pin, state); empty outside Jumperly mode.
     fn take_pin_events(&mut self) -> Vec<(u64, u8, u32)>;
-    /// The level the circuit applies to `pin`'s input (`pin` < `pins()`).
-    fn gpio_set_input(&mut self, pin: u8, level: bool);
+    /// The level the circuit applies to `pin`'s input (`pin` < `pins()`); None when nothing drives
+    /// the net (floating): the pad reads low as before, and on the classic it is no driven pad for
+    /// the strap at a reset.
+    fn gpio_set_input(&mut self, pin: u8, level: Option<bool>);
     /// The pin matrix input `signal` reads, 255 if none.
     fn gpio_in_pin(&self, signal: u32) -> u32;
     /// UART `port`'s pads (tx, rx).
@@ -72,6 +74,8 @@ pub(crate) trait JumperlyChip {
     fn take_dac(&mut self) -> Vec<(u8, u32)> { Vec::new() }
     /// Whether the finger is on touch pad `gpio`; false for another pin or a chip without touch pads.
     fn touch_set(&mut self, gpio: u32, touched: bool) -> bool { let _ = (gpio, touched); false }
+    /// The `[emu]` lines the chip has for the host log since the last call (after each slice).
+    fn take_notes(&mut self) -> Vec<&'static str> { Vec::new() }
 }
 
 /// The station's MAC in efuse BLK1 words 0 and 1, as `Efuse::new` lays them out; the rest of

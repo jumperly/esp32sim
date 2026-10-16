@@ -180,6 +180,9 @@ pub struct ClassicGpio {
     /// (GPIO matrix) stored as function 1 and classic function 1 as 2, as on S3/C3/C6.
     route_mux: RegRam,
     external: u64,
+    /// Jumperly patch J28: the pads the host left floating (`float_input`); they read low and
+    /// keep doing so across a chip reset.
+    floating: u64,
     signal_out: [bool; 256],
     signal_oe: [bool; 256],
     rtc_pads: u64,
@@ -197,6 +200,7 @@ impl ClassicGpio {
             io_mux: RegRam::new(),
             route_mux: RegRam::new(),
             external: 0,
+            floating: 0,
             signal_out: [false; 256],
             signal_oe: [false; 256],
             rtc_pads: 0,
@@ -347,6 +351,7 @@ impl ClassicGpio {
             return false;
         }
         self.external |= 1 << pin;
+        self.floating &= !(1 << pin);
         let status = self.gpio.status;
         let irq = self.gpio.set_input(pin, level);
         let irq = if self.rtc_pads & (1 << pin) != 0 { self.gpio.status = status; false } else { irq };
@@ -356,22 +361,52 @@ impl ClassicGpio {
     pub fn release_input(&mut self, pin: u8) {
         if pin >= 40 { return; }
         self.external &= !(1 << pin);
+        self.floating &= !(1 << pin);
         self.gpio.set_input(pin, true);
         self.sync_pull(pin as usize);
         self.refresh_level_status();
     }
-    pub fn restore_inputs(&mut self, old: &Self) {
-        for pin in 0..40 { if old.external & (1 << pin) != 0 { self.set_input(pin, old.gpio.input & (1 << pin) != 0); } }
+    /// Jumperly patch J28: nothing in the circuit drives `pin` (a floating net). It reads low as
+    /// the host's level for a floating net always did (or the pad's own pull, as for any pad the
+    /// circuit leaves alone), but it is no longer a driven pad: the strap at a reset takes the
+    /// pad's reset pull (`Peripherals::strap_from_pads`).
+    pub fn float_input(&mut self, pin: u8) -> bool {
+        if pin >= 40 {
+            return false;
+        }
+        let irq = self.set_input(pin, self.own_pull(pin as usize).unwrap_or(false));
+        self.external &= !(1 << pin);
+        self.floating |= 1 << pin;
+        irq
     }
-    fn sync_pull(&mut self, pin: usize) {
-        if pin >= 34 || (self.external | self.rtc_pads) & (1 << pin) != 0 {
-            return;
+    /// The circuit's levels survive a chip reset: driven pads keep their level, floating pads stay
+    /// floating (Jumperly patch J28).
+    pub fn restore_inputs(&mut self, old: &Self) {
+        for pin in 0..40 {
+            if old.external & (1 << pin) != 0 { self.set_input(pin, old.gpio.input & (1 << pin) != 0); }
+            else if old.floating & (1 << pin) != 0 { self.float_input(pin); }
+        }
+    }
+    /// The level the IO_MUX pull of a digital pad gives it (FUN_WPU bit 8, FUN_WPD bit 7).
+    fn own_pull(&self, pin: usize) -> Option<bool> {
+        if pin >= 34 || self.rtc_pads & (1 << pin) != 0 {
+            return None;
         }
         let cfg = self.mux(pin);
         if cfg & (1 << 8) != 0 {
-            self.gpio.set_input(pin as u8, true);
+            Some(true)
         } else if cfg & (1 << 7) != 0 {
-            self.gpio.set_input(pin as u8, false);
+            Some(false)
+        } else {
+            None
+        }
+    }
+    fn sync_pull(&mut self, pin: usize) {
+        if self.external & (1 << pin) != 0 {
+            return;
+        }
+        if let Some(level) = self.own_pull(pin) {
+            self.gpio.set_input(pin as u8, level);
         }
     }
     pub fn input_pin(&self, signal: usize) -> Option<u8> {
@@ -675,6 +710,9 @@ pub struct Peripherals {
     pub i2s: [crate::i2s::ClassicI2s; 2],
     /// Jumperly patch J28: the SDIO slave DMA block the ROM touches in download mode.
     pub slc: ClassicSlc,
+    /// Jumperly patch J28: the guest started deep sleep in this boot (`take_deep_sleep`).
+    deep_sleep: bool,
+    deep_sleep_told: bool,
 }
 
 device_set! { Peripherals; clock: (clock) CPU_HZ, [(ClockDomain::RtcSlow, 1600)];
@@ -764,6 +802,8 @@ impl Peripherals {
             adc: ClassicAdc::new(),
             i2s: Default::default(),
             slc: ClassicSlc::default(),
+            deep_sleep: false,
+            deep_sleep_told: false,
         };
         for uart in &mut p.uart { uart.write(0x20, 1 << 27); }
         p.sync_crypto();
@@ -807,6 +847,14 @@ impl Peripherals {
     }
     /// SENS and RTC_IO sit in the RTC domain: like RTC_CNTL's register RAM they keep their
     /// values, including touch-timer and DAC power state, across a guest reboot.
+    /// Jumperly patch J28: true once per boot after the guest started deep sleep (RTC_CNTL_STATE0
+    /// SLEEP_EN, or RTC_MEM_CONF RTC_MEM_CRC_START, its first step): sleep is not modelled, the
+    /// chip stops there.
+    pub fn take_deep_sleep(&mut self) -> bool {
+        let new = self.deep_sleep && !self.deep_sleep_told;
+        self.deep_sleep_told |= new;
+        new
+    }
     pub(crate) fn restore_rtc_analog(&mut self, adc: ClassicAdc) {
         self.adc = adc;
         self.gpio.rtc_pads = self.adc.rtc_pad_mask();
@@ -820,9 +868,10 @@ impl Peripherals {
     /// |-----|--------|-------|-------|-------|--------|-------|
     /// | pad | GPIO12 | GPIO0 | GPIO2 | GPIO4 | GPIO15 | GPIO5 |
     ///
-    /// A pad the circuit drives (`ClassicGpio::set_input`) gives its level; a free pad its reset
-    /// pull (ESP32 datasheet, strapping pins: GPIO0/5/15 up, GPIO2/4/12 down), so an empty circuit
-    /// yields 0x13 — the ROM's `boot:0x13 (SPI_FAST_FLASH_BOOT)` — and IO0 held low 0x03.
+    /// A pad the circuit drives (`ClassicGpio::set_input`) gives its level; a free pad — never set,
+    /// released or floating (`float_input`) — its reset pull (ESP32 datasheet, strapping pins:
+    /// GPIO0/5/15 up, GPIO2/4/12 down), so an empty circuit yields 0x13 — the ROM's
+    /// `boot:0x13 (SPI_FAST_FLASH_BOOT)` — and IO0 held low 0x03.
     pub fn strap_from_pads(&self) -> u32 {
         const PADS: [(u8, bool); 6] = [(5, true), (15, true), (4, false), (2, false), (0, true), (12, false)];
         let g = &self.gpio;
@@ -860,8 +909,16 @@ impl Peripherals {
                 return;
             }
             // IDF v5.5.4 register/soc/rtc_cntl_reg.h:246,277-279: RTC_CNTL_STATE0_REG bit 23 is
-            // RTC_CNTL_TOUCH_SLP_TIMER_EN.
-            0x3ff4_8018 => self.adc.touch_timer = v & (1 << 23) != 0,
+            // RTC_CNTL_TOUCH_SLP_TIMER_EN; :249 bit 31 RTC_CNTL_SLEEP_EN.
+            0x3ff4_8018 => {
+                self.adc.touch_timer = v & (1 << 23) != 0;
+                if v & (1 << 31) != 0 { self.deep_sleep = true; }   // Jumperly patch J28
+            }
+            // Jumperly patch J28: rtc_cntl_reg.h:2017,2030 RTC_MEM_CONF (+0x100) bit 8
+            // RTC_MEM_CRC_START. `esp_deep_sleep_start` has the ROM checksum the RTC fast memory
+            // before SLEEP_EN (`set_rtc_memory_crc`); the model never finishes it, so the guest
+            // stops there.
+            0x3ff4_8100 if v & (1 << 8) != 0 => self.deep_sleep = true,
             _ => {}
         }
         let i2c = match (addr - PERIPH_BASE) >> 12 {

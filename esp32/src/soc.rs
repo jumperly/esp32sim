@@ -129,7 +129,7 @@ impl esp_soc::SocBus for SocBus {
         self.periph.wifi.log = old.wifi.log;
         self.periph.misc.log_unknown = old.misc.log_unknown;
         // Jumperly patch J28: with a host circuit the strapping pins are sampled at every chip reset
-        // (the first power-on keeps 0x13: the host sets its inputs only once the boot has started).
+        // (the power-on reset: `SocBus::sample_power_on_strap`).
         self.periph.gpio.gpio.strap = if self.pin_watch.is_some() { self.periph.strap_from_pads() } else { old.gpio.gpio.strap };
         self.periph.rtc.0.ram = old.rtc.0.ram;
         self.periph.rtc.0.slow_ticks = old.rtc.0.slow_ticks;
@@ -189,6 +189,7 @@ impl esp_soc::SocBus for SocBus {
         if let Some(ev) = &mut self.gpio_events {
             ev.push((self.cycles, pin, level));
         }
+        self.sample_power_on_strap();   // Jumperly patch J28
     }
     fn gpio_input(&self) -> u64 {
         self.periph.gpio.gpio.input

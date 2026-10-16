@@ -535,17 +535,27 @@ high-speed group 71..78; ESP32Servo and `tone()` use LEDC on this chip), the lin
 (GPIO32..39) and ADC2 (GPIO0, 2, 4, 12..15, 25..27; the Arduino core itself returns 0 for ADC2
 while Wi-Fi runs), the I2C bridge on both controllers, the SPI bridge on HSPI (host 2) and VSPI
 (host 3, Arduino's default `SPI`), the I2S host on ports 0 and 1, BLE, Wi-Fi, the LAN and
-`esp32sim_reset`. A chip reset takes the strapping byte from the circuit: a pad the host drives
-(`esp32sim_gpio_set_input`) gives its level, a free one its reset pull (GPIO0, 5, 15 up; 2, 4, 12
-down), so an empty circuit boots `boot:0x13 (SPI_FAST_FLASH_BOOT)` and IO0 held low at the reset
+`esp32sim_reset`. Every reset takes the strapping byte from the circuit: a pad the host drives
+(`esp32sim_gpio_set_input` level 0 or 1) gives its level, a free one — never set, or floating
+(level 2) — its reset pull (GPIO0, 5, 15 up; 2, 4, 12 down), so an empty circuit boots
+`boot:0x13 (SPI_FAST_FLASH_BOOT)` and IO0 held low at the reset
 `boot:0x3 (DOWNLOAD_BOOT(UART0/UART1/SDIO_REI_REO_V2))`, where the ROM prints `waiting for
 download` and waits (the SDIO slave DMA block reads its links parked, the rest of the SDIO slave
-is not modelled). The first power-on boot always uses 0x13: the host sets inputs only after
-`esp32sim_boot`, so download mode needs IO0 held, then `esp32sim_reset`.
+is not modelled). The power-on reset too: until the first instruction runs (after `esp32sim_boot`,
+before the first `esp32sim_run`), each `esp32sim_gpio_set_input` latches the strap again, so a host
+that hands the chip its circuit before the first slice boots IO0-low into download mode. The
+host's reset is the board's EN: the host lets go of the chip's pads first (their nets float unless
+the circuit drives them) and hands the chip the circuit's levels, so the strap never sees the
+chip's own last outputs (an LED on GPIO2 that was lit). As a power-on reset it also clears the
+RTC domain's DAC power (below); a guest's software reset (`esp_restart`) keeps the RTC domain.
 
 | Export | Contract |
 | --- | --- |
-| `esp32sim_dac_take(e)` | The DAC output changes since the last call: their count; per change `u32` GPIO (25 = DAC1, 26 = DAC2) and `u32` millivolts LE, `(code * 3300 + 127) / 255` (code 128 → 1656, 255 → 3300); `u32::MAX` once when an output turns off (`dacDisable`). A change written to PAD_DAC1/2 or SAR_DAC_CTRL2 ends the slice in Jumperly mode. 0 and an empty buffer for a chip without a DAC (S3, C3). |
+| `esp32sim_gpio_set_input(e, pin, level)` | The level the circuit puts on `pin`: 0 low, 1 high, 2 floating (nothing drives the net). A floating pad reads low (or its own IO_MUX pull) as level 0 did before, but on the classic it is no driven pad: the strap at a reset takes its reset pull. It stays floating across a chip reset. On the S3 and the C3, 2 is level 0. 1 for another level, a pin past the chip's or a chip without the ABI. |
+
+| Export | Contract |
+| --- | --- |
+| `esp32sim_dac_take(e)` | The DAC output changes since the last call: their count; per change `u32` GPIO (25 = DAC1, 26 = DAC2) and `u32` millivolts LE, `(code * 3300 + 127) / 255` (code 128 → 1656, 255 → 3300); `u32::MAX` once when an output turns off (`dacDisable`, or `esp32sim_reset`: the host's reset is a power-on reset and powers both DACs down; a guest's `esp_restart` keeps them). A change written to PAD_DAC1/2 or SAR_DAC_CTRL2 ends the slice in Jumperly mode. 0 and an empty buffer for a chip without a DAC (S3, C3). |
 | `esp32sim_touch_set(e, gpio, touched)` | A finger on touch pad `gpio` (`touched` nonzero) or not: T0..T9 = GPIO 4, 0, 2, 15, 13, 12, 14, 27, 33, 32; `touchRead` counts drop while it is touched. 0 ok; 1 for another pin or another chip (S3, C3, C6). Survives a chip reset (RTC domain); Jumperly mode is not needed. |
 
 Limits: the ROM is the ECO3 one (banner `ets Jul 29 2019 12:21:46`); a board with an older silicon
@@ -553,10 +563,15 @@ revision (v1.x prints `ets Jun  8 2016 00:22:57`) runs the same sketches, but it
 `esp_chip_info` revision differ from the emulator's. Download mode stops at `waiting for download`:
 the ROM's serial loader protocol (esptool's SYNC and the commands after it) is not exercised.
 Octal flash is refused (`esp32sim_flash_octal` → 1); MCPWM has no PWM tap on the classic.
+Deep sleep is not modelled: `esp_deep_sleep_start()` stops the chip (the ROM waits for the RTC
+memory checksum forever, so the guest never wakes), and the host log gets one line per boot,
+`[emu] deep sleep is not modelled: the chip stops here`, at the first write of RTC_MEM_CONF
+RTC_MEM_CRC_START (the sleep path's first step) or RTC_CNTL_STATE0 SLEEP_EN.
 
 `wasm/tests/jumperly.rs` (`esp32_*`) runs the `esp32-*` fixtures (`esp32:esp32:nodemcu-32s`, see
 `emulator/fixtures/README.md` of the Jumperly monorepo): blink on GPIO2, Serial2 on RX 16 / TX 17
 at 9600, `analogRead` on GPIO34 and GPIO4, LEDC and `tone()`, ESP32Servo at 50 Hz, a NeoPixel
 frame on GPIO4, the I2C scan and the VSPI transfer through the host bridges, the INMP441 sketch
 on a −26 dBFS host sine, the Wi-Fi scan and join, the BLE server through the virtual peer, the
-DAC, touch, the host reset and download mode with IO0 held.
+DAC, touch, the host reset and download mode with IO0 held, floating strapping pins at a host
+reset, IO0 low before the first run, the DAC off after a host reset and the deep-sleep line.
