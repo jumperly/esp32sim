@@ -15,6 +15,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # The fork's ABI tests (wasm/tests/jumperly.rs) boot Arduino sketches from jumperly/fixtures, a
+      # private repository: a read-only deploy key of it in the FIXTURES_DEPLOY_KEY secret.
+      - uses: actions/checkout@v4
+        with:
+          repository: jumperly/fixtures
+          ssh-key: ${{ secrets.FIXTURES_DEPLOY_KEY }}
+          path: jumperly-fixtures
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
@@ -52,7 +59,7 @@ jobs:
       - name: Clippy (WASM JIT and differential tests)
         run: cargo clippy --release --target wasm32-unknown-unknown -p esp32sim-wasm --features jit-tests -- -D warnings
       - name: Test (hermetic + golden outputs)
-        run: ESP32SIM_ROM_DIR=$PWD/roms cargo test --release --workspace -- --include-ignored --skip external_
+        run: ESP32SIM_ROM_DIR=$PWD/roms JUMPERLY_FIXTURES_DIR=$PWD/jumperly-fixtures cargo test --release --workspace -- --include-ignored --skip external_
       - name: Virtual-quantum scheduler (native opt-in)
         run: ESP32SIM_VQ_NATIVE=1 cargo test --release -p esp32s3 --test machine --test virtual_stops
       - name: Build the wasm module
