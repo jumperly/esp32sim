@@ -552,9 +552,6 @@ RTC domain's DAC power (below); a guest's software reset (`esp_restart`) keeps t
 | Export | Contract |
 | --- | --- |
 | `esp32sim_gpio_set_input(e, pin, level)` | The level the circuit puts on `pin`: 0 low, 1 high, 2 floating (nothing drives the net). A floating pad reads low (or its own IO_MUX pull) as level 0 did before, but on the classic it is no driven pad: the strap at a reset takes its reset pull. It stays floating across a chip reset. On the S3 and the C3, 2 is level 0. 1 for another level, a pin past the chip's or a chip without the ABI. |
-
-| Export | Contract |
-| --- | --- |
 | `esp32sim_dac_take(e)` | The DAC output changes since the last call: their count; per change `u32` GPIO (25 = DAC1, 26 = DAC2) and `u32` millivolts LE, `(code * 3300 + 127) / 255` (code 128 → 1656, 255 → 3300); `u32::MAX` once when an output turns off (`dacDisable`, or `esp32sim_reset`: the host's reset is a power-on reset and powers both DACs down; a guest's `esp_restart` keeps them). A change written to PAD_DAC1/2 or SAR_DAC_CTRL2 ends the slice in Jumperly mode. 0 and an empty buffer for a chip without a DAC (S3, C3). |
 | `esp32sim_touch_set(e, gpio, touched)` | A finger on touch pad `gpio` (`touched` nonzero) or not: T0..T9 = GPIO 4, 0, 2, 15, 13, 12, 14, 27, 33, 32; `touchRead` counts drop while it is touched. 0 ok; 1 for another pin or another chip (S3, C3, C6). Survives a chip reset (RTC domain); Jumperly mode is not needed. |
 
