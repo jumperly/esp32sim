@@ -124,8 +124,12 @@ impl I2c<$n> {
             // TRANS_START bit 5 (72-78), FSM_RST bit 10 (111-117).
             // Reset cancellation of a pending callback is inferred.
             0x04 => {
-                let reset = v & (1 << 10) != 0;
-                self.regs.write(off, v & !((1 << 5) | (1 << 10)));
+                // Classic IDF v5.5.4 components/soc/esp32/register/soc/i2c_reg.h:
+                // CTR has no FSM_RST field. Preserve unmodeled bit 10 in register RAM;
+                // this readback policy is inferred, not a silicon claim for a reserved bit.
+                let reset_mask = if $n == 16 { 0 } else { 1 << 10 };
+                let reset = v & reset_mask != 0;
+                self.regs.write(off, v & !((1 << 5) | reset_mask));
                 if reset { self.remaining = None; self.cur.clear(); self.expect_addr = false; self.nack = false; }
                 if v & (1 << 5) != 0 { self.run(); }
             }               // CTR.TRANS_START

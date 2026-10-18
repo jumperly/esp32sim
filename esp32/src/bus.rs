@@ -8,6 +8,17 @@ use xtensa_lx7::bus::{Bus, Fault};
 
 pub const DRAM_LOW: u32 = 0x3ffa_e000;
 pub const DRAM_HIGH: u32 = 0x4000_0000;
+/// Classic DMA engines use the DRAM data window, not CPU-visible memory aliases.
+/// ESP-IDF v5.5.4 components/soc/esp32/include/soc/soc.h:203-205 (SOC_DMA_LOW/HIGH);
+/// v4.4.8 same file:266-268. IRAM, RTC, ROM and external memory are excluded.
+/// Return backing offsets (the ROM-only integrity prefix is not DMA-capable).
+#[inline]
+pub(crate) fn dma_range(addr: u32, len: usize) -> Option<std::ops::Range<usize>> {
+    if !(DRAM_LOW..DRAM_HIGH).contains(&addr) { return None; }
+    let off = (addr - ROM_DRAM_LOW) as usize;
+    let end = off.checked_add(len)?;
+    (end <= (DRAM_HIGH - ROM_DRAM_LOW) as usize).then_some(off..end)
+}
 // The ECO3 ELF carries one reset-integrity payload 0x504 bytes below documented DRAM.
 pub(crate) const ROM_DRAM_LOW: u32 = 0x3ffa_dafc;
 pub const IRAM_LOW: u32 = 0x4008_0000;
@@ -299,19 +310,16 @@ impl SocBus {
         }
     }
     pub(crate) fn dma_read_word(&mut self, addr: u32) -> Option<u32> {
-        let mut bytes = [0; 4];
-        for (i, byte) in bytes.iter_mut().enumerate() {
-            let (mem, off, _) = self.memory(addr.wrapping_add(i as u32))?;
-            *byte = *mem.get(off)?;
-        }
-        Some(u32::from_le_bytes(bytes))
+        let range = dma_range(addr, 4)?;
+        Some(u32::from_le_bytes(self.dram.get(range)?.try_into().ok()?))
     }
     pub(crate) fn dma_write_word(&mut self, addr: u32, value: u32) -> bool {
-        value.to_le_bytes().into_iter().enumerate().all(|(i, byte)| self.dma_write_byte(addr.wrapping_add(i as u32), byte))
+        if dma_range(addr, 4).is_none() { return false; }
+        value.to_le_bytes().into_iter().enumerate().all(|(i, byte)| self.dma_write_byte(addr + i as u32, byte))
     }
     pub(crate) fn dma_write_byte(&mut self, addr: u32, value: u8) -> bool {
-        let Some((mem, off, true)) = self.memory(addr) else { return false };
-        let Some(dst) = mem.get_mut(off) else { return false };
+        let Some(range) = dma_range(addr, 1) else { return false; };
+        let Some(dst) = self.dram.get_mut(range.start) else { return false; };
         *dst = value;
         self.written(addr, 1);
         true
@@ -345,11 +353,12 @@ impl SocBus {
         let mut last = 0;
         self.walk_chain(desc, |bus, _, d| {
             if !d.owner_dma { return Err(DmaDescriptorFault::NotOwned { descriptor: d.addr }); }
-            for i in 0..(d.length as usize).min(wanted - data.len()) {
-                let addr = d.buf.wrapping_add(i as u32);
-                let byte = bus.memory(addr).and_then(|(mem, off, _)| mem.get(off).copied())
-                    .ok_or(DmaDescriptorFault::BufferRead { descriptor: d.addr, address: addr, fault: Fault::Unmapped })?;
-                data.push(byte);
+            let count = (d.length as usize).min(wanted - data.len());
+            if count != 0 {
+                let range = dma_range(d.buf, count).ok_or(DmaDescriptorFault::BufferRead {
+                    descriptor: d.addr, address: d.buf, fault: Fault::Prohibited,
+                })?;
+                data.extend_from_slice(&bus.dram[range]);
             }
             last = d.addr;
             Ok(data.len() < wanted)
@@ -364,11 +373,10 @@ impl SocBus {
             let fault = DmaDescriptorFault::Writeback { descriptor: d.addr, fault: Fault::Prohibited };
             if !d.owner_dma { return Err(DmaDescriptorFault::NotOwned { descriptor: d.addr }); }
             let count = (d.size as usize).min(data.len() - pos);
-            for i in 0..count {
-                let addr = d.buf.wrapping_add(i as u32);
-                let Some((mem, off, true)) = bus.memory(addr) else { return Err(fault); };
-                *mem.get_mut(off).ok_or(fault)? = data[pos + i];
-                bus.written(addr, 1);
+            if count != 0 {
+                let range = dma_range(d.buf, count).ok_or(fault)?;
+                bus.dram[range].copy_from_slice(&data[pos..pos + count]);
+                for i in 0..count { bus.written(d.buf + i as u32, 1); }
             }
             let updated = (control & !(0xfff << 12) & !(1 << 31)) | (count as u32) << 12;
             if !bus.dma_write_word(d.addr, updated) { return Err(fault); }
@@ -753,6 +761,82 @@ mod tests {
         assert_eq!(b.read32(SPI2 + 0x114), Ok(1 << 1));
         assert_eq!(b.periph.spi[0].transfers, 0);
         assert_eq!(b.read32(SPI2).unwrap() & (1 << 18), 0);
+    }
+
+    #[test]
+    fn classic_spi_dma_reach_descriptors_and_payloads() {
+        for address in [DRAM_LOW, DRAM_HIGH - 12, ROM_DRAM_LOW, DRAM_LOW - 12,
+            IRAM_LOW, IROM_MASK_LOW, DROM_MASK_LOW, RTC_FAST_D, RTC_SLOW] {
+            let allowed = address == DRAM_LOW || address == DRAM_HIGH - 12;
+            let mut b = SocBus::new(0, [0; 6]);
+            let descriptor = [0x01, 0x10, 0x00, 0xc0, 0x00, 0x10, 0xfb, 0x3f, 0, 0, 0, 0];
+            b.load_bytes(address, &descriptor).unwrap();
+            b.write8(0x3ffb_1000, 42).unwrap();
+            assert_eq!(b.read_dma_descriptor(address).is_ok(), allowed, "descriptor {address:#x}");
+            assert_eq!(b.dma_read_chain(address, 1).is_some(), allowed, "TX descriptor {address:#x}");
+            assert_eq!(b.dma_write_chain(address, &[42]).is_some(), allowed, "RX descriptor {address:#x}");
+        }
+        for address in [DRAM_LOW, DRAM_HIGH - 1, ROM_DRAM_LOW, DRAM_LOW - 1,
+            IRAM_LOW, IROM_MASK_LOW, DROM_MASK_LOW, RTC_FAST_D, RTC_SLOW] {
+            let allowed = address == DRAM_LOW || address == DRAM_HIGH - 1;
+            let mut b = SocBus::new(0, [0; 6]);
+            let desc = 0x3ffb_0000;
+            b.write32(desc, 0xc000_1001).unwrap();
+            b.write32(desc + 4, address).unwrap();
+            b.write32(desc + 8, 0).unwrap();
+            b.load_bytes(address, &[17]).unwrap();
+            assert_eq!(b.dma_read_chain(desc, 1).is_some(), allowed, "TX buffer {address:#x}");
+            assert_eq!(b.dma_write_chain(desc, &[42]).is_some(), allowed, "RX buffer {address:#x}");
+            assert_eq!(b.read8(address).unwrap(), if allowed {42} else {17});
+        }
+        let mut b = SocBus::new(0, [0; 6]);
+        b.write8(DRAM_HIGH - 1, 17).unwrap();
+        assert!(!b.dma_write_word(DRAM_HIGH - 1, 42), "reject entire crossing word");
+        assert_eq!(b.read8(DRAM_HIGH - 1), Ok(17));
+        assert!(b.dma_read_word(u32::MAX).is_none());
+    }
+
+    #[test]
+    fn classic_dma_reach_rejects_sram1_iram_alias() {
+        // ESP-IDF v5.5.4 soc/esp32/include/soc/soc.h:196-205:
+        // SRAM1's instruction window is CPU-accessible but outside SOC_DMA_LOW..SOC_DMA_HIGH.
+        let alias = 0x400a_0000;
+        let mut b = SocBus::new(0, [0; 6]);
+        b.load_bytes(alias, &[0x01, 0x10, 0x00, 0xc0, 0x00, 0x10, 0xfb, 0x3f, 0, 0, 0, 0]).unwrap();
+        assert_eq!(b.read32(alias), Ok(0xc000_1001));
+        assert!(dma_range(alias, 12).is_none());
+        assert!(b.read_dma_descriptor(alias).is_err());
+        assert!(b.dma_read_chain(alias, 1).is_none());
+        assert!(b.dma_write_chain(alias, &[42]).is_none());
+        assert!(b.dma_read_word(alias).is_none());
+        assert!(!b.dma_write_word(alias, 42));
+        let desc = DRAM_LOW;
+        b.write32(desc, 0xc000_1001).unwrap();
+        b.write32(desc + 4, alias).unwrap();
+        b.write32(desc + 8, 0).unwrap();
+        let dram = b.dram.clone();
+        let iram = b.iram.clone();
+        assert!(b.dma_read_chain(desc, 1).is_none());
+        assert!(b.dma_write_chain(desc, &[42]).is_none());
+        assert_eq!(b.dram, dram, "rejected DMA must not write back the descriptor");
+        assert_eq!(b.iram, iram, "CPU-accessible IRAM must remain untouched");
+    }
+
+    #[test]
+    fn classic_spi_dma_empty_nodes_do_not_access_a_buffer() {
+        let mut b = SocBus::new(0, [0; 6]);
+        let first = 0x3ffb_0000;
+        let second = first + 16;
+        b.write32(first, 1 << 31).unwrap();
+        b.write32(first + 4, 0).unwrap();
+        b.write32(first + 8, second).unwrap();
+        b.write32(second, 0xc000_1001).unwrap();
+        b.write32(second + 4, 0x3ffb_1000).unwrap();
+        b.write32(second + 8, 0).unwrap();
+        b.write8(0x3ffb_1000, 17).unwrap();
+        assert_eq!(b.dma_read_chain(first, 1), Some((vec![17], second)));
+        assert_eq!(b.dma_write_chain(first, &[42]), Some(second));
+        assert_eq!(b.read8(0x3ffb_1000), Ok(42));
     }
 
     #[test]

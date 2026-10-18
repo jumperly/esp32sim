@@ -60,7 +60,8 @@ JSON file; real boards have the partition erased and behave as before. Natively:
 uses and fails on a panic or a missing console line; CI runs it after the goldens.
 
 Every chip is in the one module: `esp32sim_new` takes a board name, and `esp32c3` or `esp32c6`
-builds the RISC-V machine instead of the Xtensa one. The C3 has no `WebServer` of its own — it is
+builds the RISC-V machine instead of the Xtensa one; `esp32` or a classic board name such as
+`ttgo-tdisplay` builds the classic ESP32. The C3 has no `WebServer` of its own — it is
 console-only — so the wasm layer turns its console into the same `{"t":"serial"}` messages the
 S3 sends, and `esp32sim_cpu_hz` tells the worker which clock to pace against (240 MHz vs 160).
 
@@ -89,6 +90,7 @@ the tab falls half a second behind. `Date.now()` is passed in for the emulated S
 | Atech 14-port synth | real time | ST7735 and WS2812 decoded, buttons/knob, scripted scenario |
 | ESP32-C3 hello_world | real time | the other chip: one RV32IMC core, console only — pick board `esp32c3` |
 | ESP32-C6 hello_world | real time | the newest chip: one RV32IMAC core, console only — pick board `esp32c6` |
+| LilyGO TTGO T-Display spot prices (MicroPython) | real time, ~3× under Node | the classic ESP32: stock MicroPython v1.29.0 booted by the ROM from the combined image, the app from a LittleFS image in the vfs partition, the ST7789 135×240 over VSPI; demo data, no Wi-Fi — board `ttgo-tdisplay` |
 | ESP32-C6 802.15.4 energy scanner | real time | the Waveshare ESP32-C6-LCD-1.47: LVGL spectrum on the ST7789 over SPI2+GDMA, WS2812, energy detect from the MAC model's moving 2.4 GHz picture; BOOT on the page — board `waveshare-c6-lcd147` |
 | ESP32-C6 Contiki-NG | real time | Contiki-NG as an unmodified IDF app: its own scheduler and 802.15.4 stack over the emulated MAC |
 | …two of them on one medium | real time | a manifest with a `nodes` array boots a network through `esp32sim_net_*` instead of `esp32sim_new`: several motes, one medium, no simulator behind them |

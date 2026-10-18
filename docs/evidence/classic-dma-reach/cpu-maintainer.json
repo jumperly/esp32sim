@@ -1,0 +1,23 @@
+{
+  "source": "https://github.com/mikroverk/esp32sim/pull/225#issuecomment-6177864995",
+  "measured_by": "joakimeriksson",
+  "date": "2026-10-14",
+  "main": "ab89dc543bd8aa23b2d39f2cc48348ea5a0793ea",
+  "pr_head": "afb8575434bd6b8c6266e06f59e1cc8b1031200a",
+  "method": "User CPU, Apple silicon, 1-minute load 5–7 throughout, 7 alternating pairs, identical instruction counts and console hashes in every pair.",
+  "classic_hello_30s": {
+    "main_median_seconds": 1.86,
+    "pr_median_seconds": 1.86,
+    "change_percent": 0.0,
+    "pr_slower_pairs": 3,
+    "pairs": 7
+  },
+  "combined_scratch_branch_all_eight_open_prs": [
+    {"workload": "classic hello", "change_percent": 0.6, "pr_slower_pairs": 3, "pairs": 7},
+    {"workload": "C3 hello", "change_percent": 0.0, "pr_slower_pairs": 3, "pairs": 7},
+    {"workload": "C6 hello", "change_percent": -0.6, "pr_slower_pairs": 2, "pairs": 7},
+    {"workload": "S3 hello", "change_percent": -1.1, "pr_slower_pairs": 3, "pairs": 7},
+    {"workload": "Pocket Tank", "change_percent": 0.2, "pr_slower_pairs": 3, "pairs": 7}
+  ],
+  "limits": "Transcribed from the maintainer comment; per-pair samples, warmup details and aggregate-branch SHA were not supplied. The combined result does not isolate this PR. Neither result measures the subsequent SPI slice change. No new local timing run is claimed."
+}

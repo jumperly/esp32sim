@@ -1,0 +1,212 @@
+{
+  "s3-hello": {
+    "args": [
+      "--chip",
+      "esp32s3",
+      "--board",
+      "none",
+      "--boot",
+      "rom",
+      "--rom",
+      "web/wasm/fw/esp32s3_rev0_rom.elf",
+      "--bootloader",
+      "web/wasm/fw/public/hello-bootloader.bin",
+      "--ptable",
+      "web/wasm/fw/public/hello-ptable.bin",
+      "--app",
+      "web/wasm/fw/public/hello_world.bin",
+      "--max-seconds",
+      "3",
+      "--no-dump"
+    ],
+    "results": {
+      "base": {
+        "instructions": [
+          2949934,
+          1345182
+        ],
+        "console_sha256": "e0c679a6f03962ed51c5a56dee87ad2000332e70bae84b89487557a7018b5ed4",
+        "events": "3255 exceptions, 602 interrupts",
+        "irq_report": [
+          "[irq] per core, cpu-int: count (peripheral sources mapped to it)",
+          "  core0 int1          4  sources [79]",
+          "  core0 int2        299  sources [57]",
+          "  core1 int1          1  sources [80]",
+          "  core1 int2        298  sources [58]"
+        ]
+      },
+      "candidate": {
+        "instructions": [
+          2949934,
+          1345182
+        ],
+        "console_sha256": "e0c679a6f03962ed51c5a56dee87ad2000332e70bae84b89487557a7018b5ed4",
+        "events": "3255 exceptions, 602 interrupts",
+        "irq_report": [
+          "[irq] per core, cpu-int: count (peripheral sources mapped to it)",
+          "  core0 int1          4  sources [79]",
+          "  core0 int2        299  sources [57]",
+          "  core1 int1          1  sources [80]",
+          "  core1 int2        298  sources [58]"
+        ]
+      }
+    }
+  },
+  "pocket-tank-startup": {
+    "args": [
+      "--chip",
+      "esp32s3",
+      "--board",
+      "waveshare-amoled18-v2",
+      "--boot",
+      "rom",
+      "--rom",
+      "web/wasm/fw/esp32s3_rev0_rom.elf",
+      "--bootloader",
+      "web/wasm/fw/public/pocket-tank-bootloader.bin",
+      "--ptable",
+      "web/wasm/fw/public/pocket-tank-ptable.bin",
+      "--app",
+      "web/wasm/fw/public/pocket-tank.bin",
+      "--max-seconds",
+      "3",
+      "--no-dump",
+      "--flash-mb",
+      "16",
+      "--psram-mb",
+      "8"
+    ],
+    "results": {
+      "base": {
+        "instructions": [
+          388739230,
+          4458656
+        ],
+        "console_sha256": "b1b769e8a71729192e46ca9ce1d5dd585ae380821530ad01728af23d13a98d4c",
+        "events": "107492 exceptions, 9637 interrupts",
+        "irq_report": [
+          "[irq] per core, cpu-int: count (peripheral sources mapped to it)",
+          "  core0 int2        694  sources [79]",
+          "  core0 int3       2907  sources [57]",
+          "  core0 int8        511  sources [42]",
+          "  core0 int9       2266  sources []",
+          "  core0 int13       162  sources [67]",
+          "  core1 int0        115  sources [80]",
+          "  core1 int1       2982  sources [58]"
+        ]
+      },
+      "candidate": {
+        "instructions": [
+          388739230,
+          4458656
+        ],
+        "console_sha256": "b1b769e8a71729192e46ca9ce1d5dd585ae380821530ad01728af23d13a98d4c",
+        "events": "107492 exceptions, 9637 interrupts",
+        "irq_report": [
+          "[irq] per core, cpu-int: count (peripheral sources mapped to it)",
+          "  core0 int2        694  sources [79]",
+          "  core0 int3       2907  sources [57]",
+          "  core0 int8        511  sources [42]",
+          "  core0 int9       2266  sources []",
+          "  core0 int13       162  sources [67]",
+          "  core1 int0        115  sources [80]",
+          "  core1 int1       2982  sources [58]"
+        ]
+      }
+    }
+  },
+  "c3-hello": {
+    "args": [
+      "--chip",
+      "esp32c3",
+      "--board",
+      "none",
+      "--boot",
+      "rom",
+      "--rom",
+      "web/wasm/fw/esp32c3_rev3_rom.elf",
+      "--bootloader",
+      "web/wasm/fw/public/c3-hello-bootloader.bin",
+      "--ptable",
+      "web/wasm/fw/public/c3-hello-ptable.bin",
+      "--app",
+      "web/wasm/fw/public/c3-hello_world.bin",
+      "--max-seconds",
+      "3",
+      "--no-dump"
+    ],
+    "results": {
+      "base": {
+        "instructions": [
+          480000000
+        ],
+        "console_sha256": "84b4657b179f90c89567746c4fb970b9eba4f2a4758c8e3d498d49952c00ca10",
+        "events": "0 exceptions, 302 interrupts",
+        "irq_report": [
+          "[irq] per core, cpu-int: count (peripheral sources mapped to it)",
+          "  core0 int3          4  sources [50]",
+          "  core0 int4        298  sources [37]"
+        ]
+      },
+      "candidate": {
+        "instructions": [
+          480000000
+        ],
+        "console_sha256": "84b4657b179f90c89567746c4fb970b9eba4f2a4758c8e3d498d49952c00ca10",
+        "events": "0 exceptions, 302 interrupts",
+        "irq_report": [
+          "[irq] per core, cpu-int: count (peripheral sources mapped to it)",
+          "  core0 int3          4  sources [50]",
+          "  core0 int4        298  sources [37]"
+        ]
+      }
+    }
+  },
+  "c6-hello": {
+    "args": [
+      "--chip",
+      "esp32c6",
+      "--board",
+      "none",
+      "--boot",
+      "rom",
+      "--rom",
+      "web/wasm/fw/esp32c6_rev0_rom.elf",
+      "--bootloader",
+      "web/wasm/fw/public/c6-hello-bootloader.bin",
+      "--ptable",
+      "web/wasm/fw/public/c6-hello-ptable.bin",
+      "--app",
+      "web/wasm/fw/public/c6-hello_world.bin",
+      "--max-seconds",
+      "3",
+      "--no-dump"
+    ],
+    "results": {
+      "base": {
+        "instructions": [
+          480000000
+        ],
+        "console_sha256": "2d02437d91f862de756bb8c254a7f2dc6aeee6cbff5eac8cb434795f2b7a29c9",
+        "events": "0 exceptions, 303 interrupts",
+        "irq_report": [
+          "[irq] per core, cpu-int: count (peripheral sources mapped to it)",
+          "  core0 int5          4  sources [22]",
+          "  core0 int8        299  sources [57]"
+        ]
+      },
+      "candidate": {
+        "instructions": [
+          480000000
+        ],
+        "console_sha256": "2d02437d91f862de756bb8c254a7f2dc6aeee6cbff5eac8cb434795f2b7a29c9",
+        "events": "0 exceptions, 303 interrupts",
+        "irq_report": [
+          "[irq] per core, cpu-int: count (peripheral sources mapped to it)",
+          "  core0 int5          4  sources [22]",
+          "  core0 int8        299  sources [57]"
+        ]
+      }
+    }
+  }
+}

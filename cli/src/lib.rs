@@ -332,7 +332,7 @@ fn setup_esp32(o: &Opts) -> esp32::Machine {
     m.bus.set_flash_size(o.flash_mb.unwrap_or(4) << 20);
     if !o.debug.is_empty() { let mut f = esp_soc::DebugFlags::from_env(); for d in &o.debug { f.parse(d); } m.set_debug(&f); }
     let board = if o.board == "atech14" { "none" } else { &o.board };
-    m.bus.board = esp32::board::make_board(board).unwrap_or_else(|| usage_error(&format!("unknown classic ESP32 board '{board}' (none, bare, esp32dev)")));
+    m.bus.board = esp32::board::make_board(board).unwrap_or_else(|| usage_error(&format!("unknown classic ESP32 board '{board}' (none, bare, esp32dev, ttgo-tdisplay)")));
     m.bus.attach_board_devices();
     if let Some(spec) = &o.wifi {
         let (cfg, nat) = wifi_config(spec, o.net == "nat" || o.net == "user", m.bus.debug.has("net"));

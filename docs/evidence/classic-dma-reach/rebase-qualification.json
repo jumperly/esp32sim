@@ -1,0 +1,89 @@
+{
+  "base": "860059022e0f9959c96f9726113efb7324cc6b17",
+  "qualified_source": "9cb20855c3a84b09d92e6cbed535cd823b977435",
+  "previous_base": "ab89dc543bd8aa23b2d39f2cc48348ea5a0793ea",
+  "previous_head": "09e392635e4b198118a86e34de16d21575f0a2f5",
+  "toolchain": "1.99.0-aarch64-apple-darwin",
+  "verify_rebase": [
+    "commits old=3 new=3 merges=0",
+    "range-diff non-identical: 2",
+    "PR diff (excl experiments.md) identical",
+    "dups=[] markers=0",
+    "main rows kept in order",
+    "PR rows: old=[] new=[]"
+  ],
+  "experiments_identical_to_main": true,
+  "source_restored_after_mutations": true,
+  "regressions": [
+    {
+      "command_log": "wifi-regressions.log",
+      "passed": 9,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "command_log": "reach-regressions.log",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "command_log": "mutation-control.log",
+      "passed": 13,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "file_sha256": {
+    "esp32/src/bus.rs": "b2526413cf66d410b5c7b4df14b36e84d2a5544912903a2f425331bbb2f2f9cc",
+    "esp32/src/i2s.rs": "a4d84f295b213fc15087333a1bbef0e0f438a4aa43789440ef8e363a9d6c0a09",
+    "esp32/src/wifi.rs": "c0a12551de076921eba09b3cfc9fb7c56a21635a34562181ed22e721f0ea46f6",
+    "docs/evidence/classic-dma-reach/checks.py": "f301dbc0a9e820e782ea821df3df94ecb745d9969742735aae52d7e5cad2d59f",
+    "docs/evidence/classic-dma-reach/mutate.py": "d6eefb1f941c6a6669766d675c8fdd265edacb740bb4ecb5180d7f2319eb899f",
+    "docs/evidence/classic-dma-reach/rebase-static.py": "93520c2de425a0bdc337ca9025014e9b058650753446261ed5840ada8a39e9ce",
+    "web/wasm/fw/esp32_rev300_rom.elf": "920b70635440517866aab2230964a570d2cf2b676658d93c52fbac108c1cca31",
+    "web/wasm/fw/public/classic-hello-bootloader.bin": "faa4ac0961a9ec6c02d865c874c82bfe0a01225491b89d54fe4b7393f712be2a",
+    "web/wasm/fw/public/classic-hello-ptable.bin": "7f00b6c042a89b15b0cac534f82ed988caf29278ff5700b0c511eb1b5bb7c820",
+    "web/wasm/fw/public/classic-hello_world.bin": "fa4307fe9545e6599155ac38ad61205946b3f56e92890ad10a69c1592e120cdd"
+  },
+  "log_sha256": {
+    "RX-payload-prefix-wifi.log": "b7640263116461004569f865584473166b33bddea38f6e24e8c3a9ad39be0603",
+    "TX-payload-prefix-wifi.log": "bd91213166364c386d65d58a5afe88694570f64b0aa850327cc54047d93bdfb2",
+    "allow-ROM-prefix-bus.log": "25381ff83c885fac0cd77fbaadad4844225e43054b6b1396a38a3c3732f92a8a",
+    "allow-ROM-prefix-i2s.log": "221a678223dba851a326832861392cb55615073f33b0a91338d2fdd8b77ff4ed",
+    "allow-ROM-prefix-wifi.log": "5d121a75ef8c0558909b1af98e33e60e06ecd040326dce49be5b00b3f8caa6c1",
+    "allow-SRAM1-IRAM-alias-bus.log": "918c6c6a0ea4aef64aa1d513dec3dbefe9e136374268e056b3f5e0b82a75103c",
+    "base-build.log": "98aeb212d431c151370240d33e0eb3b97c9a28923ecb7f275ef1019070e5f760",
+    "clippy-native.log": "c0a4f949261e3c58a5fbfd711d2e79cf2814a0f10601f87b53d366d9a08f6a1a",
+    "clippy-wasm.log": "0798f61212d486df24eefd1be919cafc9eb386ee6655adb8e493c24cbcd39734",
+    "fetch.log": "e4fc42ae8fa68bb0ac4ea6d7beb151612b56e4f9ad54424e7cae6c120b674330",
+    "head-build.log": "f371e796e5de1cabf4c1c329d78a87202276930d6ca5ab8d2a1ec261b9dbecd3",
+    "mutation-control.log": "65ab5ca94cd36efe2eae9afc3e1025513107e9c844bb0fe652382dcf6e19884a",
+    "omit-RX-buffer-reach-bus.log": "f7453a736481d136c198df23773f0d4bde76fd276ea13c37c4b323f0a0dc62db",
+    "omit-TX-buffer-reach-bus.log": "d844e985d346b950d1f1608af2316a2e9a71ea0974415f5b0fd9f792f72d19d2",
+    "omit-word-preflight-bus.log": "5c5c12cae514875b594bc60162725c2acbabed7a876d54cf7cc0f6ae6903b065",
+    "privacy.log": "cf15a877757d62a085e853eb5e36aa02fe8be6f32d5cdaf56b525dd02cb4b4a3",
+    "reach-regressions.log": "00acebf75c8a5b777b24babb766aaaa025b7fa4b1b7b6e8f5c2138de56235ef4",
+    "reject-empty-RX-buffer-bus.log": "73c09c62ff01aeee7b45dbf89a4f46f79bdba7cbde43fa4584a051d85456dd7b",
+    "reject-empty-TX-buffer-bus.log": "512b8f353c1b54876ff60e1cc2e10f746888ba55c3cb238c851ea0a98a4d0ccc",
+    "reject-first-valid-byte-bus.log": "4f58cc6220593816be7bef9d9f5ad4167415fe4f60002cc70bcbc110a76b5524",
+    "reject-first-valid-byte-i2s.log": "f6a945a2bde5e2498618d3c1a1f2df2e21fab2797342d92cf35a59794dd51dad",
+    "reject-first-valid-byte-wifi.log": "0223394a418b53c834dd3e61735a19043aa4f0c74fcd58694fd525d53c733e7c",
+    "static-rebase.log": "f91cbf866dc408e726ed7f664021c3869129a5ee998a133d33e8547be04a6542",
+    "test-plain-empty-home.log": "dcaace27d2d4fd9c6ef78c55d660fa97444a786901a7a1de809b9e3e754bea6e",
+    "test-rom-empty-home.log": "2c440f6aeb768d3c58b8163bd42ef332846537786bffbc260a9917764446e39d",
+    "verify-rebase.log": "6f0d1126127df38779cd00368654cc3c2c3aa05266daaf7aa0f6a3c8a911f237",
+    "wasm-build-test.log": "83962ac32c0615402e0d45e19e6839fcbdfef97c9a3f221855d163e07484ee5f",
+    "wifi-private-prefix-rule-wifi.log": "0c2e8c6f5b06a37b3261b4c202a18db8c81cb2fb10c02b48401726cb7a56c3c9",
+    "wifi-regressions.log": "78e7024a5e7c407622f92177b4b8275883960b493810963c7ca650107d409efa"
+  },
+  "artifact_sha256": {
+    "base/esp32sim": "13a147dd3cbd0dec6297394cee94ad5aee09caf40cc33d801554474006e70d66",
+    "base/esp32sim-c3": "532f7b62d9eabbda373ce5373cf55617d09b2105f6ba88e4f05ab44de1906509",
+    "base/esp32sim-c6": "f02b412697181d26839799224aa1287c120e3d907dfe91ed807bf315de902b12",
+    "head/esp32sim": "bc8ff170f0fb3c5be03bf2579d7e143026724e6d105f0ee1b1c5ce7fdf77cfa2",
+    "head/esp32sim-c3": "c20afbf86789cd5058cff9580a6d32ec71a5ffbd0b08c0f6ff710f3f2c6b706c",
+    "head/esp32sim-c6": "99679c4509c75f1aeba937808e9f5f39049514ac63057a36413ea293b1097f84"
+  },
+  "benchmarks_run": false
+}

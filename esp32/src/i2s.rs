@@ -7,7 +7,9 @@
 use esp_periph::{Device, RegRam, WriteEffect};
 use esp_periph::i2s::{I2s, PcmSources};
 use xtensa_lx7::bus::{Bus, Fault};
-use crate::bus::{SocBus, DRAM_HIGH, DRAM_LOW};
+use crate::bus::{SocBus, dma_range};
+#[cfg(test)]
+use crate::bus::{DRAM_HIGH, DRAM_LOW};
 use crate::periph::CPU_HZ;
 use crate::periph::ClassicGpio;
 
@@ -112,7 +114,7 @@ impl Device for ClassicI2s {
 struct DramDma<'a>(&'a mut SocBus);
 impl DramDma<'_> {
     fn reaches(addr: u32, len: u32) -> bool {
-        addr >= DRAM_LOW && addr.checked_add(len).is_some_and(|end| end <= DRAM_HIGH)
+        dma_range(addr, len as usize).is_some()
     }
 }
 impl Bus for DramDma<'_> {
@@ -186,6 +188,18 @@ mod tests {
             assert_eq!(b.periph.i2s[port].step_calls, 1);
         }
     }
+    #[test]
+    fn classic_i2s_dma_reach_reads_and_writes() {
+        for address in [DRAM_LOW, DRAM_HIGH - 4, crate::bus::ROM_DRAM_LOW,
+            DRAM_LOW - 4, DRAM_HIGH - 3, 0x4008_0000, 0x3ff8_0000, 0x5000_0000, u32::MAX] {
+            let allowed = address == DRAM_LOW || address == DRAM_HIGH - 4;
+            let mut b = SocBus::new(0, [0; 6]);
+            let mut dma = DramDma(&mut b);
+            assert_eq!(dma.read32(address).is_ok(), allowed, "read {address:#x}");
+            assert_eq!(dma.write32(address, 42).is_ok(), allowed, "write {address:#x}");
+        }
+    }
+
     /// 16-bit stereo at 7843 Hz (PLL160 / 25.5 / BCK 25 / 32): one frame takes 30,601 CPU cycles.
     fn receiver(bits: u32, conf: u32) -> ClassicI2s {
         let mut i = ClassicI2s::new();

@@ -116,6 +116,18 @@ the SoC at its next existing bus tick.
 
 The energy-scan firmware and the run recipe: `examples/waveshare-c6-lcd147/`, [esp32c6.md](esp32c6.md).
 
+## `ttgo-tdisplay` — LilyGO TTGO T-Display (classic ESP32)
+
+| Device | Bus | Model |
+| --- | --- | --- |
+| ST7789V 135×240 panel | VSPI/SPI3 through the GPIO matrix (SCLK 18, MOSI 19, no MISO), CS 5, D/C 16, RST 23 | `DcsPanel::st7789()`: 240×320 GRAM; bytes of transactions routed to GPIO 18/19 while CS is low; the glass shows RAM columns 52..186 and rows 40..279 as a portrait frame, red/blue exchanged unless MADCTL BGR |
+| Backlight | GPIO 4, active high | level tracked, in the report |
+| Buttons | GPIO 35 (right, input only) and GPIO 0 (left, BOOT), active low | `press right 150`, `press boot 150` |
+| Battery divider | GPIO 34 (ADC1 channel 6), enable on GPIO 14 | the classic ADC's script inputs; the enable level is in the report |
+| I2C header | SDA 21 / SCL 22 | nothing attached |
+
+Selected with `--chip esp32 --board ttgo-tdisplay` (alias `tdisplay`); [esp32.md](esp32.md#the-board---board-ttgo-tdisplay).
+
 ## `none` — bare module
 
 No devices; console only. For stock ESP-IDF projects (`examples/hello_world`).
