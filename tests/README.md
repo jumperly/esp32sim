@@ -21,6 +21,15 @@ chip crates, and `esp-periph/tests/gpio_release.rs`. C6 `spi_routes.rs` covers p
 SPI selection. They use register writes and board models without firmware fixtures;
 [EX217](../docs/evidence/gpio-input-feedback/README.md) records their mutation checks.
 
+S3 PHY completion is covered without firmware by `esp32s3/tests/wifi_phy.rs`:
+no AP, idle/associated AP, AP removal and register writeback must not gate FE
+completion or create a network/link. `cli/tests/wifi_phy.rs` additionally boots an
+unchanged public Robot Face starter; its `external_` tests are ignored until
+`ROBOT_FACE_FW_DIR` names bootloader.bin, partitions.bin, firmware.bin and
+esp32s3_rev0_rom.elf. They pin no-AP progress within 960,000,000 cycles, offline
+timeout at 20 nominal seconds, matching-AP connection and mismatched-AP wait.
+No firmware binary is added here; these are developer-input tests, not CI goldens.
+
 The **golden-output tests** (`cli/tests/goldens.rs`) are the
 regression bar for everything else: they run the committed demo firmware from the mask ROM and
 compare the guest console, the captured audio (SHA-256) and the instruction count against the

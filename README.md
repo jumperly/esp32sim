@@ -356,8 +356,10 @@ Contributions are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) lists the checks a
 ## License
 
 esp32sim is released under the [MIT License](LICENSE), copyright Joakim Eriksson
-([@joakimeriksson](https://github.com/joakimeriksson)) and Alice
-([@aliceisjustplaying](https://github.com/aliceisjustplaying)).
+([@joakimeriksson](https://github.com/joakimeriksson)), Alice
+([@aliceisjustplaying](https://github.com/aliceisjustplaying)), and
+([@mfiumara](https://github.com/mfiumara)) Mattia Fiumara.
+
 
 Third-party code, data and demo files keep their own licenses:
 

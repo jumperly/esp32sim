@@ -1,0 +1,42 @@
+[
+  {
+    "mutation": "bus-invalidation",
+    "killed": true,
+    "exit": 101,
+    "failing_tests": [
+      "test repeated_reset_clock_hold_and_stall_release ... FAILED",
+      "test guest_release_republishes_on_the_following_round ... FAILED",
+      "test held_release_republishes_asserted_level_and_edge ... FAILED"
+    ]
+  },
+  {
+    "mutation": "routing-invalidation",
+    "killed": true,
+    "exit": 101,
+    "failing_tests": [
+      "test held_release_republishes_asserted_level_and_edge ... FAILED",
+      "test guest_release_republishes_on_the_following_round ... FAILED",
+      "test repeated_reset_clock_hold_and_stall_release ... FAILED"
+    ]
+  },
+  {
+    "mutation": "unmodeled-release",
+    "killed": true,
+    "exit": 101,
+    "failing_tests": [
+      "test guest_release_republishes_on_the_following_round ... FAILED",
+      "test repeated_reset_clock_hold_and_stall_release ... FAILED",
+      "test held_release_republishes_asserted_level_and_edge ... FAILED"
+    ]
+  },
+  {
+    "mutation": "modeled-release",
+    "killed": true,
+    "exit": 101,
+    "failing_tests": [
+      "test guest_release_republishes_on_the_following_round ... FAILED",
+      "test held_release_republishes_asserted_level_and_edge ... FAILED",
+      "test repeated_reset_clock_hold_and_stall_release ... FAILED"
+    ]
+  }
+]

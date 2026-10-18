@@ -31,6 +31,14 @@ impl Soc for S3 {
     fn function_hooks(bus: &SocBus) -> &[u32] { &bus.ble.hooks }
     fn function_hook(core: &mut Cpu, bus: &mut SocBus) -> bool { crate::ble::intercept(core, bus) }
     fn reset_core(c: &mut Cpu, i: usize) { Cpu::reset(c); if i == 1 { c.prid = 0xABAB; } }
+    #[inline]
+    fn reset_core_with_bus(c: &mut Cpu, bus: &mut SocBus, i: usize) {
+        Self::reset_core(c, i);
+        // Reset clears external levels and edge history even if no source changed.
+        // Force the existing routing refresh past its unchanged-source filter once.
+        bus.irq_dirty = true;
+        bus.periph.intmatrix_dirty = true;
+    }
     fn boot_core(c: &mut Cpu, entry: u32) {
         Cpu::reset(c);
         c.pc = entry;
