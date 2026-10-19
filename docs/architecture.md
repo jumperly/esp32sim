@@ -58,6 +58,19 @@ web/          index.html: the landing page; run.html: board drawing, console, We
               emu.js + wasm/worker.js: the same page driving the WebAssembly build (docs/wasm.md)
 wasm/         esp32sim-wasm: C ABI over Machine plus the guarded browser-JIT handoff
 wasm-jit/     receipt-priced wasm emitter; first SRAM opcode slice, shared-memory sidecars
+riscv-rv32/   RV32IMAC decoder (sampled objdump checks), interpreter, disassembler
+esp32c3/      the C3 SoC: memory map, interrupt matrix, cache controller, RNG; peripheral models
+              shared with esp32s3 where the IP is identical
+esp32c6/      the C6 SoC: unified memory map and MMU, interrupt matrix + PLIC/INTPRI, L1 cache,
+              PCR, the LP blocks (reset cause, software reset, RTC timer), ASSIST_DEBUG,
+              the 802.15.4 and WiFi MACs
+tests/        golden-output regression tests and their fixtures (tests/README.md)
+hw/           JTAG differential-test scripts against a real board, captured C3 and C6 consoles
+              (hardware-testing.md)
+examples/     firmware sources: hello_world (S3, C3, C6), waveshare-cam, wifi-station,
+              c6-wifi-station, c6-radio-dashboard, ttgo-tdisplay, …
+tools/        PIE table generator (TRM-derived), bench.py (interleaved A/B benchmark),
+              wasm-build.sh (the WebAssembly module), fetch-demo-assets.sh
 ```
 
 ## CPU core (`xtensa-lx7`)
