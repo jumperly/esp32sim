@@ -134,12 +134,5 @@
     "command": "the same image and command on main af9ebc79, --max-seconds 3",
     "exit_code": 0,
     "result": "tft ready, no SPI3 log line, core1 550084899 instructions in 3 emulated seconds (spinning in SD.begin)"
-  },
-  {
-    "check": "cpu-remeasure",
-    "rebased": "rebased onto main af9ebc79",
-    "command": "the CPU comparison method of the run above against main af9ebc79, Rust 1.99.1",
-    "outcome": "discarded: loaded desktop (38-77 % CPU load from other applications); numbers in README.md",
-    "identical_work_and_console": true
   }
 ]

@@ -183,12 +183,5 @@ marked `rebased` in [checks.json](checks.json):
   `mount failed`. On main `af9ebc79` (3 emulated seconds): `tft ready`, no SPI3 line, core 1 at
   550 084 899 instructions, as on `f5a038bf`.
 
-CPU: the run above (against `f5a038bf`, idle desktop) stands. A re-measurement against
-`af9ebc79` (2026-10-21, the same method, Rust 1.99.1) ran while other applications kept the
-desktop at 38–77 % CPU load (sampled after the run; 24 logical processors): main's own S3 hello
-spread 28.5–39.9 s against 26.9–28.4 s in run 1, and no run on either side came near run 1's
-floor. Its numbers, for the record: S3 hello +25.25 % (slower 6/7; main 31.63 s, PR 39.61 s,
-ranges 28.47–39.86 and 33.41–48.97), C3 hello −2.78 % (3/7), C6 hello +0.00 % (2/7), Pocket Tank
-+7.97 % (5/7, ranges 79.44–111.53 and 81.38–116.63); instructions and console hashes identical
-in every run. It is discarded as load noise, not read as a result; the per-tick SPI3 code is the
-same as in run 1. A maintainer re-measurement on an idle machine is welcome.
+CPU: not re-measured after the rebase; the run above against `f5a038bf` stands, and the per-tick
+SPI3 code is the same. A maintainer re-measurement on current main is welcome.
