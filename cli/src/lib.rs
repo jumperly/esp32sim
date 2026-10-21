@@ -173,6 +173,7 @@ pub fn parse(args: &[String], default_chip: &str) -> Opts {
             "--cooja-verbose" => o.cooja_verbose = true,
             "--cooja-rx-timing" => o.cooja_rx_at_end = match next().as_str() { "start" => false, "end" => true, x => { eprintln!("--cooja-rx-timing {}: start or end", x); std::process::exit(2) } },
             "-h" | "--help" => usage(default_chip),
+            "-V" | "--version" => { println!("esp32sim {}", env!("CARGO_PKG_VERSION")); std::process::exit(0) }
             _ => { eprintln!("unknown arg {}", a); usage(default_chip) }
         }
         i += 1;
@@ -215,7 +216,7 @@ pub fn run_cli(default_chip: &str) {
         "s3" | "esp32s3" => { let m = setup_s3(&o); run(m, &o) }
         "c3" | "esp32c3" => { let m = setup_c3(&o); run(m, &o) }
         "c6" | "esp32c6" => { let m = setup_c6(&o); run(m, &o) }
-        c => { eprintln!("--chip {}: s3, c3 or c6", c); std::process::exit(2) }
+        c => { eprintln!("--chip {}: esp32, s3, c3 or c6", c); std::process::exit(2) }
     }
 }
 

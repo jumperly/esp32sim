@@ -1,0 +1,76 @@
+name: release
+# Pushing a v* tag builds the release assets and attaches them to that tag's release,
+# creating a draft one if it does not exist yet, so the notes and the Latest flag stay manual.
+# workflow_dispatch rebuilds the assets for a tag that already exists.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: an existing v* tag to build assets for
+        required: true
+permissions:
+  contents: write
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            platform: macos-arm64
+          - runner: ubuntu-24.04
+            platform: linux-x86_64
+          - runner: ubuntu-24.04-arm
+            platform: linux-arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # A tag that disagrees with the workspace version would ship mislabelled binaries.
+      - name: The tag and the workspace version agree
+        run: |
+          tag='${{ inputs.tag || github.ref_name }}'
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          test "$tag" = "v$version" || { echo "tag $tag does not match workspace version $version"; exit 1; }
+      - name: Build
+        run: cargo build --release --workspace
+      - name: Package
+        run: |
+          tag='${{ inputs.tag || github.ref_name }}'
+          dir="esp32sim-${tag#v}-${{ matrix.platform }}"
+          mkdir -p "dist/$dir"
+          cp target/release/esp32sim target/release/esp32sim-c3 target/release/esp32sim-c6 LICENSE README.md "dist/$dir/"
+          tar -czf "dist/$dir.tar.gz" -C dist "$dir"
+          tar -tzf "dist/$dir.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          path: dist/*.tar.gz
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          tag='${{ inputs.tag || github.ref_name }}'
+          cd dist && sha256sum *.tar.gz | tee "esp32sim-${tag#v}-SHA256SUMS.txt"
+      - name: Attach the assets to the tag's release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag='${{ inputs.tag || github.ref_name }}'
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --draft \
+              --title "esp32sim ${tag#v}" \
+              --notes "Assets built by the release workflow. Release notes still to be written."
+          gh release upload "$tag" --repo "$GITHUB_REPOSITORY" --clobber dist/*.tar.gz dist/*SHA256SUMS.txt
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name'

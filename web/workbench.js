@@ -144,7 +144,7 @@
     machine.append(machineLinks);
 
     const about = addRailSection(rail, 'About esp32sim');
-    about.append(make('p', 'wb-copy', 'An instruction-level Rust emulator for ESP32-S3, C3, and C6 across Xtensa and RISC-V. It boots unmodified binaries in the browser or as a deterministic local CLI tool.'));
+    about.append(make('p', 'wb-copy', 'An instruction-level Rust emulator for the ESP32, S3, C3 and C6 across Xtensa and RISC-V. It boots unmodified binaries in the browser or as a deterministic local CLI tool.'));
     const aboutLinks = make('div', 'wb-links');
     aboutLinks.append(
       link('source ↗', 'https://github.com/mikroverk/esp32sim'),

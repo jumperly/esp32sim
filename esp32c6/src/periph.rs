@@ -43,14 +43,32 @@ pub mod src {
 }
 
 /// The interrupt matrix (`INTMTX`, 0x60010000): 77 peripheral sources, each mapped to one of the
-/// 31 CPU interrupt lines.
-pub struct IntMatrix { pub map: [u32; src::COUNT], ram: RegRam }
+/// 31 CPU interrupt lines, then the three read-only status registers.
+pub struct IntMatrix {
+    pub map: [u32; src::COUNT],
+    /// `INTMTX_CORE0_INT_STATUS_REG_0..2`: the asserted sources, published by
+    /// `Peripherals::refresh_lines`, which also uses it as its change-detection baseline.
+    pub status: [u32; 4],
+    ram: RegRam,
+}
 impl Default for IntMatrix { fn default() -> Self { Self::new() } }
 impl IntMatrix {
-    pub fn new() -> Self { IntMatrix { map: [0; src::COUNT], ram: RegRam::new() } }
+    pub fn new() -> Self { IntMatrix { map: [0; src::COUNT], status: [0; 4], ram: RegRam::new() } }
     pub fn read(&self, off: u32) -> u32 {
-        match off { off if off < src::COUNT as u32 * 4 => self.map[(off / 4) as usize], _ => self.ram.read(off) }
+        match off {
+            off if off < src::COUNT as u32 * 4 => self.map[(off / 4) as usize],
+            // INTMTX_CORE0_INT_STATUS_REG_0..2. The last map register is ECC_INTR_MAP at
+            // 0x130, so the source map ends exactly where these begin (src::COUNT * 4 == 0x134)
+            // and without this arm they fall through to register RAM and read zero -- leaving
+            // esp-hal's vectored handler unable to tell which source fired, so it never clears
+            // the latch and a level-triggered line re-fires forever. ESP-IDF v5.5.4,
+            // components/soc/esp32c6/register/soc/interrupt_matrix_reg.h.
+            0x134..=0x13c => self.status[((off - 0x134) / 4) as usize],
+            _ => self.ram.read(off),
+        }
     }
+    /// The status registers are read-only: a write to them lands in register RAM that
+    /// `read` shadows.
     pub fn write(&mut self, off: u32, v: u32) {
         match off { off if off < src::COUNT as u32 * 4 => self.map[(off / 4) as usize] = v & 0x1f, _ => self.ram.write(off, v) }
     }
@@ -374,7 +392,6 @@ pub struct Peripherals {
     pub misc: Misc,
     pub spi_exec: bool,
     clock: ClockTree<4>,
-    last_status: [u32; 4],
     pub ledc: Ledc,
     pub mcpwm: Mcpwm,
     /// Boxed: these devices are cold unless firmware configures them.
@@ -461,7 +478,6 @@ impl Peripherals {
             rng: Rng::new(), cpu_sub: RegRam::new(),
             misc: Misc::new(), spi_exec: false, clock: Self::new_clock(),
             optional: Box::new(OptionalPeripherals { i2s0: esp_periph::I2s::new(CPU_HZ), ecc: Default::default(), parlio: crate::parlio::Parlio::new() }), work_pending: false,
-            last_status: [0; 4],
         }
     }
 
@@ -565,8 +581,8 @@ impl Peripherals {
     /// Refresh the interrupt matrix; returns true if any source changed.
     pub fn refresh_lines(&mut self) -> bool {
         let st = self.source_status();
-        let changed = st != self.last_status;
-        self.last_status = st;
+        let changed = st != self.intmtx.status;
+        self.intmtx.status = st;
         self.intc.lines.update(&self.intmtx.map, &st);
         changed
     }
@@ -579,5 +595,50 @@ mod parlio_layout_tests {
     fn parlio_storage_shares_the_cold_i2s_allocation() {
         assert_eq!(std::mem::offset_of!(OptionalPeripherals, i2s0), 0);
         assert!(std::mem::offset_of!(OptionalPeripherals, parlio) >= size_of::<esp_periph::I2s>());
+    }
+}
+
+#[cfg(test)]
+mod intmtx_status_tests {
+    use super::*;
+
+    /// The source map ends exactly where the status registers begin, so either one being off by
+    /// a register turns INTR_STATUS into scratch register RAM.
+    #[test]
+    fn status_registers_sit_directly_above_the_source_map() {
+        let mut m = IntMatrix::new();
+        assert_eq!(src::COUNT as u32 * 4, 0x134, "ECC_INTR_MAP at 0x130 is the last map register");
+        m.map[src::ECC] = 7;
+        assert_eq!(m.read(0x130), 7);
+
+        m.status = [1 << src::FROM_CPU0, 1 << (src::UART0 - 32), 1 << (src::ECC - 64), 0];
+        assert_eq!(m.read(0x134), 1 << 22);
+        assert_eq!(m.read(0x138), 1 << 11);
+        assert_eq!(m.read(0x13c), 1 << 12);
+
+        // Read-only, and nothing above them changes.
+        m.write(0x134, u32::MAX);
+        assert_eq!(m.read(0x134), 1 << 22);
+        assert_eq!(m.read(0x140), 0);
+    }
+
+    /// esp-hal's vectored handler reads these to find the source behind a CPU line; a software
+    /// interrupt is the FreeRTOS/embassy yield that exercises it first.
+    #[test]
+    fn refresh_lines_publishes_the_asserted_source_to_the_status_registers() {
+        let mut p = Peripherals::new([0; 6]);
+        p.intmtx.map[src::FROM_CPU0] = 1;
+        assert_eq!(p.read32(0x6001_0134), 0);
+
+        p.write32(0x600c_5090, 1); // INTPRI_CPU_INTR_FROM_CPU_0
+        assert!(p.refresh_lines());
+        assert_eq!(p.read32(0x6001_0134), 1 << src::FROM_CPU0);
+        assert_eq!(p.intc.lines.level, 1 << 1);
+        assert!(!p.refresh_lines());
+
+        p.write32(0x600c_5090, 0);
+        assert!(p.refresh_lines());
+        assert_eq!(p.read32(0x6001_0134), 0);
+        assert_eq!(p.intc.lines.level, 0);
     }
 }

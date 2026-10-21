@@ -1,7 +1,7 @@
 # Command line
 
 ```
-esp32sim [--chip s3|c3|c6] --boot rom --bootloader B.bin --ptable P.bin --app A.bin [--elf X.elf ...] [options]
+esp32sim [--chip esp32|s3|c3|c6] --boot rom --bootloader B.bin --ptable P.bin --app A.bin [--elf X.elf ...] [options]
 esp32sim --flash-image flash.bin --boot rom ...
 ```
 
@@ -17,7 +17,7 @@ PSRAM and register presets.
 | `--boot rom\|app` | `rom`: start at the mask ROM reset vector (real boot chain). `app`: load the app image segments and jump to its entry |
 | `--bootloader F`, `--ptable F`, `--app F` | written to flash at 0x0 / 0x8000 / 0x10000 |
 | `--flash-image F` | whole flash dump written at 0 |
-| `--chip s3\|c3\|c6` | which chip (default s3) |
+| `--chip esp32\|s3\|c3\|c6` | which chip (default s3; `esp32` is the classic ESP32) |
 | `--rom F` | mask ROM ELF (default: the chip's in `ESP32SIM_ROM_DIR`, then `~/.espressif/tools/esp-rom-elfs/*/`) |
 | `--mac xx:xx:xx:xx:xx:xx` | the station MAC the efuses report |
 | `--cam-stream PATH\|-`, `--cam-size WIDTHxHEIGHT` | live RGB24 camera source and its dimensions; requires `waveshare-cam` |
@@ -43,6 +43,8 @@ PSRAM and register presets.
 ## Running
 | Flag | Meaning |
 | --- | --- |
+| `--version`, `-V` | print `esp32sim <version>` and exit |
+| `--help`, `-h` | print the usage line and exit |
 | `--max-seconds S` | stop after this much emulated time, including all reboots; also applies to `--cooja` |
 | `--max-insns N` | cap scheduler work across all reboots (details below); unavailable with `--cooja`, which uses `--max-seconds` |
 | `--i2s-tone PORT:HZ:AMPLITUDE` | continuous RX sine on I2S controller 0 or 1; amplitude 0..1, for example `0:1000:0.5`; repeat for multiple controllers |

@@ -11,130 +11,7 @@ pub const PIN_AMOLED_I2C_SCL: u8 = 14;
 pub const PIN_AMOLED_I2C_SDA: u8 = 15;
 pub const PIN_AMOLED_TOUCH_INT: u8 = 21;
 
-/// CO5300 controller and 368x448 RGB565 frame memory used by the Waveshare AMOLED V2 board.
-pub struct Co5300 {
-    pub frame: Vec<u16>,
-    pub frames: u64,
-    pub pixels_written: u64,
-    x0: u16,
-    x1: u16,
-    y0: u16,
-    y1: u16,
-    x: u16,
-    y: u16,
-    pending: Option<u8>,
-    pixel_hi: Option<u8>,
-}
-
-impl Co5300 {
-    pub const WIDTH: usize = 368;
-    pub const HEIGHT: usize = 448;
-    pub const X_OFFSET: u16 = 0x10;
-
-    pub fn new() -> Self {
-        Self {
-            frame: vec![0; Self::WIDTH * Self::HEIGHT],
-            frames: 0,
-            pixels_written: 0,
-            x0: Self::X_OFFSET,
-            x1: Self::X_OFFSET + Self::WIDTH as u16 - 1,
-            y0: 0,
-            y1: Self::HEIGHT as u16 - 1,
-            x: 0,
-            y: 0,
-            pending: None,
-            pixel_hi: None,
-        }
-    }
-
-    pub fn transaction(&mut self, tx: &[u8]) {
-        let data = if tx.len() >= 4 && matches!(tx[0], 0x02 | 0x32) {
-            let command = tx[2];
-            if command == 0x01 {
-                *self = Self::new();
-                return;
-            }
-            self.pending = Some(command);
-            self.pixel_hi = None;
-            if command == 0x2c { self.x = self.x0; self.y = self.y0; self.frames += 1; }
-            &tx[4..]
-        } else { tx };
-        match self.pending {
-            Some(0x2a) if data.len() >= 4 => {
-                self.x0 = u16::from_be_bytes([data[0], data[1]]);
-                self.x1 = u16::from_be_bytes([data[2], data[3]]);
-                self.x = self.x0;
-                self.pending = None;
-            }
-            Some(0x2b) if data.len() >= 4 => {
-                self.y0 = u16::from_be_bytes([data[0], data[1]]);
-                self.y1 = u16::from_be_bytes([data[2], data[3]]);
-                self.y = self.y0;
-                self.pending = None;
-            }
-            // ESP-IDF sends the command and its four parameter bytes in separate
-            // SPI transfers while keeping chip select active. Preserve the command
-            // after the header-only transfer so the next transfer sets the window.
-            Some(0x2a | 0x2b) => {}
-            Some(0x2c | 0x3c) => self.write_pixel_bytes(data),
-            Some(_) => self.pending = None,
-            None => {}
-        }
-    }
-
-    /// EX158/EX170: the per-byte loop, a row run at a time. Same window walk and `pixels_written`.
-    fn write_pixel_bytes(&mut self, mut data: &[u8]) {
-        if let Some(high) = self.pixel_hi {
-            let Some((&low, rest)) = data.split_first() else { return };
-            self.pixel_hi = None;
-            self.write_pixel(u16::from_be_bytes([high, low]));
-            data = rest;
-        }
-        let (pairs, rest) = data.as_chunks::<2>();
-        let mut pairs = pairs;
-        while !pairs.is_empty() {
-            let (x, x1) = (self.x as usize, self.x1 as usize);
-            let to_edge = if x < x1 { x1 - x + 1 } else { 1 };
-            let run = to_edge.min(pairs.len());
-            let (now, later) = pairs.split_at(run);
-            if (self.y as usize) < Self::HEIGHT {
-                let lo = x.max(Self::X_OFFSET as usize);
-                let hi = (x + run).min(Self::X_OFFSET as usize + Self::WIDTH);
-                if lo < hi {
-                    let row = self.y as usize * Self::WIDTH;
-                    let xo = Self::X_OFFSET as usize;
-                    for (dst, src) in self.frame[row + lo - xo..row + hi - xo].iter_mut().zip(&now[lo - x..hi - x]) { *dst = u16::from_be_bytes(*src); }
-                    self.pixels_written += (hi - lo) as u64;
-                }
-            }
-            if run == to_edge {
-                self.x = self.x0;
-                if self.y >= self.y1 { self.y = self.y0; } else { self.y += 1; }
-            } else {
-                self.x += run as u16;
-            }
-            pairs = later;
-        }
-        if let [byte] = rest { self.pixel_hi = Some(*byte); }
-    }
-
-    fn write_pixel(&mut self, pixel: u16) {
-        let framebuffer_x = self.x.checked_sub(Self::X_OFFSET).map(usize::from);
-        if framebuffer_x.is_some_and(|x| x < Self::WIDTH) && (self.y as usize) < Self::HEIGHT {
-            self.frame[self.y as usize * Self::WIDTH + framebuffer_x.expect("checked panel column must exist")] = pixel;
-            self.pixels_written += 1;
-        }
-        if self.x >= self.x1 {
-            self.x = self.x0;
-            if self.y >= self.y1 { self.y = self.y0; } else { self.y += 1; }
-        } else {
-            self.x += 1;
-        }
-    }
-}
-
-impl Default for Co5300 { fn default() -> Self { Self::new() } }
-
+pub use esp_soc::devices::co5300::Co5300;
 
 /// Waveshare ESP32-S3-Touch-AMOLED-1.8 V2 with the CO5300 and CST820 device set.
 pub struct WaveshareAmoled18V2 {
@@ -157,12 +34,16 @@ pub struct WaveshareAmoled18V2 {
 }
 
 impl WaveshareAmoled18V2 {
+    pub const WIDTH: usize = 368;
+    pub const HEIGHT: usize = 448;
+    pub const X_OFFSET: u16 = 16;
+
     const APPROXIMATE_TE_HALF_PERIOD: VirtualCycle = crate::periph::CPU_HZ / 120;
 
     pub fn new() -> Self {
         Self {
             gpio_events: 0,
-            panel: Co5300::new(),
+            panel: Co5300::new(Self::WIDTH, Self::HEIGHT, Self::X_OFFSET),
             touch_state: Default::default(),
             imu: Default::default(),
             smooth_display: false,
@@ -190,7 +71,7 @@ impl WaveshareAmoled18V2 {
 
     fn queue_touch(&mut self, cycle: VirtualCycle, x: u16, y: u16, down: bool) {
         self.touch_state.lock().expect("AMOLED touch state mutex poisoned")
-            .update(x.min(Co5300::WIDTH as u16 - 1), y.min(Co5300::HEIGHT as u16 - 1), down);
+            .update(x.min(Self::WIDTH as u16 - 1), y.min(Self::HEIGHT as u16 - 1), down);
         let level = !down;
         let queued_level = self.pending_touch_final.or(self.pending_touch_irq.map(|(_, level)| level)).unwrap_or(self.touch_irq_level);
         if level != queued_level {
@@ -224,7 +105,7 @@ impl BoardModel for WaveshareAmoled18V2 {
         ]
     }
     fn display(&self) -> Option<(u32, u32, Vec<u16>, u64)> {
-        Some((Co5300::WIDTH as u32, Co5300::HEIGHT as u32, self.panel.frame.clone(), self.panel.pixels_written))
+        Some((Self::WIDTH as u32, Self::HEIGHT as u32, self.panel.frame.clone(), self.panel.pixels_written))
     }
     fn display_version(&self) -> u64 { self.panel.pixels_written }
     fn display_frames(&self) -> u64 { self.panel.frames }
@@ -292,117 +173,6 @@ mod amoled_tests {
         }
     }
 
-    fn cpu_transfer(command: u8, data: &[u8]) -> Vec<u8> {
-        let mut spi = esp_periph::gpspi::GpSpi::new();
-        spi.write(0x10, (1 << 31) | (1 << 30) | (1 << 27));
-        spi.write(0x14, 23 << 27);
-        spi.write(0x18, (7 << 28) | 0x02);
-        spi.write(0x04, (command as u32) << 16);
-        spi.write(0x1c, data.len() as u32 * 8 - 1);
-        for (index, &byte) in data.iter().enumerate() {
-            spi.w[index / 4] |= u32::from(byte) << (8 * (index % 4));
-        }
-        spi.write(0, 1 << 24);
-        spi.take_transfer().expect("CPU GP-SPI transfer must be ready").tx
-    }
-
-    fn dma_transfer(command: u8, data: &[u8]) -> Vec<u8> {
-        let mut spi = esp_periph::gpspi::GpSpi::new();
-        spi.write(0x30, 1 << 28);
-        spi.write(0x10, (1 << 31) | (1 << 30) | (1 << 27));
-        spi.write(0x14, 23 << 27);
-        spi.write(0x18, (7 << 28) | 0x32);
-        spi.write(0x04, (command as u32) << 16);
-        spi.write(0x1c, data.len() as u32 * 8 - 1);
-        spi.write(0, 1 << 24);
-        spi.complete_dma_tx(data);
-        spi.take_transfer().expect("DMA GP-SPI transfer must be ready").tx
-    }
-
-    #[test]
-    fn bulk_pixel_bytes_match_the_per_byte_walk() {
-        let mut seed = 0x1234_5678u32;
-        let mut rnd = move |n: u32| { seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5; seed % n };
-        for _ in 0..300 {
-            let (mut a, mut b) = (Co5300::new(), Co5300::new());
-            let x0 = rnd(400) as u16; let x1 = if rnd(8) == 0 { x0.saturating_sub(rnd(5) as u16) } else { x0.saturating_add(rnd(420) as u16) };   // also windows with x1 < x0
-            let y0 = rnd(460) as u16; let y1 = y0 + rnd(30) as u16;
-            for p in [&mut a, &mut b] {
-                p.transaction(&[0x02, 0, 0x2a, 0, (x0 >> 8) as u8, x0 as u8, (x1 >> 8) as u8, x1 as u8]);
-                p.transaction(&[0x02, 0, 0x2b, 0, (y0 >> 8) as u8, y0 as u8, (y1 >> 8) as u8, y1 as u8]);
-                p.transaction(&[0x32, 0, 0x2c, 0]);
-            }
-            for _ in 0..rnd(6) + 1 {
-                let mut data: Vec<u8> = (0..rnd(3000)).map(|_| rnd(256) as u8).collect();
-                if let Some(first) = data.first_mut() { *first |= 0x80; } // not a 0x02/0x32 command header
-                a.transaction(&data);
-                for &byte in &data { match b.pixel_hi.take() { None => b.pixel_hi = Some(byte), Some(h) => b.write_pixel(u16::from_be_bytes([h, byte])) } }
-            }
-            assert_eq!((a.x, a.y, a.pixel_hi, a.pixels_written), (b.x, b.y, b.pixel_hi, b.pixels_written));
-            assert!(a.frame == b.frame);
-        }
-    }
-
-    #[test]
-    fn combined_gpspi_parameter_and_color_phases_update_panel_pixels() {
-        let mut panel = Co5300::new();
-        panel.transaction(&cpu_transfer(0x2a, &[0, 0x11, 0, 0x12]));
-        panel.transaction(&cpu_transfer(0x2b, &[0, 3, 0, 3]));
-        panel.transaction(&dma_transfer(0x2c, &[0xf8, 0, 0x07, 0xe0]));
-        assert_eq!(panel.frame[3 * Co5300::WIDTH + 1], 0xf800);
-        assert_eq!(panel.frame[3 * Co5300::WIDTH + 2], 0x07e0);
-        assert_eq!(panel.pixels_written, 2);
-        assert_eq!(panel.frames, 1);
-    }
-
-    #[test]
-    fn split_gpspi_commands_and_parameters_place_partial_updates_in_the_window() {
-        let mut panel = Co5300::new();
-        // The IDF LCD SPI driver sends these headers separately from the parameters.
-        panel.transaction(&[0x02, 0, 0x2a, 0]);
-        panel.transaction(&[0, 0x60, 0, 0x61]);
-        panel.transaction(&[0x02, 0, 0x2b, 0]);
-        panel.transaction(&[0, 140, 0, 141]);
-        panel.transaction(&[0x32, 0, 0x2c, 0]);
-        panel.transaction(&[0xf8, 0, 0x07, 0xe0]);
-        panel.transaction(&[0x32, 0, 0x3c, 0]);
-        panel.transaction(&[0, 0x1f, 0xff, 0xff]);
-        assert_eq!(&panel.frame[140 * Co5300::WIDTH + 80..140 * Co5300::WIDTH + 82], &[0xf800, 0x07e0]);
-        assert_eq!(&panel.frame[141 * Co5300::WIDTH + 80..141 * Co5300::WIDTH + 82], &[0x001f, 0xffff]);
-        assert_eq!(panel.pixels_written, 4);
-        assert_eq!(panel.frame[0], 0);
-    }
-
-    #[test]
-    fn physical_x_offset_maps_the_full_panel_width_to_the_framebuffer() {
-        let mut panel = Co5300::new();
-        let x1 = Co5300::X_OFFSET + Co5300::WIDTH as u16 - 1;
-        panel.transaction(&cpu_transfer(0x2a, &[0, Co5300::X_OFFSET as u8, (x1 >> 8) as u8, x1 as u8]));
-        panel.transaction(&cpu_transfer(0x2b, &[0, 0, 0, 0]));
-        let mut pixels = Vec::with_capacity(Co5300::WIDTH * 2);
-        for pixel in 1..=Co5300::WIDTH as u16 { pixels.extend_from_slice(&pixel.to_be_bytes()); }
-        panel.transaction(&dma_transfer(0x2c, &pixels));
-        assert_eq!(panel.pixels_written, Co5300::WIDTH as u64);
-        assert_eq!(panel.frame[0], 1);
-        assert_eq!(panel.frame[Co5300::WIDTH - 1], Co5300::WIDTH as u16);
-        assert_eq!(&panel.frame[..Co5300::WIDTH], &(1..=Co5300::WIDTH as u16).collect::<Vec<_>>());
-    }
-
-    #[test]
-    fn software_reset_clears_the_panel_parser_window_and_framebuffer() {
-        let mut panel = Co5300::new();
-        panel.transaction(&cpu_transfer(0x2a, &[0, 0x11, 0, 0x11]));
-        panel.transaction(&cpu_transfer(0x2b, &[0, 3, 0, 3]));
-        panel.transaction(&dma_transfer(0x2c, &[0xf8, 0]));
-        assert_eq!(panel.frame[3 * Co5300::WIDTH + 1], 0xf800);
-
-        panel.transaction(&[0x02, 0, 0x01, 0]);
-        assert!(panel.frame.iter().all(|&pixel| pixel == 0));
-        assert_eq!((panel.x0, panel.x1, panel.y0, panel.y1),
-                   (Co5300::X_OFFSET, Co5300::X_OFFSET + Co5300::WIDTH as u16 - 1, 0, Co5300::HEIGHT as u16 - 1));
-        assert_eq!((panel.pending, panel.pixel_hi, panel.frames, panel.pixels_written), (None, None, 0, 0));
-    }
-
     #[test]
     fn board_exposes_the_v2_device_addresses_on_i2c0() {
         let mut board = WaveshareAmoled18V2::new();
@@ -440,6 +210,19 @@ mod amoled_tests {
         assert_eq!(board.take_edges(), [BoardEdge { cycle: half_period, pin: PIN_AMOLED_TE, level: false }]);
         board.advance_to(half_period * 2);
         assert_eq!(board.take_edges(), [BoardEdge { cycle: half_period * 2, pin: PIN_AMOLED_TE, level: true }]);
+    }
+
+    #[test]
+    fn panel_tear_commands_do_not_change_the_legacy_board_waveform() {
+        for mut board in [WaveshareAmoled18V2::new(), WaveshareAmoled18V2::with_measured_te()] {
+            let deadline = board.next_deadline().unwrap();
+            for command in [0x34, 0x44, 0x35, 0x01] {
+                board.spi_transfer(2, &[0x02, 0, command, 0, 1, 64], 0);
+                assert_eq!(board.next_deadline(), Some(deadline));
+            }
+            board.advance_to(deadline);
+            assert_eq!(board.take_edges(), [BoardEdge { cycle: deadline, pin: PIN_AMOLED_TE, level: false }]);
+        }
     }
 
     #[test]

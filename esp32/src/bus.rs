@@ -321,6 +321,11 @@ impl SocBus {
         // Jumperly patch J28: RTC_IO PAD_DAC1/2, SENS_SAR_DAC_CTRL2 — a DAC change ends the slice.
         let dac_before = (self.pin_watch.is_some() && matches!(a, 0x3ff4_8484 | 0x3ff4_8488 | 0x3ff4_889c)).then(|| self.periph.adc.dac_outputs());
         self.periph.write32(a, v);
+        // IDF v5.5.4 esp32/rtc_cntl_reg.h:2017-2039. Only a CRC START write
+        // touches RTC memory; no new state or work in reads, ticks or instruction execution.
+        if a == 0x3ff4_8100 && v & (1 << 8) != 0 {
+            self.periph.rtc.memory_crc(&self.rtc_fast);
+        }
         if dac_before.is_some_and(|before| before != self.periph.adc.dac_outputs()) { self.slice_yield = true; }
         if matches!(a >> 12, 0x3ff44 | 0x3ff49) || (0x3ff4_8400..0x3ff4_8500).contains(&a) { self.note_pin_write(); }   // Jumperly patch J28: GPIO, IO_MUX, RTC_IO
         if self.pwm_tap.is_some() && pwm_commit(a, v) { self.note_pwm(); }      // Jumperly patch J28
