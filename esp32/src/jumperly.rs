@@ -61,8 +61,15 @@ pub fn pin_state(p: &Peripherals, pin: usize) -> u32 {
     if mux & (1 << 9) != 0 { s |= state::INPUT_ENABLE; }         // FUN_IE
     if pin >= FIRST_INPUT_ONLY { return s | (state::PLAIN_GPIO << state::SIGNAL_SHIFT); }
     let bit = 1u64 << pin;
-    if g.out & bit != 0 { s |= state::OUT; }
-    if g.enable & bit != 0 { s |= state::ENABLE; }
+    // OUT / ENABLE as on the S3: the GPIO function (MCU_SEL 2, translated) and the plain-GPIO
+    // selector (256) report the drive `PinRoutes::software_output` resolves (enable and output
+    // inversion).
+    let routes = p.gpio.routes();
+    let (out, enable) = if g.func_out_sel[pin] & 0x1ff == state::PLAIN_GPIO && routes.function(pin, 1) {
+        routes.software_output(pin as u8).map_or((g.out & bit != 0, false), |level| (level, true))
+    } else { (g.out & bit != 0, g.enable & bit != 0) };
+    if out { s |= state::OUT; }
+    if enable { s |= state::ENABLE; }
     let (rtc_up, rtc_down) = rtc_pulls(p, pin);
     if mux & (1 << 8) != 0 || rtc_up { s |= state::PULL_UP; }    // FUN_WPU | RTC_IO RUE
     if mux & (1 << 7) != 0 || rtc_down { s |= state::PULL_DOWN; } // FUN_WPD | RTC_IO RDE
@@ -177,6 +184,25 @@ mod tests {
         assert_eq!(pin_state(&p, 34) & 0xffff, state::INPUT_ENABLE);
         assert_eq!(pin_state(&p, 39) & 0xffff, 0);
         assert_eq!(pin_state(&p, 39) >> state::SIGNAL_SHIFT, state::PLAIN_GPIO);
+    }
+
+    /// As on the S3: a pad on the GPIO function (MCU_SEL 2) reports the drive
+    /// `PinRoutes::software_output` resolves, OUT_INV_SEL bit 9 and OEN_INV_SEL bit 11 (IDF v5.5.4
+    /// components/soc/esp32/register/soc/gpio_reg.h:7065-7092); off the GPIO function the raw latch.
+    #[test]
+    fn a_gpio_function_pad_reports_the_inverted_drive() {
+        let mut p = periph();
+        p.write32(GPIO + 0x24, 1 << 2);                                  // ENABLE_W1TS
+        p.write32(GPIO + 0x08, 1 << 2);                                  // OUT_W1TS
+        p.write32(GPIO + 0x530 + 4 * 2, 256 | (1 << 9));                 // GPIO2: plain GPIO, OUT_INV_SEL
+        assert_eq!(pin_state(&p, 2) & 0xffff, state::OUT | state::ENABLE, "MCU_SEL 0: the raw latch");
+        p.write32(IO_MUX + 0x40, 2 << 12);                               // GPIO2: MCU_SEL 2 (GPIO)
+        assert_eq!(pin_state(&p, 2) & 0xffff, state::ENABLE, "OUT_INV_SEL: driven low");
+        p.write32(GPIO + 0x530 + 4 * 2, 256 | (1 << 11));                // OEN_INV_SEL
+        assert_eq!(pin_state(&p, 2) & 0xffff, state::OUT, "OEN_INV_SEL with ENABLE: not driven");
+        p.write32(GPIO + 0x28, 1 << 2);                                  // ENABLE_W1TC
+        assert_eq!(pin_state(&p, 2) & 0xffff, state::OUT | state::ENABLE, "OEN_INV_SEL without ENABLE: driven high");
+        assert_eq!(pin_state(&p, 2) >> state::SIGNAL_SHIFT, state::PLAIN_GPIO);
     }
 
     #[test]
