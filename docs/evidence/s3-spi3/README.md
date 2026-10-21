@@ -1,6 +1,7 @@
-# EX232: GP-SPI3 (HSPI) on the ESP32-S3
+# EX235: GP-SPI3 (HSPI) on the ESP32-S3
 
-Base: upstream/main `f5a038bf`. The final source is the commit containing this receipt.
+Base: upstream/main `f5a038bf`, rebased onto `af9ebc79` (see "Rebased onto main" below). The
+final source is the commit containing this receipt. Renumbered from EX232, which #243 uses.
 Inputs, hashes and the exact commands are in [inputs.json](inputs.json); the checks that ran
 and their results in [checks.json](checks.json).
 
@@ -162,3 +163,32 @@ MSVC build (no symbols in the release executable for `llvm-objdump`); `tick_impl
 - Board models that answer by `host` already receive 3; the shipped boards ignore the
   controller number, so an SPI3 device needs a board that routes by pins or by host.
 - The firmware images are not committed and no golden pins them.
+
+## Rebased onto main
+
+Main `af9ebc79` merged into the branch; the SPI3 code is unchanged. Rust 1.99.1 (58cf8f9c3
+2026-10-13), `cargo +1.99.1`, Windows 11, ROMs from `tools/fetch-rom-elfs.sh roms`; entries
+marked `rebased` in [checks.json](checks.json):
+
+- Clippy native and wasm32 jit-tests, warnings denied: pass.
+- `ESP32SIM_ROM_DIR=roms cargo test --release --workspace --no-fail-fast -- --include-ignored
+  --skip external_`: 1018 passed, 2 failed, 0 ignored over 109 binaries; the failures are the two
+  `decoder_matches_corpus` tests (Windows drive-letter path split), unrelated. The three SPI3
+  tests and main's `spi3_transfers_through_the_bus_reach_the_glass` (classic T-Display) pass;
+  no golden changed. Virtual-quantum scheduler (`ESP32SIM_VQ_NATIVE=1`, `machine`,
+  `virtual_stops`): 43 passed.
+- The wasm build and the eight standard demos, the evidence privacy check: pass.
+- Firmware, the same spi3.bin (`568b56f9…`) and command: 366 SPI3 transfers (339 × `ff`,
+  27 × CMD0 `40 00 00 00 00 95`), 88 on SPI2 starting `ef`, CMD0 never on SPI2; `tft ready`, then
+  `mount failed`. On main `af9ebc79` (3 emulated seconds): `tft ready`, no SPI3 line, core 1 at
+  550 084 899 instructions, as on `f5a038bf`.
+
+CPU: the run above (against `f5a038bf`, idle desktop) stands. A re-measurement against
+`af9ebc79` (2026-10-21, the same method, Rust 1.99.1) ran while other applications kept the
+desktop at 38–77 % CPU load (sampled after the run; 24 logical processors): main's own S3 hello
+spread 28.5–39.9 s against 26.9–28.4 s in run 1, and no run on either side came near run 1's
+floor. Its numbers, for the record: S3 hello +25.25 % (slower 6/7; main 31.63 s, PR 39.61 s,
+ranges 28.47–39.86 and 33.41–48.97), C3 hello −2.78 % (3/7), C6 hello +0.00 % (2/7), Pocket Tank
++7.97 % (5/7, ranges 79.44–111.53 and 81.38–116.63); instructions and console hashes identical
+in every run. It is discarded as load noise, not read as a result; the per-tick SPI3 code is the
+same as in run 1. A maintainer re-measurement on an idle machine is welcome.
