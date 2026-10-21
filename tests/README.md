@@ -16,6 +16,14 @@ checked-in oracle or is `#[ignore]`d with the reason in its name.
 | whole runs | `cli/tests/goldens.rs`, `wasm/tests/abi.rs` | the goldens below; the wasm C ABI driven natively for both chips, checking the web protocol's `board`, `serial`, `stat`, frame, audio and ring messages |
 | the wasm build itself | `tools/wasm-test.mjs` | the real `esp32sim.wasm` under Node, driven through the page's firmware manifests (`web/wasm/fw/*.json`): boot, run, drain the outbox, expect the board message and the console line, no panic — the only layer that sees a wasm-only abort (a std that panics where it used to return nothing took every demo down once) |
 
+GPIO routed-drive checks live in `cli/tests/routed_waveform.rs` and
+`esp-soc/tests/routed_waveform.rs`: four chips, classic APB/AHB aliases,
+route/mux/enable inversion, opt-out, reset and invalid/high pins. The shared
+`tests/gpio_waveform.rs` RGB/pulse fixture now consumes this routed callback on
+native and WASM while retaining its exact widths and scheduling assertions.
+These are generated instruction fixtures and register tests, not library firmware
+or hardware calibration. [Receipt](../docs/evidence/routed-gpio-waveform/README.md).
+
 GPIO feedback and release checks live in `tests/gpio_feedback.rs`, included by all three
 chip crates, and `esp-periph/tests/gpio_release.rs`. C6 `spi_routes.rs` covers physical
 SPI selection. They use register writes and board models without firmware fixtures;

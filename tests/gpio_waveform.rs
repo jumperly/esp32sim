@@ -18,9 +18,10 @@ impl BoardModel for Board {
         "waveform-test"
     }
     fn uses_gpio_waveform(&self) -> bool { true }
-    fn gpio_output_at(&mut self, cycle: u64, _: &[(u8, bool)], enabled: u64, output: u64) {
-        let enabled = enabled & (1u64 << self.pin) != 0;
-        let high = output & (1u64 << self.pin) != 0;
+    fn gpio_waveform_at(&mut self, cycle: u64, routes: esp_soc::pins::PinRoutes<'_>) {
+        let output = routes.software_output(self.pin);
+        let enabled = output.is_some();
+        let high = output.unwrap_or(false);
         let mut s = self.state.lock().unwrap();
         if enabled && s.edges.last().is_none_or(|&(_, last)| last != high) {
             s.edges.push((cycle, high));

@@ -204,14 +204,13 @@ of electricity prices over HTTPS and polls a real Home Assistant on the LAN.
 The ESP32-C6 joins the same access point and network through its own MAC model
 ([wifi-c6-plan.md](wifi-c6-plan.md)): one station, legacy rates, no power save.
 `examples/c6-wifi-station` is the specimen: scan, join, lease, five pings, and the state on the
-board's screen. Every C6 radio run needs `--stub bb_init=0`, because the PHY's baseband calibration
-wants analog hardware:
+board's screen:
 
 ```sh
 B=examples/c6-wifi-station/build-emu
 ./target/release/esp32sim-c6 --boot rom --flash-mb 4 --board waveshare-c6-lcd147 --console usb \
     --bootloader $B/bootloader/bootloader.bin --ptable $B/partition_table/partition-table.bin \
-    --app $B/c6_wifi_station.bin --elf $B/c6_wifi_station.elf --stub bb_init=0 \
+    --app $B/c6_wifi_station.bin --elf $B/c6_wifi_station.elf \
     --wifi ssid=esp32sim,psk=esp32sim-pass --max-seconds 14
 ```
 

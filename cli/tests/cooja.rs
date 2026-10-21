@@ -131,8 +131,8 @@ fn echo_session_is_exact_and_reproducible() {
 
 /// The E6 stage-1 gate: Contiki-NG on ESP-IDF (esp32-contiki, `CONTIKI_C6_DIR` = its
 /// `build-nullnet`, the nullnet cross-level probe) as a lock-stepped external mote. From the mask
-/// ROM through the bootloader, FreeRTOS and the PHY blob (`bb_init` stubbed, as for the energy
-/// scanner) to Contiki's periodic broadcast: every 5 s the guest's frame must come out as a `tx`
+/// ROM through the bootloader, FreeRTOS and the PHY blob (calibration included, no stub) to
+/// Contiki's periodic broadcast: every 5 s the guest's frame must come out as a `tx`
 /// event stamped at its `TX_START`; a broadcast injected mid-slice must reach the driver (its
 /// `RX SFD` and `RX: 19 bytes` lines right after it, csim reporting frames at their end) and Contiki's nullnet callback
 /// (`rx len 4 count 7 from …`); two sessions must be byte-identical; and the whole exchange is
@@ -152,7 +152,7 @@ fn external_nullnet_c6() {
     session += &format!("{{\"type\":\"stop\",\"t\":{},\"reason\":\"end\"}}\n", t);
     let run = || {
         let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_esp32sim-c6"))
-            .args(["--cooja", "--boot", "rom", "--flash-mb", "2", "--no-dump", "--rom", rom.to_str().unwrap(), "--stub", "bb_init=0",
+            .args(["--cooja", "--boot", "rom", "--flash-mb", "2", "--no-dump", "--rom", rom.to_str().unwrap(),
                    "--bootloader", &format!("{dir}/bootloader/bootloader.bin"), "--ptable", &format!("{dir}/partition_table/partition-table.bin"),
                    "--app", &format!("{dir}/esp32-blink.bin"), "--elf", &format!("{dir}/esp32-blink.elf")])
             .current_dir(common::root()).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().expect("esp32sim-c6");
@@ -165,9 +165,11 @@ fn external_nullnet_c6() {
     let (out2, _) = run();
     assert_eq!(out, out2, "two sessions from the same input must be byte-identical");
     let tx = tx_events(&out);
-    assert_eq!(tx.len(), 2, "one broadcast at ~5.07 s and one at ~10.07 s:\n{}", err);
+    assert_eq!(tx.len(), 2, "one broadcast at ~5.09 s and one at ~10.09 s:\n{}", err);
     for (i, (t, frame)) in tx.iter().enumerate() {
-        let expect_t = 5_065_000_000 + i as u64 * 5_000_000_000;
+        // boot to the first broadcast: 5.085 s with the PHY calibration running (5.065 s when it was
+        // stubbed); the exact value is pinned by the ndjson golden below, this is the readable check
+        let expect_t = 5_085_000_000 + i as u64 * 5_000_000_000;
         assert!((expect_t..expect_t + 2_000_000).contains(t), "tx {} at {} ns, expected in [{}, +2 ms)", i, t, expect_t);
         // data frame, PAN compression, short broadcast destination, extended source from the node-2 MAC, 4-byte counter
         assert!(frame.starts_with("41d8") && frame[6..].starts_with("cdabffff020000feff000002") && frame.ends_with(&format!("{:02x}000000", i)), "tx {}: {}", i, frame);

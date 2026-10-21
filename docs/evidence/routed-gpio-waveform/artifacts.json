@@ -1,0 +1,25 @@
+{
+  "objdump": "Homebrew LLVM version 23.1.3",
+  "command": "llvm-objdump --disassemble --demangle --no-show-raw-insn <release esp32sim>",
+  "artifacts": [
+    {
+      "label": "main",
+      "binary_sha256": "0b0d0dd5a4f8e5667d780e07b02cb45bd8479895889ee6e51a140b3f056b68bb",
+      "disassembly_sha256": "43a828ee9ce8b55db3b4d46a42ddd244b75bb02af8d1e3f0ed6ee6855408b0bf",
+      "binary_bytes": 2895720,
+      "retained_binary": "main-esp32sim.gz",
+      "retained_binary_bytes": 1278399,
+      "retained_binary_sha256": "bbd50839d6712fb7374da134887c0c24921ca88f20c3be310f2ae3a681b282fd"
+    },
+    {
+      "label": "candidate",
+      "binary_sha256": "8fd001c37bd4844c93f2a33cc5d2d2c8065348236546e6321036fb41a5dfe285",
+      "disassembly_sha256": "22b64f7441f2817cab4786469df158116349ac5bc2dc9d424e977dc7e5b605b3",
+      "binary_bytes": 2896104,
+      "retained_binary": "candidate-esp32sim.gz",
+      "retained_binary_bytes": 1278776,
+      "retained_binary_sha256": "14b0fd4c4878c044d3a80b86f060a38e23212415d79a7a6154dce6af52d8694e"
+    }
+  ],
+  "raw_retention": "Retained with the local qualification logs; not published. Rebuild both revisions with cargo +1.99.0 build --release --bins and rerun compare.py."
+}

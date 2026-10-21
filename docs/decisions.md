@@ -263,7 +263,11 @@ Things that cost real time to find out, recorded so they do not have to be found
   recipe stubs that one function (`--stub bb_init=0`), keeps every other PHY step, and the MAC
   model is written not to depend on the PHY at all. The S3 panel's `esp_wifi_start=0` is the same
   policy. What the blob *polls over regi2c* is modelled (the RF block's SDM status reads 0x5b),
-  because that is a documented bus with an observable value.
+  because that is a documented bus with an observable value. Superseded for `bb_init` by #203
+  ([EX220](experiments.md#ex220)): two fields of that block could be inferred from the blob's own
+  code (TX-DC done, the tone readback), and with them modelled the calibration completes in 23.8 ms
+  of device time, so the C6 recipes run it and the stub is gone (#248). The policy stands where no
+  register behaviour can be inferred.
 - **The RISC-V core stops at stub and probe addresses.** `Core::set_boundaries` existed for the
   Xtensa block interpreter; the RISC-V `run` now checks the same bloom per instruction. Before,
   `--stub` on the C3/C6 only worked when a periph write happened to end a run at the right pc.

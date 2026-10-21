@@ -1,0 +1,759 @@
+{
+  "counts": {
+    "identical": 119,
+    "different": 6,
+    "missing": 0
+  },
+  "functions": [
+    {
+      "function": "<esp32::bus::SocBus as emu_core::bus::Bus>::fetch",
+      "status": "identical",
+      "main_instructions": 122,
+      "candidate_instructions": 122
+    },
+    {
+      "function": "<esp32::bus::SocBus as emu_core::bus::Bus>::read16",
+      "status": "identical",
+      "main_instructions": 121,
+      "candidate_instructions": 121
+    },
+    {
+      "function": "<esp32::bus::SocBus as emu_core::bus::Bus>::read32",
+      "status": "identical",
+      "main_instructions": 171,
+      "candidate_instructions": 171
+    },
+    {
+      "function": "<esp32::bus::SocBus as emu_core::bus::Bus>::read8",
+      "status": "identical",
+      "main_instructions": 106,
+      "candidate_instructions": 106
+    },
+    {
+      "function": "<esp32::bus::SocBus as emu_core::bus::Bus>::tick",
+      "status": "identical",
+      "main_instructions": 2207,
+      "candidate_instructions": 2207
+    },
+    {
+      "function": "<esp32::bus::SocBus as esp_soc::soc::SocBus>::next_deadline",
+      "status": "identical",
+      "main_instructions": 817,
+      "candidate_instructions": 817
+    },
+    {
+      "function": "<esp32::bus::SocBus>::periph_read",
+      "status": "identical",
+      "main_instructions": 73,
+      "candidate_instructions": 73
+    },
+    {
+      "function": "<esp32::bus::SocBus>::store",
+      "status": "different",
+      "main_instructions": 2722,
+      "candidate_instructions": 2747
+    },
+    {
+      "function": "<esp32c3::bus::SocBus as emu_core::bus::Bus>::fetch",
+      "status": "identical",
+      "main_instructions": 103,
+      "candidate_instructions": 103
+    },
+    {
+      "function": "<esp32c3::bus::SocBus as emu_core::bus::Bus>::read16",
+      "status": "identical",
+      "main_instructions": 114,
+      "candidate_instructions": 114
+    },
+    {
+      "function": "<esp32c3::bus::SocBus as emu_core::bus::Bus>::read32",
+      "status": "identical",
+      "main_instructions": 114,
+      "candidate_instructions": 114
+    },
+    {
+      "function": "<esp32c3::bus::SocBus as emu_core::bus::Bus>::read8",
+      "status": "identical",
+      "main_instructions": 96,
+      "candidate_instructions": 96
+    },
+    {
+      "function": "<esp32c3::bus::SocBus as emu_core::bus::Bus>::tick",
+      "status": "identical",
+      "main_instructions": 279,
+      "candidate_instructions": 279
+    },
+    {
+      "function": "<esp32c3::bus::SocBus as emu_core::bus::Bus>::write16",
+      "status": "identical",
+      "main_instructions": 57,
+      "candidate_instructions": 57
+    },
+    {
+      "function": "<esp32c3::bus::SocBus as emu_core::bus::Bus>::write32",
+      "status": "identical",
+      "main_instructions": 56,
+      "candidate_instructions": 56
+    },
+    {
+      "function": "<esp32c3::bus::SocBus as emu_core::bus::Bus>::write8",
+      "status": "identical",
+      "main_instructions": 54,
+      "candidate_instructions": 54
+    },
+    {
+      "function": "<esp32c3::bus::SocBus as esp_soc::soc::SocBus>::next_deadline",
+      "status": "identical",
+      "main_instructions": 194,
+      "candidate_instructions": 194
+    },
+    {
+      "function": "<esp32c3::bus::SocBus as esp_soc::soc::SocBus>::refresh_irq",
+      "status": "different",
+      "main_instructions": 341,
+      "candidate_instructions": 341
+    },
+    {
+      "function": "<esp32c3::bus::SocBus>::pending_work",
+      "status": "identical",
+      "main_instructions": 1890,
+      "candidate_instructions": 1890
+    },
+    {
+      "function": "<esp32c3::bus::SocBus>::periph_read",
+      "status": "identical",
+      "main_instructions": 190,
+      "candidate_instructions": 190
+    },
+    {
+      "function": "<esp32c3::bus::SocBus>::periph_write",
+      "status": "different",
+      "main_instructions": 1734,
+      "candidate_instructions": 1739
+    },
+    {
+      "function": "<esp32c3::bus::SocBus>::pin_deadline",
+      "status": "identical",
+      "main_instructions": 205,
+      "candidate_instructions": 205
+    },
+    {
+      "function": "<esp32c3::bus::SocBus>::tick_with_pins",
+      "status": "identical",
+      "main_instructions": 475,
+      "candidate_instructions": 475
+    },
+    {
+      "function": "<esp32c6::bus::SocBus as emu_core::bus::Bus>::fetch",
+      "status": "identical",
+      "main_instructions": 106,
+      "candidate_instructions": 106
+    },
+    {
+      "function": "<esp32c6::bus::SocBus as emu_core::bus::Bus>::read16",
+      "status": "identical",
+      "main_instructions": 96,
+      "candidate_instructions": 96
+    },
+    {
+      "function": "<esp32c6::bus::SocBus as emu_core::bus::Bus>::read32",
+      "status": "identical",
+      "main_instructions": 96,
+      "candidate_instructions": 96
+    },
+    {
+      "function": "<esp32c6::bus::SocBus as emu_core::bus::Bus>::read8",
+      "status": "identical",
+      "main_instructions": 84,
+      "candidate_instructions": 84
+    },
+    {
+      "function": "<esp32c6::bus::SocBus as emu_core::bus::Bus>::tick",
+      "status": "identical",
+      "main_instructions": 1983,
+      "candidate_instructions": 1983
+    },
+    {
+      "function": "<esp32c6::bus::SocBus as emu_core::bus::Bus>::write16",
+      "status": "identical",
+      "main_instructions": 49,
+      "candidate_instructions": 49
+    },
+    {
+      "function": "<esp32c6::bus::SocBus as emu_core::bus::Bus>::write32",
+      "status": "identical",
+      "main_instructions": 48,
+      "candidate_instructions": 48
+    },
+    {
+      "function": "<esp32c6::bus::SocBus as emu_core::bus::Bus>::write8",
+      "status": "identical",
+      "main_instructions": 47,
+      "candidate_instructions": 47
+    },
+    {
+      "function": "<esp32c6::bus::SocBus as esp_soc::soc::SocBus>::next_deadline",
+      "status": "identical",
+      "main_instructions": 298,
+      "candidate_instructions": 298
+    },
+    {
+      "function": "<esp32c6::bus::SocBus as esp_soc::soc::SocBus>::refresh_irq",
+      "status": "different",
+      "main_instructions": 446,
+      "candidate_instructions": 446
+    },
+    {
+      "function": "<esp32c6::bus::SocBus>::pending_work",
+      "status": "identical",
+      "main_instructions": 731,
+      "candidate_instructions": 731
+    },
+    {
+      "function": "<esp32c6::bus::SocBus>::periph_read",
+      "status": "identical",
+      "main_instructions": 225,
+      "candidate_instructions": 225
+    },
+    {
+      "function": "<esp32c6::bus::SocBus>::periph_write",
+      "status": "different",
+      "main_instructions": 1872,
+      "candidate_instructions": 1901
+    },
+    {
+      "function": "<esp32s3::bus::SocBus as emu_core::bus::Bus>::fetch",
+      "status": "identical",
+      "main_instructions": 102,
+      "candidate_instructions": 102
+    },
+    {
+      "function": "<esp32s3::bus::SocBus as emu_core::bus::Bus>::read16",
+      "status": "identical",
+      "main_instructions": 211,
+      "candidate_instructions": 211
+    },
+    {
+      "function": "<esp32s3::bus::SocBus as emu_core::bus::Bus>::read32",
+      "status": "identical",
+      "main_instructions": 235,
+      "candidate_instructions": 235
+    },
+    {
+      "function": "<esp32s3::bus::SocBus as emu_core::bus::Bus>::tick",
+      "status": "identical",
+      "main_instructions": 26,
+      "candidate_instructions": 26
+    },
+    {
+      "function": "<esp32s3::bus::SocBus as emu_core::bus::Bus>::write16",
+      "status": "identical",
+      "main_instructions": 266,
+      "candidate_instructions": 266
+    },
+    {
+      "function": "<esp32s3::bus::SocBus as emu_core::bus::Bus>::write32",
+      "status": "identical",
+      "main_instructions": 315,
+      "candidate_instructions": 315
+    },
+    {
+      "function": "<esp32s3::bus::SocBus as esp_soc::soc::SocBus>::refresh_irq",
+      "status": "identical",
+      "main_instructions": 29,
+      "candidate_instructions": 29
+    },
+    {
+      "function": "<esp32s3::bus::SocBus>::periph_read",
+      "status": "identical",
+      "main_instructions": 795,
+      "candidate_instructions": 795
+    },
+    {
+      "function": "<esp32s3::bus::SocBus>::periph_write_inner",
+      "status": "different",
+      "main_instructions": 1764,
+      "candidate_instructions": 1792
+    },
+    {
+      "function": "<esp32s3::bus::SocBus>::read32_access::<false>",
+      "status": "identical",
+      "main_instructions": 128,
+      "candidate_instructions": 128
+    },
+    {
+      "function": "<esp32s3::bus::SocBus>::read8_access::<false>",
+      "status": "identical",
+      "main_instructions": 77,
+      "candidate_instructions": 77
+    },
+    {
+      "function": "<esp32s3::bus::SocBus>::read8_access::<true>",
+      "status": "identical",
+      "main_instructions": 193,
+      "candidate_instructions": 193
+    },
+    {
+      "function": "<esp32s3::bus::SocBus>::refresh_tick_budget",
+      "status": "identical",
+      "main_instructions": 282,
+      "candidate_instructions": 282
+    },
+    {
+      "function": "<esp32s3::bus::SocBus>::tick_impl",
+      "status": "identical",
+      "main_instructions": 3686,
+      "candidate_instructions": 3686
+    },
+    {
+      "function": "<esp32s3::bus::SocBus>::write32_access::<false>",
+      "status": "identical",
+      "main_instructions": 199,
+      "candidate_instructions": 199
+    },
+    {
+      "function": "<esp32s3::bus::SocBus>::write8_access::<false>",
+      "status": "identical",
+      "main_instructions": 114,
+      "candidate_instructions": 114
+    },
+    {
+      "function": "<esp32s3::bus::SocBus>::write8_access::<true>",
+      "status": "identical",
+      "main_instructions": 232,
+      "candidate_instructions": 232
+    },
+    {
+      "function": "<esp_soc::machine::Machine<esp32::soc::Esp32>>::after_round",
+      "status": "identical",
+      "main_instructions": 84,
+      "candidate_instructions": 84
+    },
+    {
+      "function": "<esp_soc::machine::Machine<esp32::soc::Esp32>>::deliver_events",
+      "status": "identical",
+      "main_instructions": 114,
+      "candidate_instructions": 114
+    },
+    {
+      "function": "<esp_soc::machine::Machine<esp32::soc::Esp32>>::drain_console",
+      "status": "identical",
+      "main_instructions": 610,
+      "candidate_instructions": 610
+    },
+    {
+      "function": "<esp_soc::machine::Machine<esp32::soc::Esp32>>::present_irqs",
+      "status": "identical",
+      "main_instructions": 234,
+      "candidate_instructions": 234
+    },
+    {
+      "function": "<esp_soc::machine::Machine<esp32::soc::Esp32>>::settle_modeled_time",
+      "status": "identical",
+      "main_instructions": 737,
+      "candidate_instructions": 737
+    },
+    {
+      "function": "<esp_soc::machine::Machine<esp32::soc::Esp32>>::step_core",
+      "status": "identical",
+      "main_instructions": 838,
+      "candidate_instructions": 838
+    },
+    {
+      "function": "<esp_soc::machine::Machine<esp32c3::soc::C3>>::after_round",
+      "status": "identical",
+      "main_instructions": 84,
+      "candidate_instructions": 84
+    },
+    {
+      "function": "<esp_soc::machine::Machine<esp32c3::soc::C3>>::deliver_events",
+      "status": "identical",
+      "main_instructions": 115,
+      "candidate_instructions": 115
+    },
+    {
+      "function": "<esp_soc::machine::Machine<esp32c3::soc::C3>>::drain_console",
+      "status": "identical",
+      "main_instructions": 607,
+      "candidate_instructions": 607
+    },
+    {
+      "function": "<esp_soc::machine::Machine<esp32c3::soc::C3>>::present_irqs",
+      "status": "identical",
+      "main_instructions": 119,
+      "candidate_instructions": 119
+    },
+    {
+      "function": "<esp_soc::machine::Machine<esp32c3::soc::C3>>::run",
+      "status": "identical",
+      "main_instructions": 4319,
+      "candidate_instructions": 4319
+    },
+    {
+      "function": "<esp_soc::machine::Machine<esp32c3::soc::C3>>::settle_modeled_time",
+      "status": "identical",
+      "main_instructions": 349,
+      "candidate_instructions": 349
+    },
+    {
+      "function": "<esp_soc::machine::Machine<esp32c3::soc::C3>>::step_core",
+      "status": "identical",
+      "main_instructions": 463,
+      "candidate_instructions": 463
+    },
+    {
+      "function": "<esp_soc::machine::Machine<esp32c6::soc::C6>>::after_round",
+      "status": "identical",
+      "main_instructions": 92,
+      "candidate_instructions": 92
+    },
+    {
+      "function": "<esp_soc::machine::Machine<esp32c6::soc::C6>>::deliver_events",
+      "status": "identical",
+      "main_instructions": 115,
+      "candidate_instructions": 115
+    },
+    {
+      "function": "<esp_soc::machine::Machine<esp32c6::soc::C6>>::drain_console",
+      "status": "identical",
+      "main_instructions": 1218,
+      "candidate_instructions": 1218
+    },
+    {
+      "function": "<esp_soc::machine::Machine<esp32c6::soc::C6>>::present_irqs",
+      "status": "identical",
+      "main_instructions": 120,
+      "candidate_instructions": 120
+    },
+    {
+      "function": "<esp_soc::machine::Machine<esp32c6::soc::C6>>::run",
+      "status": "identical",
+      "main_instructions": 4325,
+      "candidate_instructions": 4325
+    },
+    {
+      "function": "<esp_soc::machine::Machine<esp32c6::soc::C6>>::settle_modeled_time",
+      "status": "identical",
+      "main_instructions": 350,
+      "candidate_instructions": 350
+    },
+    {
+      "function": "<esp_soc::machine::Machine<esp32c6::soc::C6>>::step_core",
+      "status": "identical",
+      "main_instructions": 465,
+      "candidate_instructions": 465
+    },
+    {
+      "function": "<esp_soc::machine::Machine<esp32s3::soc::S3>>::after_round",
+      "status": "identical",
+      "main_instructions": 116,
+      "candidate_instructions": 116
+    },
+    {
+      "function": "<esp_soc::machine::Machine<esp32s3::soc::S3>>::deliver_events",
+      "status": "identical",
+      "main_instructions": 115,
+      "candidate_instructions": 115
+    },
+    {
+      "function": "<esp_soc::machine::Machine<esp32s3::soc::S3>>::drain_console",
+      "status": "identical",
+      "main_instructions": 615,
+      "candidate_instructions": 615
+    },
+    {
+      "function": "<esp_soc::machine::Machine<esp32s3::soc::S3>>::present_irqs",
+      "status": "identical",
+      "main_instructions": 247,
+      "candidate_instructions": 247
+    },
+    {
+      "function": "<esp_soc::machine::Machine<esp32s3::soc::S3>>::settle_modeled_time",
+      "status": "identical",
+      "main_instructions": 661,
+      "candidate_instructions": 661
+    },
+    {
+      "function": "<esp_soc::machine::Machine<esp32s3::soc::S3>>::step_core",
+      "status": "identical",
+      "main_instructions": 992,
+      "candidate_instructions": 992
+    },
+    {
+      "function": "<esp_soc::machine::modeled::RecordingBus<esp32::bus::SocBus> as emu_core::bus::Bus>::read16",
+      "status": "identical",
+      "main_instructions": 37,
+      "candidate_instructions": 37
+    },
+    {
+      "function": "<esp_soc::machine::modeled::RecordingBus<esp32::bus::SocBus> as emu_core::bus::Bus>::read32",
+      "status": "identical",
+      "main_instructions": 37,
+      "candidate_instructions": 37
+    },
+    {
+      "function": "<esp_soc::machine::modeled::RecordingBus<esp32::bus::SocBus> as emu_core::bus::Bus>::read8",
+      "status": "identical",
+      "main_instructions": 39,
+      "candidate_instructions": 39
+    },
+    {
+      "function": "<esp_soc::machine::modeled::RecordingBus<esp32::bus::SocBus> as emu_core::bus::Bus>::write16",
+      "status": "identical",
+      "main_instructions": 40,
+      "candidate_instructions": 40
+    },
+    {
+      "function": "<esp_soc::machine::modeled::RecordingBus<esp32::bus::SocBus> as emu_core::bus::Bus>::write32",
+      "status": "identical",
+      "main_instructions": 40,
+      "candidate_instructions": 40
+    },
+    {
+      "function": "<esp_soc::machine::modeled::RecordingBus<esp32::bus::SocBus> as emu_core::bus::Bus>::write8",
+      "status": "identical",
+      "main_instructions": 41,
+      "candidate_instructions": 41
+    },
+    {
+      "function": "<esp_soc::machine::modeled::RecordingBus<esp32c3::bus::SocBus> as emu_core::bus::Bus>::read16",
+      "status": "identical",
+      "main_instructions": 37,
+      "candidate_instructions": 37
+    },
+    {
+      "function": "<esp_soc::machine::modeled::RecordingBus<esp32c3::bus::SocBus> as emu_core::bus::Bus>::read32",
+      "status": "identical",
+      "main_instructions": 37,
+      "candidate_instructions": 37
+    },
+    {
+      "function": "<esp_soc::machine::modeled::RecordingBus<esp32c3::bus::SocBus> as emu_core::bus::Bus>::read8",
+      "status": "identical",
+      "main_instructions": 39,
+      "candidate_instructions": 39
+    },
+    {
+      "function": "<esp_soc::machine::modeled::RecordingBus<esp32c3::bus::SocBus> as emu_core::bus::Bus>::write16",
+      "status": "identical",
+      "main_instructions": 90,
+      "candidate_instructions": 90
+    },
+    {
+      "function": "<esp_soc::machine::modeled::RecordingBus<esp32c3::bus::SocBus> as emu_core::bus::Bus>::write32",
+      "status": "identical",
+      "main_instructions": 90,
+      "candidate_instructions": 90
+    },
+    {
+      "function": "<esp_soc::machine::modeled::RecordingBus<esp32c3::bus::SocBus> as emu_core::bus::Bus>::write8",
+      "status": "identical",
+      "main_instructions": 93,
+      "candidate_instructions": 93
+    },
+    {
+      "function": "<esp_soc::machine::modeled::RecordingBus<esp32c6::bus::SocBus> as emu_core::bus::Bus>::read16",
+      "status": "identical",
+      "main_instructions": 37,
+      "candidate_instructions": 37
+    },
+    {
+      "function": "<esp_soc::machine::modeled::RecordingBus<esp32c6::bus::SocBus> as emu_core::bus::Bus>::read32",
+      "status": "identical",
+      "main_instructions": 37,
+      "candidate_instructions": 37
+    },
+    {
+      "function": "<esp_soc::machine::modeled::RecordingBus<esp32c6::bus::SocBus> as emu_core::bus::Bus>::read8",
+      "status": "identical",
+      "main_instructions": 39,
+      "candidate_instructions": 39
+    },
+    {
+      "function": "<esp_soc::machine::modeled::RecordingBus<esp32c6::bus::SocBus> as emu_core::bus::Bus>::write16",
+      "status": "identical",
+      "main_instructions": 87,
+      "candidate_instructions": 87
+    },
+    {
+      "function": "<esp_soc::machine::modeled::RecordingBus<esp32c6::bus::SocBus> as emu_core::bus::Bus>::write32",
+      "status": "identical",
+      "main_instructions": 87,
+      "candidate_instructions": 87
+    },
+    {
+      "function": "<esp_soc::machine::modeled::RecordingBus<esp32c6::bus::SocBus> as emu_core::bus::Bus>::write8",
+      "status": "identical",
+      "main_instructions": 79,
+      "candidate_instructions": 79
+    },
+    {
+      "function": "<esp_soc::machine::modeled::RecordingBus<esp32s3::bus::SocBus> as emu_core::bus::Bus>::read16",
+      "status": "identical",
+      "main_instructions": 37,
+      "candidate_instructions": 37
+    },
+    {
+      "function": "<esp_soc::machine::modeled::RecordingBus<esp32s3::bus::SocBus> as emu_core::bus::Bus>::read32",
+      "status": "identical",
+      "main_instructions": 37,
+      "candidate_instructions": 37
+    },
+    {
+      "function": "<esp_soc::machine::modeled::RecordingBus<esp32s3::bus::SocBus> as emu_core::bus::Bus>::read8",
+      "status": "identical",
+      "main_instructions": 39,
+      "candidate_instructions": 39
+    },
+    {
+      "function": "<esp_soc::machine::modeled::RecordingBus<esp32s3::bus::SocBus> as emu_core::bus::Bus>::write16",
+      "status": "identical",
+      "main_instructions": 35,
+      "candidate_instructions": 35
+    },
+    {
+      "function": "<esp_soc::machine::modeled::RecordingBus<esp32s3::bus::SocBus> as emu_core::bus::Bus>::write32",
+      "status": "identical",
+      "main_instructions": 35,
+      "candidate_instructions": 35
+    },
+    {
+      "function": "<esp_soc::machine::modeled::RecordingBus<esp32s3::bus::SocBus> as emu_core::bus::Bus>::write8",
+      "status": "identical",
+      "main_instructions": 36,
+      "candidate_instructions": 36
+    },
+    {
+      "function": "<xtensa_lx7::state::Cpu as emu_core::core::Core>::run::<esp32::bus::SocBus>",
+      "status": "identical",
+      "main_instructions": 706,
+      "candidate_instructions": 706
+    },
+    {
+      "function": "<xtensa_lx7::state::Cpu as emu_core::core::Core>::run::<esp32s3::bus::SocBus>",
+      "status": "identical",
+      "main_instructions": 948,
+      "candidate_instructions": 948
+    },
+    {
+      "function": "riscv_rv32::exec::step_outcome::<esp32c3::bus::SocBus>",
+      "status": "identical",
+      "main_instructions": 846,
+      "candidate_instructions": 846
+    },
+    {
+      "function": "riscv_rv32::exec::step_outcome::<esp32c6::bus::SocBus>",
+      "status": "identical",
+      "main_instructions": 846,
+      "candidate_instructions": 846
+    },
+    {
+      "function": "xtensa_lx7::block::step_extra::<esp32::bus::SocBus>",
+      "status": "identical",
+      "main_instructions": 143,
+      "candidate_instructions": 143
+    },
+    {
+      "function": "xtensa_lx7::block::step_extra::<esp32s3::bus::SocBus>",
+      "status": "identical",
+      "main_instructions": 143,
+      "candidate_instructions": 143
+    },
+    {
+      "function": "xtensa_lx7::exec::exec_insn::<esp32::bus::SocBus>",
+      "status": "identical",
+      "main_instructions": 2566,
+      "candidate_instructions": 2566
+    },
+    {
+      "function": "xtensa_lx7::exec::exec_insn::<esp32s3::bus::SocBus>",
+      "status": "identical",
+      "main_instructions": 2562,
+      "candidate_instructions": 2562
+    },
+    {
+      "function": "xtensa_lx7::exec::exec_insn::<esp_soc::machine::modeled::RecordingBus<esp32::bus::SocBus>>",
+      "status": "identical",
+      "main_instructions": 2562,
+      "candidate_instructions": 2562
+    },
+    {
+      "function": "xtensa_lx7::exec::exec_insn::<esp_soc::machine::modeled::RecordingBus<esp32s3::bus::SocBus>>",
+      "status": "identical",
+      "main_instructions": 2562,
+      "candidate_instructions": 2562
+    },
+    {
+      "function": "xtensa_lx7::exec::exec_mac16::<esp32::bus::SocBus>",
+      "status": "identical",
+      "main_instructions": 208,
+      "candidate_instructions": 208
+    },
+    {
+      "function": "xtensa_lx7::exec::exec_mac16::<esp32s3::bus::SocBus>",
+      "status": "identical",
+      "main_instructions": 208,
+      "candidate_instructions": 208
+    },
+    {
+      "function": "xtensa_lx7::exec::exec_mac16::<esp_soc::machine::modeled::RecordingBus<esp32::bus::SocBus>>",
+      "status": "identical",
+      "main_instructions": 261,
+      "candidate_instructions": 261
+    },
+    {
+      "function": "xtensa_lx7::exec::exec_mac16::<esp_soc::machine::modeled::RecordingBus<esp32s3::bus::SocBus>>",
+      "status": "identical",
+      "main_instructions": 261,
+      "candidate_instructions": 261
+    },
+    {
+      "function": "xtensa_lx7::pie::exec::<esp32::bus::SocBus>",
+      "status": "identical",
+      "main_instructions": 468,
+      "candidate_instructions": 468
+    },
+    {
+      "function": "xtensa_lx7::pie::exec::<esp32s3::bus::SocBus>",
+      "status": "identical",
+      "main_instructions": 467,
+      "candidate_instructions": 467
+    },
+    {
+      "function": "xtensa_lx7::pie::exec::<esp_soc::machine::modeled::RecordingBus<esp32::bus::SocBus>>",
+      "status": "identical",
+      "main_instructions": 776,
+      "candidate_instructions": 776
+    },
+    {
+      "function": "xtensa_lx7::pie::exec::<esp_soc::machine::modeled::RecordingBus<esp32s3::bus::SocBus>>",
+      "status": "identical",
+      "main_instructions": 768,
+      "candidate_instructions": 768
+    },
+    {
+      "function": "xtensa_lx7::pie::exec_table::<esp32::bus::SocBus>",
+      "status": "identical",
+      "main_instructions": 4774,
+      "candidate_instructions": 4774
+    },
+    {
+      "function": "xtensa_lx7::pie::exec_table::<esp32s3::bus::SocBus>",
+      "status": "identical",
+      "main_instructions": 4741,
+      "candidate_instructions": 4741
+    },
+    {
+      "function": "xtensa_lx7::pie::exec_table::<esp_soc::machine::modeled::RecordingBus<esp32::bus::SocBus>>",
+      "status": "identical",
+      "main_instructions": 5721,
+      "candidate_instructions": 5721
+    },
+    {
+      "function": "xtensa_lx7::pie::exec_table::<esp_soc::machine::modeled::RecordingBus<esp32s3::bus::SocBus>>",
+      "status": "identical",
+      "main_instructions": 5723,
+      "candidate_instructions": 5723
+    }
+  ]
+}

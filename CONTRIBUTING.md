@@ -131,14 +131,19 @@ Releases are tagged `vMAJOR.MINOR.PATCH` and carry one asset per platform, built
    let `cargo check` update `Cargo.lock`. That is the whole commit.
 2. Open the pull request and let CI run. Merge it with a merge commit, so the tag names a commit
    that is on `main`.
-3. Tag the merge commit and push the tag: `git tag -a vX.Y.Z -m "esp32sim X.Y.Z" && git push origin vX.Y.Z`.
-   The release workflow refuses a tag that disagrees with the workspace version.
-4. The workflow builds macOS arm64, Linux x86_64 and Linux arm64 tarballs — each holding
-   `esp32sim`, `esp32sim-c3`, `esp32sim-c6`, `LICENSE` and `README.md` — writes a `SHA256SUMS.txt`,
-   and attaches everything to that tag's release. If no release exists it creates a **draft**, so
-   the notes and the Latest flag stay a human decision.
-5. Write the release notes and publish. `workflow_dispatch` with a tag rebuilds the assets if a
-   build needs repeating.
+3. Create the release as a **draft** under your own account, before any tag exists, with the notes
+   ready: `gh release create vX.Y.Z --draft --target <merge commit> --title "esp32sim X.Y.Z"
+   --notes-file notes.md`. A draft does not create the tag, and a release created by the workflow
+   would be attributed to github-actions.
+4. Tag the merge commit and push the tag: `git tag -a vX.Y.Z -m "esp32sim X.Y.Z" <merge commit> &&
+   git push origin vX.Y.Z`. The workflow refuses a tag that disagrees with the workspace version,
+   builds macOS arm64, Linux x86_64 and Linux arm64 tarballs — each holding `esp32sim`,
+   `esp32sim-c3`, `esp32sim-c6`, `LICENSE` and `README.md` — writes a `SHA256SUMS.txt`, and attaches
+   everything to your draft. It fails if the draft does not exist yet; create it and rerun with
+   `workflow_dispatch` and the tag.
+5. Check the assets and checksums, then publish the draft and mark it Latest
+   (`gh release edit vX.Y.Z --draft=false --latest`). `workflow_dispatch` with the tag rebuilds the
+   assets if a build needs repeating.
 
 ## License
 

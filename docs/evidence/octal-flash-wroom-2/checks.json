@@ -63,5 +63,75 @@
     "check": "not-run",
     "command": "tools/wasm-jit-test.sh; the profiling-features build; the Linux x5 receipt contracts; native-aarch64 job",
     "notes": "Linux/macOS-only steps of ci.yml, left to CI; this change touches none of their inputs"
+  },
+  {
+    "check": "clippy-native",
+    "follow_up": "after the review of #232, base bd0dbd1a",
+    "command": "cargo +1.99.1 clippy --workspace --all-targets -- -D warnings",
+    "exit_code": 0
+  },
+  {
+    "check": "clippy-wasm",
+    "follow_up": "after the review of #232, base bd0dbd1a",
+    "command": "cargo +1.99.1 clippy --release --target wasm32-unknown-unknown -p esp32sim-wasm --features jit-tests -- -D warnings",
+    "exit_code": 0
+  },
+  {
+    "check": "workspace-ci",
+    "follow_up": "after the review of #232, base bd0dbd1a",
+    "command": "cargo +1.99.1 test --release --workspace --no-fail-fast -- --include-ignored --skip external_",
+    "exit_code": 101,
+    "environment": "ESP32SIM_ROM_DIR=roms (tools/fetch-rom-elfs.sh); Rust 1.99.1 (58cf8f9c3 2026-10-13); Windows 11, core.autocrlf=false checkout",
+    "tests": {
+      "binaries": 105,
+      "passed": 1004,
+      "failed": 2,
+      "ignored": 0
+    },
+    "failures": "the same two decoder_matches_corpus tests (Windows drive-letter path split), unrelated; no golden regenerated"
+  },
+  {
+    "check": "quad-user-erase",
+    "follow_up": "after the review of #232, base bd0dbd1a",
+    "command": "cargo +1.99.1 test --release -p esp-periph --lib quad_user_erase_takes_the_address_low_byte_from_the_data_phase",
+    "exit_code": 0,
+    "mutation": "with the fold removed (erase_addr = addr) the test fails: '0x20 split=true: the block at 0x230000'"
+  },
+  {
+    "check": "flash-octal-refusal",
+    "follow_up": "after the review of #232, base bd0dbd1a",
+    "command": "cargo +1.99.1 test --release -p esp32sim --test flash_octal_option",
+    "exit_code": 0,
+    "mutation": "without the classic's --flash-octal entry the classic boots with the flag ('[emu] boot from ROM on the classic ESP32') and the test fails"
+  },
+  {
+    "check": "wasm-build-and-demos",
+    "follow_up": "after the review of #232, base bd0dbd1a",
+    "command": "tools/wasm-build.sh && node tools/wasm-test.mjs hello c3-hello c6-hello c6-energy-scan c6-contiki c6-contiki-net c6-rpl-net panel",
+    "exit_code": 0
+  },
+  {
+    "check": "privacy",
+    "follow_up": "after the review of #232, base bd0dbd1a",
+    "command": "node tools/check-evidence-privacy.mjs",
+    "exit_code": 0
+  },
+  {
+    "check": "firmware-octal16",
+    "follow_up": "after the review of #232, base bd0dbd1a",
+    "command": "the inputs.json octal16 run plus --debug spi1",
+    "exit_code": 0,
+    "uart0": "both boots: Octal Flash Mode Enabled, flash id=c28038 chip=16777216 physical=16777216, psram size=8388608 heap=8388608, bad=0, flash end=ok, flash spiffs=ok, app magic=e9, done",
+    "spi1": "4 SE4B (0x21) erases in the octal form; RDCR (0x15) 2, RDSFDP (0x5A) 6 in the SPI form",
+    "uart0_sha256": "99cceb8794b4d0cbe3889568197dbf2a959c9f18a3c8c4261966f2616c74f9c6"
+  },
+  {
+    "check": "firmware-octal16-quad-control",
+    "follow_up": "after the review of #232, base bd0dbd1a",
+    "command": "the inputs.json control run (octal16 without --flash-octal) plus --debug spi1",
+    "exit_code": 0,
+    "uart0": "both boots: mode:DOUT, flash id=204018 chip=16777216 physical=16777216, bad=0, flash end=ok, flash spiffs=ok, app magic=e9, done",
+    "spi1": "no user-command erase (0x20, 0x52, 0xD8, 0x21, 0x5C, 0xDC): the erases go through FLASH_SE",
+    "uart0_sha256": "e0e4c2f1245ed4c44127ba48151fbabae8f7ebb256d95b9f29953a7fd04c64ae"
   }
 ]

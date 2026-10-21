@@ -81,41 +81,41 @@ I (94) phy: error: chgp_cal no done!!!
 error: pll_cal exceeds 2ms!!!
 error: pll_cal exceeds 2ms!!!
 error: pll_cal exceeds 2ms!!!
-I (104) phy_init: Saving new calibration data due to checksum failure or outdated calibration data, mode(2)
-W (104) wifi:ACK_TAB0   :0x   90a0b, QAM16:0x9 (24Mbps), QPSK:0xa (12Mbps), BPSK:0xb (6Mbps)
-W (104) wifi:CTS_TAB0   :0x   90a0b, QAM16:0x9 (24Mbps), QPSK:0xa (12Mbps), BPSK:0xb (6Mbps)
-W (104) wifi:(agc)0x600a7128:0xd2000000, min.avgNF:0xce->0xd2(dB), RCalCount:0x0, min.RRssi:0x0(-256.00)
-I (104) wifi:11ax coex: WDEVAX_PTI0(0x55777555), WDEVAX_PTI1(0x00003377).
+I (124) phy_init: Saving new calibration data due to checksum failure or outdated calibration data, mode(2)
+W (124) wifi:ACK_TAB0   :0x   90a0b, QAM16:0x9 (24Mbps), QPSK:0xa (12Mbps), BPSK:0xb (6Mbps)
+W (124) wifi:CTS_TAB0   :0x   90a0b, QAM16:0x9 (24Mbps), QPSK:0xa (12Mbps), BPSK:0xb (6Mbps)
+W (124) wifi:(agc)0x600a7128:0xd2000000, min.avgNF:0xce->0xd2(dB), RCalCount:0x0, min.RRssi:0x0(-256.00)
+I (124) wifi:11ax coex: WDEVAX_PTI0(0x55777555), WDEVAX_PTI1(0x00003377).
 
-I (104) wifi:mode : sta (dc:1e:d5:6e:8c:dc)
-I (104) wifi:enable tsf
-I (104) station: STARTED
-I (2604) station: SCAN found=1
-I (2604) station: SCAN 1 ssid="esp32sim" channel=6 rssi=-40 auth=WPA2 bssid=02:53:49:4d:00:01
-I (2604) station: CONNECT attempt=1 ssid="esp32sim" ESP_OK
-I (3254) wifi:new:<6,0>, old:<1,0>, ap:<255,255>, sta:<6,0>, prof:1, snd_ch_cfg:0x0
-I (3254) wifi:(connect)dot11_authmode:0x3, pairwise_cipher:0x3, group_cipher:0x3
-I (3254) wifi:state: init -> auth (0xb0)
-I (3254) wifi:state: auth -> assoc (0x0)
-I (3254) wifi:state: assoc -> run (0x10)
-I (3254) wifi:(trc)phytype:OFDM, snr:50, maxRate:108, highestRateIdx:0
-I (3254) wifi:ifidx:0, rssi:-40, nf:-90, phytype(0x1, OFDM), phymode(0x2, 11bg), max_rate:108, he:0, vht:0, ht:0
-I (3284) wifi:connected with esp32sim, aid = 1, channel 6, BW20, bssid = 02:53:49:4d:00:01
-I (3284) wifi:security: WPA2-PSK, phy: bg, rssi: -40, cipher(pairwise:0x3, group:0x3), pmf:0
-I (3284) wifi:pm start, type: 1, twt_start:0
+I (134) wifi:mode : sta (dc:1e:d5:6e:8c:dc)
+I (134) wifi:enable tsf
+I (134) station: STARTED
+I (2634) station: SCAN found=1
+I (2634) station: SCAN 1 ssid="esp32sim" channel=6 rssi=-40 auth=WPA2 bssid=02:53:49:4d:00:01
+I (2634) station: CONNECT attempt=1 ssid="esp32sim" ESP_OK
+I (3284) wifi:new:<6,0>, old:<1,0>, ap:<255,255>, sta:<6,0>, prof:1, snd_ch_cfg:0x0
+I (3284) wifi:(connect)dot11_authmode:0x3, pairwise_cipher:0x3, group_cipher:0x3
+I (3284) wifi:state: init -> auth (0xb0)
+I (3284) wifi:state: auth -> assoc (0x0)
+I (3284) wifi:state: assoc -> run (0x10)
+I (3284) wifi:(trc)phytype:OFDM, snr:50, maxRate:108, highestRateIdx:0
+I (3284) wifi:ifidx:0, rssi:-40, nf:-90, phytype(0x1, OFDM), phymode(0x2, 11bg), max_rate:108, he:0, vht:0, ht:0
+I (3314) wifi:connected with esp32sim, aid = 1, channel 6, BW20, bssid = 02:53:49:4d:00:01
+I (3314) wifi:security: WPA2-PSK, phy: bg, rssi: -40, cipher(pairwise:0x3, group:0x3), pmf:0
+I (3314) wifi:pm start, type: 1, twt_start:0
 
-I (3284) wifi:pm start, type:1, aid:0x1, trans-BSSID:02:53:49:4d:00:01, BSSID[5]:0x1, mbssid(max-indicator:0, index:0), he:0
-I (3284) wifi:dp: 1, bi: 102400, li: 3, scale listen interval from 307200 us to 307200 us
-I (3284) wifi:set rx beacon pti, rx_bcn_pti: 10, bcn_timeout: 25000, mt_pti: 10, mt_time: 10000
-I (3294) station: CONNECTED channel=6 bssid=02:53:49:4d:00:01
-I (3314) wifi:AP's beacon interval = 102400 us, DTIM period = 1
-I (4294) esp_netif_handlers: sta ip: 10.0.2.15, mask: 255.255.255.0, gw: 10.0.2.2
-I (4294) station: GOT_IP ip=10.0.2.15 mask=255.255.255.0 gw=10.0.2.2
-I (7604) station: STATUS state=connected rssi=-40 channel=6
-I (7604) station: PING seq=1 time=0 ms
-I (8604) station: PING seq=2 time=0 ms
-I (9604) station: PING seq=3 time=0 ms
-I (10604) station: PING seq=4 time=0 ms
-I (11604) station: PING seq=5 time=0 ms
-I (12604) station: PING done sent=5 received=5
-I (12604) station: STATUS state=connected rssi=-40 channel=6
+I (3314) wifi:pm start, type:1, aid:0x1, trans-BSSID:02:53:49:4d:00:01, BSSID[5]:0x1, mbssid(max-indicator:0, index:0), he:0
+I (3314) wifi:dp: 1, bi: 102400, li: 3, scale listen interval from 307200 us to 307200 us
+I (3314) wifi:set rx beacon pti, rx_bcn_pti: 10, bcn_timeout: 25000, mt_pti: 10, mt_time: 10000
+I (3324) station: CONNECTED channel=6 bssid=02:53:49:4d:00:01
+I (3414) wifi:AP's beacon interval = 102400 us, DTIM period = 1
+I (4324) esp_netif_handlers: sta ip: 10.0.2.15, mask: 255.255.255.0, gw: 10.0.2.2
+I (4324) station: GOT_IP ip=10.0.2.15 mask=255.255.255.0 gw=10.0.2.2
+I (7634) station: STATUS state=connected rssi=-40 channel=6
+I (7634) station: PING seq=1 time=0 ms
+I (8634) station: PING seq=2 time=0 ms
+I (9634) station: PING seq=3 time=0 ms
+I (10634) station: PING seq=4 time=0 ms
+I (11634) station: PING seq=5 time=0 ms
+I (12634) station: PING done sent=5 received=5
+I (12634) station: STATUS state=connected rssi=-40 channel=6

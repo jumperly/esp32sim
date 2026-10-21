@@ -1,0 +1,104 @@
+[
+  {
+    "mutation": "classic-write",
+    "test": "classic_routed_waveform_and_alias",
+    "killed": true,
+    "exit_code": 101
+  },
+  {
+    "mutation": "classic-reset",
+    "test": "classic_routed_waveform_and_alias",
+    "killed": true,
+    "exit_code": 101
+  },
+  {
+    "mutation": "classic-optout",
+    "test": "classic_routed_waveform_and_alias",
+    "killed": true,
+    "exit_code": 101
+  },
+  {
+    "mutation": "s3-reset",
+    "test": "s3_routed_waveform",
+    "killed": true,
+    "exit_code": 101
+  },
+  {
+    "mutation": "s3-write",
+    "test": "s3_routed_waveform",
+    "killed": true,
+    "exit_code": 101
+  },
+  {
+    "mutation": "s3-optout",
+    "test": "s3_routed_waveform",
+    "killed": true,
+    "exit_code": 101
+  },
+  {
+    "mutation": "c3-write",
+    "test": "c3_routed_waveform",
+    "killed": true,
+    "exit_code": 101
+  },
+  {
+    "mutation": "c3-reset",
+    "test": "c3_routed_waveform",
+    "killed": true,
+    "exit_code": 101
+  },
+  {
+    "mutation": "c3-optout",
+    "test": "c3_routed_waveform",
+    "killed": true,
+    "exit_code": 101
+  },
+  {
+    "mutation": "c6-reset",
+    "test": "c6_routed_waveform",
+    "killed": true,
+    "exit_code": 101
+  },
+  {
+    "mutation": "c6-write",
+    "test": "c6_routed_waveform",
+    "killed": true,
+    "exit_code": 101
+  },
+  {
+    "mutation": "c6-optout",
+    "test": "c6_routed_waveform",
+    "killed": true,
+    "exit_code": 101
+  },
+  {
+    "mutation": "mux",
+    "test": "software_drive_respects_mux_route_enable_and_inversion",
+    "killed": true,
+    "exit_code": 101
+  },
+  {
+    "mutation": "route",
+    "test": "software_drive_respects_mux_route_enable_and_inversion",
+    "killed": true,
+    "exit_code": 101
+  },
+  {
+    "mutation": "enable",
+    "test": "software_drive_respects_mux_route_enable_and_inversion",
+    "killed": true,
+    "exit_code": 101
+  },
+  {
+    "mutation": "output-inversion",
+    "test": "software_drive_respects_mux_route_enable_and_inversion",
+    "killed": true,
+    "exit_code": 101
+  },
+  {
+    "mutation": "enable-inversion",
+    "test": "software_drive_respects_mux_route_enable_and_inversion",
+    "killed": true,
+    "exit_code": 101
+  }
+]

@@ -173,6 +173,15 @@ impl SpiMem {
                 return;
             }
             if self.log { eprintln!("[spi1] usr cmd {:#04x} addr {:#x}{} miso {} mosi {}", c, addr, if has_addr { "" } else { " (no addr)" }, if has_miso { miso_bytes } else { 0 }, if has_mosi { mosi_bytes } else { 0 }); }
+            // A 24-bit erase takes its address from the first 24 bits on the wire: the address
+            // phase, then MOSI bytes. ESP-IDF v5.5.5 on the S3 sends an erase through
+            // `spi_flash_hal_common_command` as 16 address bits plus the low byte as data
+            // (components/hal/spi_flash_hal_common.inc:194-208, the PMS workaround); v5.5.4 has
+            // no such split. Its quad erases below 16 MB use the dedicated FLASH_SE / FLASH_BE
+            // bits instead (components/hal/spi_flash_hal_iram.c:42-47), which carry the whole address.
+            let erase_addr = if has_mosi && addr_bits < 24 {
+                self.w_bytes(((24 - addr_bits) / 8) as usize).iter().fold(addr, |a, &b| (a << 8) | u32::from(b))
+            } else { addr };
             match c {
                 0x03 | 0x0b | 0x3b | 0x6b | 0xbb | 0xeb => { let d = rd(addr, miso_bytes); self.set_w_bytes(&d); }
                 0x9f => { let j = self.jedec; self.set_w_bytes(&j); }
@@ -183,9 +192,9 @@ impl SpiMem {
                 0x01 | 0x31 | 0x11 => self.status &= !0x02,        // WRSR*: latch consumed (keep QE set)
                 0x15 => self.set_w_bytes(&[0x00]),
                 0x02 | 0x32 | 0x38 => { let d = self.w_bytes(mosi_bytes); for (i, b) in d.iter().enumerate() { let x = addr as usize + i; if x < fsize { flash[x] &= *b; } } self.dirty.push((DirtyMem::Flash, addr as usize, d.len())); self.status &= !0x02; }
-                0x20 => { let a = (addr as usize) & !0xfff; for b in flash.iter_mut().take((a + 0x1000).min(fsize)).skip(a) { *b = 0xff; } self.dirty.push((DirtyMem::Flash, a, 0x1000)); self.status &= !0x02; }
-                0x52 => { let a = (addr as usize) & !0x7fff; for b in flash.iter_mut().take((a + 0x8000).min(fsize)).skip(a) { *b = 0xff; } self.dirty.push((DirtyMem::Flash, a, 0x8000)); self.status &= !0x02; }
-                0xd8 => { let a = (addr as usize) & !0xffff; for b in flash.iter_mut().take((a + 0x10000).min(fsize)).skip(a) { *b = 0xff; } self.dirty.push((DirtyMem::Flash, a, 0x10000)); self.status &= !0x02; }
+                0x20 => { let a = (erase_addr as usize) & !0xfff; for b in flash.iter_mut().take((a + 0x1000).min(fsize)).skip(a) { *b = 0xff; } self.dirty.push((DirtyMem::Flash, a, 0x1000)); self.status &= !0x02; }
+                0x52 => { let a = (erase_addr as usize) & !0x7fff; for b in flash.iter_mut().take((a + 0x8000).min(fsize)).skip(a) { *b = 0xff; } self.dirty.push((DirtyMem::Flash, a, 0x8000)); self.status &= !0x02; }
+                0xd8 => { let a = (erase_addr as usize) & !0xffff; for b in flash.iter_mut().take((a + 0x10000).min(fsize)).skip(a) { *b = 0xff; } self.dirty.push((DirtyMem::Flash, a, 0x10000)); self.status &= !0x02; }
                 0xc7 | 0x60 => { for b in flash.iter_mut() { *b = 0xff; } self.dirty.push((DirtyMem::Flash, 0, fsize)); self.status &= !0x02; }
                 _ => { if has_miso { self.set_w_bytes(&vec![0u8; miso_bytes]); } }
             }
@@ -512,5 +521,27 @@ mod tests {
         flash_cmd(&mut s, &mut flash, 0x12, true, Some((at + 4, 32)), &[0x12, 0x34, 0xa5], 0);
         assert_eq!(flash_cmd(&mut s, &mut flash, 0xee, true, Some((at, 32)), &[], 8), [0xff, 0xff, 0xff, 0xff, 0x12, 0x34, 0xa5, 0xff]);
         assert_eq!(s.dirty.last(), Some(&(DirtyMem::Flash, at as usize + 4, 3)));
+    }
+
+    /// A quad user-command erase in ESP-IDF v5.5.5's S3 form, 16 address bits plus the low byte as
+    /// data (components/hal/spi_flash_hal_common.inc:194-208), erases the block of the whole
+    /// address, as the same erase with a 24-bit address phase does.
+    #[test]
+    fn quad_user_erase_takes_the_address_low_byte_from_the_data_phase() {
+        for (cmd, size) in [(0x20u8, 0x1000usize), (0x52, 0x8000), (0xd8, 0x10000)] {
+            for split in [true, false] {
+                let mut s = SpiMem::new(true);
+                let mut flash: Vec<u8> = (0..4usize << 20).map(|i| (i >> 12) as u8).collect();
+                let at = 0x23_0000u32;
+                if split { flash_cmd(&mut s, &mut flash, cmd, false, Some((at >> 8, 16)), &[at as u8], 0); }
+                else { flash_cmd(&mut s, &mut flash, cmd, false, Some((at, 24)), &[], 0); }
+                let a = at as usize;
+                assert!(flash[a..a + size].iter().all(|&b| b == 0xff), "{cmd:#04x} split={split}: the block at {at:#x}");
+                assert_eq!(flash[a - 1], ((a - 1) >> 12) as u8, "{cmd:#04x} split={split}: nothing before it");
+                assert_eq!(flash[a + size], ((a + size) >> 12) as u8, "{cmd:#04x} split={split}: nothing after it");
+                assert_eq!(flash[0x2000], 0x02, "{cmd:#04x} split={split}: not the block of the high bits alone");
+                assert_eq!(s.dirty.last(), Some(&(DirtyMem::Flash, a, size)));
+            }
+        }
     }
 }

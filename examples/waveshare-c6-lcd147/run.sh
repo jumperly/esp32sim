@@ -10,4 +10,4 @@ B="${ENERGY_SCAN_DIR:-$HOME/work/esp32/energy_scan}/build"
 exec ./target/release/esp32sim-c6 --boot rom --flash-mb 4 --board waveshare-c6-lcd147 \
     --bootloader "$B/bootloader/bootloader.bin" --ptable "$B/partition_table/partition-table.bin" \
     --app "$B/energy_scan.bin" --elf "$B/energy_scan.elf" \
-    --stub bb_init=0 "$@"
+    "$@"

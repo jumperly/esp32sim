@@ -63,8 +63,10 @@ change. No golden was regenerated; the hello, atech, panel and classic goldens p
 
 The DTR byte swap on the wire (`esp_rom_spi_set_dtr_swap_mode`) is not modelled: data is
 always in order, which is what the firmware sees after the ROM configures the swap. RDCR
-(0x15) answers 0. Program and erase do not check the write-enable latch, as the quad model
-does not. The MR2 density part is after NickoScope's esp32sim fork, commit 2b52ad5
+(0x15) answers 0, and so does every command the model does not decode, among them RDSFDP (0x5A):
+the firmware below sends RDCR twice and RDSFDP six times over its two boots, so its SFDP reads
+get zeros (wording corrected in the follow-up below). Program and erase do not check the
+write-enable latch, as the quad model does not. The MR2 density part is after NickoScope's esp32sim fork, commit 2b52ad5
 (github.com/NickoScope/TWIN-NickoScopeMatrix-64x128, MIT), re-implemented here with the
 512 Mbit code added. None of this was compared with silicon: the chip behaviour is the
 datasheets' and what the ESP-IDF drivers send and expect.
@@ -189,3 +191,56 @@ per tick.
 - STR OPI is modelled by the same code paths as DTR without the byte doubling; the firmware
   exercised DTR (Arduino's `FlashMode=opi` is DTR).
 - No speed, timing or RF claim.
+
+## Follow-up after the review
+
+Base: upstream/main `bd0dbd1a`. The points of the
+[review of #232](https://github.com/mikroverk/esp32sim/pull/232#issuecomment-6309112473), one change each:
+
+1. **Quad user-command erases take the address low byte from the data phase.** On the S3,
+   ESP-IDF v5.5.5 `spi_flash_hal_common_command` sends an erase as its address minus the low
+   byte plus that byte as one MOSI byte (components/hal/spi_flash_hal_common.inc:194-208,
+   `#if CONFIG_IDF_TARGET_ESP32S3`); v5.5.4 and v5.5.1 have no such block. Only the octal arm
+   folded the byte back. The quad user-command arms SE 0x20, BE32K 0x52 and BE 0xD8 now take a
+   24-bit erase address from the first 24 bits on the wire, the address phase and then MOSI
+   bytes, so the split and the whole-address form erase the same block. Reach with the stock
+   drivers: a generic quad erase below 16 MB goes through the dedicated FLASH_SE / FLASH_BE bits
+   (spi_flash_chip_generic.c:212-226 and :243-257 call `spi_flash_hal_erase_sector` /
+   `_block`, components/hal/spi_flash_hal_iram.c:42-47), which carry the whole address and are
+   not split; `common_command` carries the generic driver's erases only for addresses above
+   16 MB, as the 4-byte forms 0x21 / 0xDC (spi_flash_chip_generic.c:131-150, the Winbond and GD
+   drivers alike), which the quad model does not decode. The firmware below therefore never
+   reaches the changed arms: the octal16 image on the quad model erases its last sector and its
+   spiffs sector through FLASH_SE with no user-command erase on SPI1 (`--debug spi1`).
+2. **`--flash-octal` is refused on `--chip esp32`**, as on the C3 and C6, instead of being
+   accepted and ignored (cli/src/lib.rs, the classic's list of unavailable flags).
+3. **docs/cli.md:** an `--efuse-regs` dump is loaded after `--flash-octal`, so a dump that
+   includes RD_REPEAT_DATA3 (efuse +0x3c) replaces that word and its FLASH_TYPE bit 9.
+4. **Wording:** the RDCR sentence under the citations above (it was "RDCR (0x15) answers 0.").
+   The description of #232 said the octal image does not boot on main; it does, through
+   ESP-IDF's DIO fallback, with "access beyond 16 MB not supported" and 16 MB of PSRAM
+   reported as 8, as the review's run shows.
+
+Checks (Rust 1.99.1 58cf8f9c3 2026-10-13, `cargo +1.99.1`, Windows 11, ROMs from
+`tools/fetch-rom-elfs.sh roms`; [checks.json](checks.json), entries marked `follow_up`):
+
+- `quad_user_erase_takes_the_address_low_byte_from_the_data_phase` (esp-periph/src/spi_mem.rs):
+  SE, BE32K and BE at 0x230000, each as 16 address bits plus one MOSI byte and as a 24-bit
+  address, erase exactly that block, not the block of the high bits alone. With the fold removed
+  it fails at the first case (`0x20 split=true: the block at 0x230000`).
+- `only_the_s3_accepts_the_flash_octal_option` (cli/tests/flash_octal_option.rs): the classic
+  ESP32, C3 and C6 exit with status 2 and "--flash-octal is not available on …". Without the
+  change the classic boots with the flag (`[emu] boot from ROM on the classic ESP32`) and the
+  test fails.
+- Workspace, clippy (native and wasm), the wasm build and its demos, the privacy check: as
+  CONTRIBUTING.md lists; 1004 passed, the two `decoder_matches_corpus` failures are the Windows
+  path issue described above, unrelated. No golden changed.
+- Firmware (the octal16 image of [inputs.json](inputs.json), the commands there plus
+  `--debug spi1`, 40 emulated seconds): with `--flash-octal` both boots print the same lines as
+  in the table above (`flash id=c28038 …`, `bad=0`, `flash end=ok`, `flash spiffs=ok`, `done`)
+  and SPI1 logs four SE4B erases in the octal form; on the quad model both boots print
+  `flash id=204018 …`, `flash end=ok`, `flash spiffs=ok`, `done`, with no user-command erase.
+
+CPU comparison not run: the change adds one condition to the flash user-command path of the SPI
+memory model and one flag test to the classic's argument check; nothing runs per tick, and the goldens pin the
+instruction counts.

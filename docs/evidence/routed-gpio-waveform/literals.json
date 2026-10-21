@@ -1,0 +1,46 @@
+[
+  {
+    "function": "<esp32c3::bus::SocBus as esp_soc::soc::SocBus>::refresh_irq",
+    "instructions": 341,
+    "normalized_difference_count": 1,
+    "main": {
+      "address": "0x1001eae10",
+      "bytes": "00100000002000000040000000800000",
+      "instructions": [
+        "adrp\tx9, 0x1001ea000 <GCC_except_table2163>",
+        "ldr\tq6, [x9, #0xe10]"
+      ]
+    },
+    "candidate": {
+      "address": "0x1001eb000",
+      "bytes": "00100000002000000040000000800000",
+      "instructions": [
+        "adrp\tx9, 0x1001eb000 <dyld_stub_binder+0x1001eb000>",
+        "ldr\tq6, [x9]"
+      ]
+    },
+    "conclusion": "Only the literal pool offset changes to zero; loaded 16 bytes are identical."
+  },
+  {
+    "function": "<esp32c6::bus::SocBus as esp_soc::soc::SocBus>::refresh_irq",
+    "instructions": 446,
+    "normalized_difference_count": 1,
+    "main": {
+      "address": "0x1001eae10",
+      "bytes": "00100000002000000040000000800000",
+      "instructions": [
+        "adrp\tx8, 0x1001ea000 <GCC_except_table2163>",
+        "ldr\tq28, [x8, #0xe10]"
+      ]
+    },
+    "candidate": {
+      "address": "0x1001eb000",
+      "bytes": "00100000002000000040000000800000",
+      "instructions": [
+        "adrp\tx8, 0x1001eb000 <dyld_stub_binder+0x1001eb000>",
+        "ldr\tq28, [x8]"
+      ]
+    },
+    "conclusion": "Only the literal pool offset changes to zero; loaded 16 bytes are identical."
+  }
+]

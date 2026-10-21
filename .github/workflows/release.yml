@@ -1,6 +1,7 @@
 name: release
-# Pushing a v* tag builds the release assets and attaches them to that tag's release,
-# creating a draft one if it does not exist yet, so the notes and the Latest flag stay manual.
+# Pushing a v* tag builds the release assets and attaches them to the maintainer's draft release
+# for that tag (created before the push, so the release is attributed to a person); the notes and
+# the Latest flag stay manual.
 # workflow_dispatch rebuilds the assets for a tag that already exists.
 on:
   push:
@@ -63,14 +64,18 @@ jobs:
         run: |
           tag='${{ inputs.tag || github.ref_name }}'
           cd dist && sha256sum *.tar.gz | tee "esp32sim-${tag#v}-SHA256SUMS.txt"
-      - name: Attach the assets to the tag's release
+      # The maintainer creates the (draft) release before pushing the tag, so the release is
+      # attributed to a person and not to github-actions; this job only attaches the assets.
+      - name: Attach the assets to the maintainer's release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag='${{ inputs.tag || github.ref_name }}'
-          gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
-            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --draft \
-              --title "esp32sim ${tag#v}" \
-              --notes "Assets built by the release workflow. Release notes still to be written."
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft >/dev/null 2>&1; then
+            echo "::error::no release for $tag yet. Create the draft first, as CONTRIBUTING.md says:"
+            echo "::error::  gh release create $tag --draft --target <merge commit> --title 'esp32sim ${tag#v}' --notes-file notes.md"
+            echo "::error::then rerun this workflow (workflow_dispatch with tag=$tag)."
+            exit 1
+          fi
           gh release upload "$tag" --repo "$GITHUB_REPOSITORY" --clobber dist/*.tar.gz dist/*SHA256SUMS.txt
           gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name'

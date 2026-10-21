@@ -194,6 +194,9 @@ pub struct ClassicGpio {
     level_refreshes: usize,
 }
 impl ClassicGpio {
+    pub(crate) fn routes(&self) -> esp_soc::pins::PinRoutes<'_> {
+        esp_soc::pins::ChipPins::ESP32.routes(&self.gpio, &self.route_mux)
+    }
     fn new() -> Self {
         Self {
             gpio: Gpio::new(),

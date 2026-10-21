@@ -17,9 +17,6 @@ fn load(net: &mut Network, i: usize, rom: &[u8], dir: &str) {
     n.write_flash(0x10000, &std::fs::read(format!("{dir}/esp32-blink.bin")).expect("app")).unwrap();
     let elf = std::fs::read(format!("{dir}/esp32-blink.elf")).expect("elf");
     n.add_symbols(&elf).unwrap();
-    // the PHY blob's baseband calibration spins on undocumented registers; the MAC does not need it
-    let bb = n.sym_addr("bb_init").expect("bb_init in the app ELF");
-    n.stubs.insert(bb, 0);
 }
 
 /// A broadcast from one node reaches the other, and Contiki's nullnet layer accepts it — which

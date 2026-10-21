@@ -46,5 +46,6 @@ ESP32SIM_ROM_DIR="$PWD/web/wasm/fw" cargo +1.99.0 test --release \
 CI-fetched mask ROMs, without ELF hooks or stubs. They pin the complete console,
 stop exception/interrupt totals, per-source interrupt counts and Wi-Fi/network
 reports. Cycle-derived instruction totals are not a correctness oracle here.
-Existing station goldens remain unchanged, including the older C6 fixture's
-`bb_init` stub. The new C6 fixture proves startup without that stub.
+Existing station goldens remained unchanged when this landed; the older C6 fixture
+then still used a `bb_init` stub, and this fixture was the first to prove startup
+without it (the stub has since been dropped everywhere, #248).

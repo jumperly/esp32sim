@@ -326,6 +326,9 @@ impl SocBus {
         if a == 0x3ff4_8100 && v & (1 << 8) != 0 {
             self.periph.rtc.memory_crc(&self.rtc_fast);
         }
+        if matches!(a & !0xfff, 0x3ff4_4000 | 0x3ff4_9000) && self.board.uses_gpio_waveform() {
+            self.board.gpio_waveform_at(self.cycles, self.periph.gpio.routes());
+        }
         if dac_before.is_some_and(|before| before != self.periph.adc.dac_outputs()) { self.slice_yield = true; }
         if matches!(a >> 12, 0x3ff44 | 0x3ff49) || (0x3ff4_8400..0x3ff4_8500).contains(&a) { self.note_pin_write(); }   // Jumperly patch J28: GPIO, IO_MUX, RTC_IO
         if self.pwm_tap.is_some() && pwm_commit(a, v) { self.note_pwm(); }      // Jumperly patch J28
@@ -387,6 +390,9 @@ impl SocBus {
     }
     pub fn attach_board_devices(&mut self) {
         self.irq_dirty = true;
+        if self.board.uses_gpio_waveform() {
+            self.board.gpio_waveform_at(self.cycles, self.periph.gpio.routes());
+        }
         self.pins_active = self.board.uses_gpio_edges() || self.board.uses_uart_pins();
         for (pin, level) in self.board.input_levels() { self.periph.gpio.set_input(pin, level); }
         if self.pins_active { self.deliver_board_inputs(); }

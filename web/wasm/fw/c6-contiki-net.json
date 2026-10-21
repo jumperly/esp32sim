@@ -2,9 +2,6 @@
  "board": "waveshare-c6-lcd147",
  "flash_mb": 4,
  "seconds": 30,
- "stubs": [
-  "bb_init=0"
- ],
  "expect": "Starting Contiki-NG-ESP32C6",
  "nodes": [
   {
@@ -30,8 +27,5 @@
   "bootloader": "public/c6-contiki-bootloader.bin",
   "ptable": "public/c6-contiki-ptable.bin",
   "app": "public/c6-contiki.bin"
- },
- "symbols": {
-  "bb_init": "0x42054d80"
  }
 }

@@ -206,8 +206,8 @@ devices to exact core, timer and script frontiers. Architectural and bus effects
 event's start. A refused event keeps those effects and adds no modeled cycles or device time.
 Synthetic app boot (`--boot app`) is unsupported because the model has no configuration snapshot;
 modeled runs must boot from the reset vector (`--boot rom`). Modeled execution also refuses a
-function stub when it reaches one, so C6 802.15.4 firmware that needs `--stub bb_init=0` cannot run
-with a cost model yet. If every core is idle and no device reports a deadline, modeled execution
+function stub when it reaches one, so firmware that needs one (the S3 panel's `esp_wifi_start=0`)
+cannot run with a cost model yet. If every core is idle and no device reports a deadline, modeled execution
 stops with `Halted` instead of waiting for host input.
 
 ## Networking

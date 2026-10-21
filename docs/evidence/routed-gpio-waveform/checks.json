@@ -1,0 +1,98 @@
+{
+  "base": "77e43c20a70054ac84d1724d757fa9ce12668151",
+  "rust_diff_sha256": "0148a3eaedf2dc851f3a1c1b985eac3915fdb62332cee5f81c1db6349f42dc36",
+  "toolchain": "rustc 1.99.0 (b940084d7 2026-09-28)",
+  "platform": "Darwin 27.0.0 arm64",
+  "jobs": 4,
+  "priority": "nice -n 10",
+  "home": "empty directory; explicit installed CARGO_HOME and RUSTUP_HOME",
+  "checks": [
+    {
+      "name": "native-clippy",
+      "command": "cargo +1.99.0 clippy --workspace --all-targets -- -D warnings",
+      "exit_code": 0,
+      "log_sha256": "66e43af9e2d81153895422a79cdcb5c6295882599163d89cabcc255b61ba498c"
+    },
+    {
+      "name": "wasm-clippy",
+      "command": "cargo +1.99.0 clippy --release --target wasm32-unknown-unknown -p esp32sim-wasm --features jit-tests -- -D warnings",
+      "exit_code": 0,
+      "log_sha256": "fc59f3c805240e5d9d461d43ebfb1ad88f3eec772af9fcb0d1ff819680b2d12a"
+    },
+    {
+      "name": "rom-tests",
+      "command": "cargo +1.99.0 test --release --workspace -- --include-ignored --skip external_",
+      "exit_code": 0,
+      "totals": {
+        "passed": 1015,
+        "failed": 0,
+        "ignored": 0
+      },
+      "log_sha256": "c3ed0c597f3dba048edad930c6d6a1f078907584ebc8a63bbdf7183f81f244b2"
+    },
+    {
+      "name": "plain-tests",
+      "command": "cargo +1.99.0 test --release --workspace",
+      "exit_code": 0,
+      "totals": {
+        "passed": 987,
+        "failed": 0,
+        "ignored": 50
+      },
+      "log_sha256": "dd47402ca4725ba6290ab798f4b7b316f23fc9449a74afbe0958d9ffe12b8a6e"
+    },
+    {
+      "name": "wasm-build",
+      "command": "tools/wasm-build.sh",
+      "exit_code": 0,
+      "log_sha256": "711a85089e582b64bcf67c9d0134261ea84c75c14df5ed1d2c895aaa13d6feae"
+    },
+    {
+      "name": "wasm-smoke",
+      "command": "node tools/wasm-test.mjs hello c3-hello c6-hello c6-energy-scan c6-contiki c6-contiki-net c6-rpl-net panel",
+      "exit_code": 0,
+      "log_sha256": "d8a195fdc4854c68441b16298ab6a1795b760612a429ef90fb6479de6c5db58a"
+    },
+    {
+      "name": "wasm-jit",
+      "command": "tools/wasm-jit-test.sh",
+      "exit_code": 0,
+      "cases": {
+        "WASM differential": 111126,
+        "GPIO waveform": 24
+      },
+      "log_sha256": "8a489eaa5ca3287cda80aee802541e05907cc405c77f7651cdebaf4da9961d88"
+    },
+    {
+      "name": "mutations",
+      "command": "python3 docs/evidence/routed-gpio-waveform/mutate.py --out \"$MUTATIONS\"",
+      "exit_code": 0,
+      "log_sha256": "88860f7e02468c721b8b51e14952e271c29445a944e315be9be94de32a5d433e"
+    },
+    {
+      "name": "restored-tests",
+      "command": "cargo +1.99.0 test --release -p esp32sim -p esp-soc --test routed_waveform",
+      "exit_code": 0,
+      "totals": {
+        "passed": 5,
+        "failed": 0,
+        "ignored": 0
+      },
+      "log_sha256": "94f34359c708613fb24923ee9d4d711062fbe32a29024ad08953846c57e8335f"
+    },
+    {
+      "name": "candidate-bins",
+      "command": "cargo +1.99.0 build --release --bins",
+      "exit_code": 0,
+      "log_sha256": "a6ec62c338e51b99cd93091c008c59ad358c54be30ebae286de03d5b1301417f"
+    },
+    {
+      "name": "main-bins",
+      "command": "cargo +1.99.0 build --release --bins",
+      "exit_code": 0,
+      "log_sha256": "ba1ed3be08d2fce331dd09aedbe9ba85556494cf9c55c54ed07f78851bedc27e"
+    }
+  ],
+  "semantic_mutations_killed": 17,
+  "cpu_comparison": "PENDING; no timing benchmark run"
+}
