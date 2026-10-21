@@ -212,7 +212,7 @@ preamble byte, so the exactness is already there and a native test can hold it t
 (`esp32c6/tests/net.rs`). The worker only paces network time to the wall clock and relays.
 
 A node may carry its own `files` and `symbols`: an entry of a kind the node names replaces the
-shared one, so a root and a client — two images with two `bb_init` addresses — share one
+shared one, so a root and a client — two images — share one
 bootloader and partition table and differ only in `app`.
 
 `start_ms` is not cosmetic. Two identical images booted at the same instant are deterministic to

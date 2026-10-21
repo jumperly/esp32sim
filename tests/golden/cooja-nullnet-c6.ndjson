@@ -3,10 +3,10 @@
 {"type":"done","t":20000000,"wake":20100000,"out":[{"type":"log","t":12260000,"line":"I (26) esp_image: segment 3: paddr=000493bc vaddr=4080322c size=0f198h ( 61848) load"},{"type":"log","t":15520000,"line":"I (33) esp_image: segment 4: paddr=0005855c vaddr=408123d0 size=02each ( 11948) load"},{"type":"log","t":17940000,"line":"I (38) boot: Loaded app from partition at offset 0x10000"},{"type":"log","t":18020000,"line":"I (38) boot: Disabling RNG early entropy source..."},{"type":"log","t":18180000,"line":"I (38) cpu_start: Unicore app"}]}
 {"type":"done","t":30000000,"wake":34717500,"out":[{"type":"log","t":22280000,"line":"I (46) cpu_start: GPIO 17 and 16 are used as console UART I/O pins"},{"type":"log","t":22340000,"line":"I (46) cpu_start: Pro cpu start user code"},{"type":"log","t":22420000,"line":"I (46) cpu_start: cpu freq: 160000000 Hz"},{"type":"log","t":22500000,"line":"I (47) app_init: Application information:"},{"type":"log","t":22580000,"line":"I (47) app_init: Project name:     esp32-blink"},{"type":"log","t":22660000,"line":"I (47) app_init: App version:      4121d0f-dirty"},{"type":"log","t":22760000,"line":"I (47) app_init: Compile time:     Sep  4 2026 09:28:11"},{"type":"log","t":22860000,"line":"I (47) app_init: ELF file SHA256:  fbd9b3f56..."},{"type":"log","t":22920000,"line":"I (47) app_init: ESP-IDF:          v5.5.4"},{"type":"log","t":23000000,"line":"I (47) efuse_init: Min chip rev:     v0.0"},{"type":"log","t":23080000,"line":"I (47) efuse_init: Max chip rev:     v0.99 "},{"type":"log","t":23160000,"line":"I (47) efuse_init: Chip rev:         v0.1"},{"type":"log","t":23280000,"line":"I (47) heap_init: Initializing. RAM available for dynamic allocation:"},{"type":"log","t":23420000,"line":"I (47) heap_init: At 40817D10 len 00064900 (402 KiB): RAM"},{"type":"log","t":23520000,"line":"I (48) heap_init: At 4087C610 len 00002F54 (11 KiB): RAM"},{"type":"log","t":23660000,"line":"I (48) heap_init: At 50000000 len 00003FE8 (15 KiB): RTCRAM"},{"type":"log","t":23920000,"line":"I (48) spi_flash: detected chip: generic"},{"type":"log","t":23980000,"line":"I (48) spi_flash: flash io: dio"},{"type":"log","t":24200000,"line":"I (48) sleep_gpio: Configure to isolate all GPIO pins in sleep state"},{"type":"log","t":24380000,"line":"I (48) sleep_gpio: Enable automatic switching of GPIO sleep configuration"},{"type":"log","t":24460000,"line":"I (49) coexist: coex firmware version: 093e3d2"},{"type":"log","t":24520000,"line":"I (49) coexist: coexist rom version 5b8dcfa"},{"type":"log","t":24780000,"line":"I (49) main_task: Started on CPU0"},{"type":"log","t":24920000,"line":"I (49) main_task: Calling app_main()"},{"type":"log","t":26660000,"line":"I (49) contiki-example: Example configured to blink addressable LED!"}]}
 {"type":"done","t":40000000,"wake":40100000,"out":[{"type":"log","t":34837500,"line":"...] "},{"type":"log","t":34837500,"line":""},{"type":"log","t":34917500,"line":"[INFO: Main      ] MAC address: [020000fffe000002I (59) phy_init: phy_version 343,b513b46,Nov 14 2025,16:34:12"},{"type":"log","t":35077500,"line":"W (59) phy_init: failed to load RF calibration data (0x1102), falling back to full calibration"},{"type":"log","t":37637500,"line":"I (59) phy: error: chgp_cal no done!!!"},{"type":"log","t":39897500,"line":"error: pll_cal exceeds 2ms!!!"}]}
-{"type":"done","t":50000000,"wake":54717500,"out":[{"type":"log","t":42320000,"line":"error: pll_cal exceeds 2ms!!!"},{"type":"log","t":44740000,"line":"error: pll_cal exceeds 2ms!!!"},{"type":"log","t":45480000,"line":"I (69) phy_init: Saving new calibration data due to checksum failure or outdated calibration data, mode(2)"},{"type":"log","t":47120000,"line":"I (69) phy: libbtbb version: c493933, Nov 14 2025, 16:34:25"},{"type":"log","t":47280000,"line":"I (69) ESP RADIO: Extended address (before setting): "},{"type":"log","t":47380000,"line":"I (69) ESP RADIO: 0x4081d5cc   00 00 00 00 00 00 00 00                           |........|"},{"type":"log","t":47480000,"line":"I (69) ESP RADIO: Extended address (after setting): "},{"type":"log","t":47600000,"line":"I (69) ESP RADIO: 0x4081d5cc   02 00 00 fe ff 00 00 02                           |........|"},{"type":"radio","t":47660000,"state":"rx","ch":26},{"type":"log","t":47700000,"line":"I (69) ESP RADIO: ESP32 Radio Process starting..."},{"type":"log","t":47800000,"line":"Starting Contiki-NG-ESP32C6"},{"type":"log","t":47840000,"line":"[INFO: Main      ] [INFO: Main      ] - Routing: nullrouting"},{"type":"log","t":47920000,"line":"[INFO: Main      ] - Net: nullnet"},{"type":"log","t":47980000,"line":"[INFO: Main      ] - MAC: CSMA"},{"type":"log","t":48040000,"line":"[INFO: Main      ] - 802.15.4 Channel: 26"},{"type":"log","t":48100000,"line":"[INFO: Main      ] - 802.15.4 PANID: 0xabcd"},{"type":"log","t":48220000,"line":"..."}]}
-{"type":"done","t":60000000,"wake":64717500,"out":[]}
-{"type":"done","t":70000000,"wake":74717500,"out":[]}
-{"type":"done","t":80000000,"wake":84717500,"out":[]}
+{"type":"done","t":50000000,"wake":50100000,"out":[{"type":"log","t":42320000,"line":"error: pll_cal exceeds 2ms!!!"},{"type":"log","t":44740000,"line":"error: pll_cal exceeds 2ms!!!"}]}
+{"type":"done","t":60000000,"wake":60100000,"out":[]}
+{"type":"done","t":70000000,"wake":70100000,"out":[{"type":"log","t":69280000,"line":"I (89) phy_init: Saving new calibration data due to checksum failure or outdated calibration data, mode(2)"}]}
+{"type":"done","t":80000000,"wake":84717500,"out":[{"type":"log","t":70920000,"line":"I (89) phy: libbtbb version: c493933, Nov 14 2025, 16:34:25"},{"type":"log","t":71080000,"line":"I (89) ESP RADIO: Extended address (before setting): "},{"type":"log","t":71180000,"line":"I (89) ESP RADIO: 0x4081d5cc   00 00 00 00 00 00 00 00                           |........|"},{"type":"log","t":71300000,"line":"I (89) ESP RADIO: Extended address (after setting): "},{"type":"log","t":71400000,"line":"I (89) ESP RADIO: 0x4081d5cc   02 00 00 fe ff 00 00 02                           |........|"},{"type":"radio","t":71460000,"state":"rx","ch":26},{"type":"log","t":71500000,"line":"I (89) ESP RADIO: ESP32 Radio Process starting..."},{"type":"log","t":71600000,"line":"Starting Contiki-NG-ESP32C6"},{"type":"log","t":71640000,"line":"[INFO: Main      ] [INFO: Main      ] - Routing: nullrouting"},{"type":"log","t":71720000,"line":"[INFO: Main      ] - Net: nullnet"},{"type":"log","t":71780000,"line":"[INFO: Main      ] - MAC: CSMA"},{"type":"log","t":71840000,"line":"[INFO: Main      ] - 802.15.4 Channel: 26"},{"type":"log","t":71900000,"line":"[INFO: Main      ] - 802.15.4 PANID: 0xabcd"},{"type":"log","t":72040000,"line":"..."}]}
 {"type":"done","t":90000000,"wake":94717500,"out":[]}
 {"type":"done","t":100000000,"wake":104717500,"out":[]}
 {"type":"done","t":110000000,"wake":114717500,"out":[]}
@@ -105,7 +105,7 @@
 {"type":"done","t":1040000000,"wake":1044717500,"out":[]}
 {"type":"done","t":1050000000,"wake":1054717500,"out":[]}
 {"type":"done","t":1060000000,"wake":1064717500,"out":[]}
-{"type":"done","t":1070000000,"wake":1074717500,"out":[]}
+{"type":"done","t":1070000000,"wake":1070837688,"out":[]}
 {"type":"done","t":1080000000,"wake":1084717500,"out":[]}
 {"type":"done","t":1090000000,"wake":1094717500,"out":[]}
 {"type":"done","t":1100000000,"wake":1104717500,"out":[]}
@@ -205,7 +205,7 @@
 {"type":"done","t":2040000000,"wake":2044717500,"out":[]}
 {"type":"done","t":2050000000,"wake":2054717500,"out":[]}
 {"type":"done","t":2060000000,"wake":2064717500,"out":[]}
-{"type":"done","t":2070000000,"wake":2074717500,"out":[]}
+{"type":"done","t":2070000000,"wake":2070837688,"out":[]}
 {"type":"done","t":2080000000,"wake":2084717500,"out":[]}
 {"type":"done","t":2090000000,"wake":2094717500,"out":[]}
 {"type":"done","t":2100000000,"wake":2104717500,"out":[]}
@@ -305,7 +305,7 @@
 {"type":"done","t":3040000000,"wake":3044717500,"out":[]}
 {"type":"done","t":3050000000,"wake":3054717500,"out":[]}
 {"type":"done","t":3060000000,"wake":3064717500,"out":[]}
-{"type":"done","t":3070000000,"wake":3074717500,"out":[]}
+{"type":"done","t":3070000000,"wake":3070837688,"out":[]}
 {"type":"done","t":3080000000,"wake":3084717500,"out":[]}
 {"type":"done","t":3090000000,"wake":3094717500,"out":[]}
 {"type":"done","t":3100000000,"wake":3104717500,"out":[]}
@@ -405,7 +405,7 @@
 {"type":"done","t":4040000000,"wake":4044717500,"out":[]}
 {"type":"done","t":4050000000,"wake":4054717500,"out":[]}
 {"type":"done","t":4060000000,"wake":4064717500,"out":[]}
-{"type":"done","t":4070000000,"wake":4074717500,"out":[]}
+{"type":"done","t":4070000000,"wake":4070837688,"out":[]}
 {"type":"done","t":4080000000,"wake":4084717500,"out":[]}
 {"type":"done","t":4090000000,"wake":4094717500,"out":[]}
 {"type":"done","t":4100000000,"wake":4104717500,"out":[]}
@@ -504,11 +504,11 @@
 {"type":"done","t":5030000000,"wake":5034717500,"out":[]}
 {"type":"done","t":5040000000,"wake":5044717500,"out":[]}
 {"type":"done","t":5050000000,"wake":5054717500,"out":[]}
-{"type":"done","t":5060000000,"wake":5064717500,"out":[{"type":"log","t":5054777500,"line":"[INFO: XLVL      ] started, interval 5000 ticks, addr 020000fffe000002[INFO: XLVL      ] tx count 0"}]}
-{"type":"done","t":5065095168,"wake":5065195168,"out":[{"type":"log","t":5064797500,"line":"I (5089) ESP RADIO: TX: 19 bytes"},{"type":"log","t":5064897500,"line":"D (5089) ESP RADIO: 0x408161d0   00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  |................|"},{"type":"log","t":5065037500,"line":"D (5089) ESP RADIO: 0x408161e0   00 00 00                                          |...|"},{"type":"tx","t":5065095168,"ch":26,"frame":"41d82dcdabffff020000feff00000200000000"},{"type":"radio","t":5065095168,"state":"tx","ch":26}]}
-{"type":"done","t":5080000000,"wake":5084717500,"out":[{"type":"radio","t":5065975168,"state":"on","ch":26},{"type":"log","t":5066035168,"line":"I (5089) TX: Packet sent, ack=no"},{"type":"log","t":5066095168,"line":"I (5089) TX: No Ack received"},{"type":"radio","t":5066095168,"state":"rx","ch":26}]}
-{"type":"done","t":5090000000,"wake":5094717500,"out":[]}
-{"type":"done","t":5100000000,"wake":5104717500,"out":[]}
+{"type":"done","t":5060000000,"wake":5064717500,"out":[]}
+{"type":"done","t":5070000000,"wake":5070837688,"out":[]}
+{"type":"done","t":5080000000,"wake":5084717500,"out":[{"type":"log","t":5074777500,"line":"[INFO: XLVL      ] started, interval 5000 ticks, addr 020000fffe000002[INFO: XLVL      ] tx count 0"}]}
+{"type":"done","t":5085095168,"wake":5085195168,"out":[{"type":"log","t":5084797500,"line":"I (5109) ESP RADIO: TX: 19 bytes"},{"type":"log","t":5084897500,"line":"D (5109) ESP RADIO: 0x408161d0   00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  |................|"},{"type":"log","t":5085037500,"line":"D (5109) ESP RADIO: 0x408161e0   00 00 00                                          |...|"},{"type":"tx","t":5085095168,"ch":26,"frame":"41d82dcdabffff020000feff00000200000000"},{"type":"radio","t":5085095168,"state":"tx","ch":26}]}
+{"type":"done","t":5100000000,"wake":5104717500,"out":[{"type":"radio","t":5085975168,"state":"on","ch":26},{"type":"log","t":5086035168,"line":"I (5109) TX: Packet sent, ack=no"},{"type":"log","t":5086095168,"line":"I (5109) TX: No Ack received"},{"type":"radio","t":5086095168,"state":"rx","ch":26}]}
 {"type":"done","t":5110000000,"wake":5114717500,"out":[]}
 {"type":"done","t":5120000000,"wake":5124717500,"out":[]}
 {"type":"done","t":5130000000,"wake":5134717500,"out":[]}
@@ -605,7 +605,7 @@
 {"type":"done","t":6040000000,"wake":6044717500,"out":[]}
 {"type":"done","t":6050000000,"wake":6054717500,"out":[]}
 {"type":"done","t":6060000000,"wake":6064717500,"out":[]}
-{"type":"done","t":6070000000,"wake":6074717500,"out":[]}
+{"type":"done","t":6070000000,"wake":6070837688,"out":[]}
 {"type":"done","t":6080000000,"wake":6084717500,"out":[]}
 {"type":"done","t":6090000000,"wake":6094717500,"out":[]}
 {"type":"done","t":6100000000,"wake":6104717500,"out":[]}
@@ -705,7 +705,7 @@
 {"type":"done","t":7040000000,"wake":7044717500,"out":[]}
 {"type":"done","t":7050000000,"wake":7054717500,"out":[]}
 {"type":"done","t":7060000000,"wake":7064717500,"out":[]}
-{"type":"done","t":7070000000,"wake":7074717500,"out":[]}
+{"type":"done","t":7070000000,"wake":7070837688,"out":[]}
 {"type":"done","t":7080000000,"wake":7084717500,"out":[]}
 {"type":"done","t":7090000000,"wake":7094717500,"out":[]}
 {"type":"done","t":7100000000,"wake":7104717500,"out":[]}
@@ -805,7 +805,7 @@
 {"type":"done","t":8040000000,"wake":8044717500,"out":[]}
 {"type":"done","t":8050000000,"wake":8054717500,"out":[]}
 {"type":"done","t":8060000000,"wake":8064717500,"out":[]}
-{"type":"done","t":8070000000,"wake":8074717500,"out":[]}
+{"type":"done","t":8070000000,"wake":8070837688,"out":[]}
 {"type":"done","t":8080000000,"wake":8084717500,"out":[]}
 {"type":"done","t":8090000000,"wake":8094717500,"out":[]}
 {"type":"done","t":8100000000,"wake":8104717500,"out":[]}
@@ -905,7 +905,7 @@
 {"type":"done","t":9040000000,"wake":9044717500,"out":[]}
 {"type":"done","t":9050000000,"wake":9054717500,"out":[]}
 {"type":"done","t":9060000000,"wake":9064717500,"out":[]}
-{"type":"done","t":9070000000,"wake":9074717500,"out":[]}
+{"type":"done","t":9070000000,"wake":9070837688,"out":[]}
 {"type":"done","t":9080000000,"wake":9084717500,"out":[]}
 {"type":"done","t":9090000000,"wake":9094717500,"out":[]}
 {"type":"done","t":9100000000,"wake":9104717500,"out":[]}
@@ -1004,11 +1004,11 @@
 {"type":"done","t":10030000000,"wake":10034717500,"out":[]}
 {"type":"done","t":10040000000,"wake":10044717500,"out":[]}
 {"type":"done","t":10050000000,"wake":10054717500,"out":[]}
-{"type":"done","t":10060000000,"wake":10064717500,"out":[{"type":"log","t":10054777500,"line":"[INFO: XLVL      ] rx len 4 count 7 from 0012740100010101[INFO: XLVL      ] tx count 1"}]}
-{"type":"done","t":10065106318,"wake":10065206318,"out":[{"type":"log","t":10064797500,"line":"I (10089) ESP RADIO: TX: 19 bytes"},{"type":"log","t":10064917500,"line":"D (10089) ESP RADIO: 0x408161d0   41 d8 01 ff ff ff ff 01  01 01 00 01 74 12 00 07  |A...........t...|"},{"type":"log","t":10065057500,"line":"D (10089) ESP RADIO: 0x408161e0   00 00 00                                          |...|"},{"type":"tx","t":10065106318,"ch":26,"frame":"41d82ecdabffff020000feff00000201000000"},{"type":"radio","t":10065106318,"state":"tx","ch":26}]}
-{"type":"done","t":10080000000,"wake":10084717500,"out":[{"type":"radio","t":10065986318,"state":"on","ch":26},{"type":"log","t":10066046318,"line":"I (10089) TX: Packet sent, ack=no"},{"type":"log","t":10066106318,"line":"I (10089) TX: No Ack received"},{"type":"radio","t":10066106318,"state":"rx","ch":26}]}
-{"type":"done","t":10090000000,"wake":10094717500,"out":[]}
-{"type":"done","t":10100000000,"wake":10104717500,"out":[]}
+{"type":"done","t":10060000000,"wake":10064717500,"out":[]}
+{"type":"done","t":10070000000,"wake":10070837688,"out":[]}
+{"type":"done","t":10080000000,"wake":10084717500,"out":[{"type":"log","t":10074777500,"line":"[INFO: XLVL      ] rx len 4 count 7 from 0012740100010101[INFO: XLVL      ] tx count 1"}]}
+{"type":"done","t":10085106318,"wake":10085206318,"out":[{"type":"log","t":10084797500,"line":"I (10109) ESP RADIO: TX: 19 bytes"},{"type":"log","t":10084917500,"line":"D (10109) ESP RADIO: 0x408161d0   41 d8 01 ff ff ff ff 01  01 01 00 01 74 12 00 07  |A...........t...|"},{"type":"log","t":10085057500,"line":"D (10109) ESP RADIO: 0x408161e0   00 00 00                                          |...|"},{"type":"tx","t":10085106318,"ch":26,"frame":"41d82ecdabffff020000feff00000201000000"},{"type":"radio","t":10085106318,"state":"tx","ch":26}]}
+{"type":"done","t":10100000000,"wake":10104717500,"out":[{"type":"radio","t":10085986318,"state":"on","ch":26},{"type":"log","t":10086046318,"line":"I (10109) TX: Packet sent, ack=no"},{"type":"log","t":10086106318,"line":"I (10109) TX: No Ack received"},{"type":"radio","t":10086106318,"state":"rx","ch":26}]}
 {"type":"done","t":10110000000,"wake":10114717500,"out":[]}
 {"type":"done","t":10120000000,"wake":10124717500,"out":[]}
 {"type":"done","t":10130000000,"wake":10134717500,"out":[]}

@@ -103,6 +103,47 @@ combination is not selected by this board name. It needs `--flash-mb 16 --psram-
 Board input edges retain their intended timestamps. The current fast scheduler applies them to
 the SoC at its next existing bus tick.
 
+### Reusing the CO5300 panel
+
+`esp_soc::devices::co5300::Co5300::new(width, height, column_offset)` takes the
+RAM window from the board. Waveshare passes 368, 448 and 16. The StopWatch
+firmware's `main/panel.hpp` and `main/panel.cpp` on
+[`device`](https://github.com/aliceisjustplaying/stopwatch/tree/device/main)
+use 468, 466 and 6: CASET 6..473, RASET 0..465. The framebuffer stride is 468,
+not the round glass's 466-pixel diameter. RAMWR starts at the window origin;
+RAMWRC and split pixel transfers continue the same row-major RGB565 stream.
+
+The model retains STE (`0x44`, two-byte big-endian row), TE on (`0x35`) and TE off
+(`0x34`). A board can opt into `with_scan(Co5300Scan { lines, period, pulse_width,
+pin })` and delegate its `advance_to`, `next_deadline`, `take_edges` and
+`input_levels` hooks to the panel (`tear_input` supplies the pin and level).
+The board must advance the panel to the current virtual cycle before delivering
+SPI commands. No new board trait or scheduler path is needed.
+
+**This scan is synthetic, not measured StopWatch timing.** Its phase is anchored
+at virtual cycle zero, including while TE is disabled. Row `r` is crossed at
+`frame_start + floor(r * period / lines)`. Programming STE selects the next
+strictly future crossing, without restarting the scan or generating an immediate
+edge at the command. A row outside `0..lines` has no crossing. Each rising edge
+is followed by a falling edge `pulse_width` cycles later. Changing STE during a
+high pulse preserves that falling deadline; crossings while already high do not
+extend the pulse. TE off immediately drives a high signal low and cancels future
+edges. Reset clears RAM and command state, disables TE and retains the board's
+geometry, scan parameters and absolute phase. Sleep, display power, analog rails,
+porches and progressive scanout are not modeled.
+
+The directed tests choose 500 lines, a 15,000-cycle period and a 120-cycle pulse.
+Treating a test cycle as one microsecond, alternating STE 0 and 320 gives gaps of
+9,600 and 5,400 microseconds. The firmware's 16-sample `measure_scan` calculation
+recovers 30,000 ns per line and 500 scan lines. A board using a 240 MHz virtual
+clock would multiply those microsecond values by 240; these are functional model
+parameters, not a hardware calibration or evidence of tear-free rendering.
+
+Waveshare does not opt into this scan. Its existing GPIO13 oscillator remains
+unchanged, including its optional measured 16,773 us period / 578 us high variant;
+STE and TE commands do not change that legacy waveform. The StopWatch board,
+registration, I2C power/reset coupling and UI are separate work.
+
 ## `waveshare-c6-lcd147` — Waveshare ESP32-C6-LCD-1.47 (ESP32-C6)
 
 | Device | Bus | Model |

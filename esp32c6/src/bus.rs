@@ -54,6 +54,9 @@ pub struct SocBus {
 impl SocBus {
     /// Attach controller devices and restore inputs driven by the persistent board.
     pub fn attach_board_devices(&mut self) {
+        if self.board.uses_gpio_waveform() {
+            self.board.gpio_waveform_at(self.cycles, esp_soc::pins::ChipPins::C6.routes(&self.periph.gpio, &self.periph.io_mux));
+        }
         self.uart_pins = self.board.uses_uart_pins();
         self.board_edges = self.board.uses_gpio_edges();
         for (bus, address, device) in self.board.i2c_devices() {
@@ -116,6 +119,10 @@ impl SocBus {
                 _ => self.mmu_power_ctrl,
             }
         } else {
+            // USB FIFO reads can present the next packet and raise RECV_PKT before tick.
+            // IDF v5.5.4 components/soc/esp32c6/register/soc/usb_serial_jtag_reg.h:
+            // EP1_REG (+0), SERIAL_OUT_RECV_PKT_INT_RAW (bit 2).
+            self.irq_dirty |= addr & !3 == 0x6000_f000;
             self.periph.read32(addr & !3)
         };
         match size { 1 => (w >> ((addr & 3) * 8)) & 0xff, 2 => (w >> ((addr & 2) * 8)) & 0xffff, _ => w }
@@ -145,6 +152,9 @@ impl SocBus {
         let v = if size == 4 { v } else { merge(self.periph.read32(a)) };
         let old_drive = (self.periph.gpio.enable, self.periph.gpio.out);
         self.periph.write32(a, v);
+        if matches!(a & !0xfff, 0x6009_0000 | 0x6009_1000) && self.board.uses_gpio_waveform() {
+            self.board.gpio_waveform_at(self.cycles, esp_soc::pins::ChipPins::C6.routes(&self.periph.gpio, &self.periph.io_mux));
+        }
         if self.periph.sha.dma_pending { self.sha_dma_write(a); }
         if matches!(a >> 12, 0x60015 | 0x60080) || a == PERIPH_BASE + 0x960ac { self.parlio_dma_write(a); }
         if old_drive != (self.periph.gpio.enable, self.periph.gpio.out) {
@@ -527,7 +537,10 @@ impl SocBus {
         if self.periph.work_pending { self.pending_work(cycles); }
         // Board time advances before peripheral callbacks; inputs are delivered after them.
         if self.board_edges { self.board.advance_to(self.cycles); }
-        self.periph.tick(cycles as u64);
+        // Dispatch already compares clocked sources before/after ticking, including
+        // optional devices. Preserve write/board/DMA invalidations and refresh only
+        // when a source can have moved; time still advances on every round.
+        self.irq_dirty |= esp_periph::Dispatch::tick(&mut self.periph, cycles as u64);
         self.periph.gpio.input_changes.clear();
         if self.board_edges { self.irq_dirty |= esp_soc::gpio::drain_board_inputs(&mut *self.board, &mut self.periph.gpio, &mut self.gpio_events, self.cycles); }
         if self.uart_pins {
@@ -603,7 +616,7 @@ impl Bus for SocBus {
     fn tick(&mut self, cycles: u32) -> u32 {
         self.cycles += cycles as u64;
         self.devices(cycles);
-        1
+        u32::from(self.irq_dirty)
     }
     #[inline(always)]
     fn note_pc(&mut self, pc: u32) { self.periph.misc.cur_pc = pc; }

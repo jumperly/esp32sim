@@ -209,7 +209,7 @@ fn external_energy_scan_c6() {
     let b = format!("{}/build", dir); let rom = rom("esp32c6_rev0");
     let r = run(BIN_C6, &["--rom", rom.to_str().unwrap(), "--boot", "rom", "--flash-mb", "4", "--board", "waveshare-c6-lcd147", "--no-dump",
         "--bootloader", &format!("{b}/bootloader/bootloader.bin"), "--ptable", &format!("{b}/partition_table/partition-table.bin"),
-        "--app", &format!("{b}/energy_scan.bin"), "--elf", &format!("{b}/energy_scan.elf"), "--stub", "bb_init=0", "--max-seconds", "4"]);
+        "--app", &format!("{b}/energy_scan.bin"), "--elf", &format!("{b}/energy_scan.elf"), "--max-seconds", "4"]);
     assert!(r.stdout.contains("libbtbb version"), "the PHY did not come up:\n{}", r.stdout);
     assert!(!r.stdout.contains("Guru Meditation"), "the app panicked:\n{}", r.stdout);
     let scans: u64 = r.stderr.lines().find(|l| l.starts_with("[emu] 802.15.4:")).and_then(|l| l.split_whitespace().nth(2)).and_then(|n| n.parse().ok()).unwrap_or(0);
@@ -253,10 +253,10 @@ fn wifi_station_s3() { wifi_station("s3", BIN, "esp32s3_rev0", &["--board", "non
 #[test] #[ignore = "needs the ESP32-C3 mask ROM ELF"]
 fn wifi_station_c3() { wifi_station("c3", BIN_C3, "esp32c3_rev3", &[]); }
 
-/// `bb_init` is the PHY's baseband calibration, which wants analog the emulator does not have;
-/// without the ELF it is stubbed by address (`riscv32-esp-elf-nm`, see the example's README).
+/// The committed image, no ELF and no stub: the PHY blob's baseband calibration (`bb_init`) runs
+/// to completion against the modelled baseband status fields (docs/esp32c6.md, #203).
 #[test] #[ignore = "needs the ESP32-C6 mask ROM ELF"]
-fn wifi_station_c6() { wifi_station("c6", BIN_C6, "esp32c6_rev0", &["--stub", "0x4207df40=0"]); }
+fn wifi_station_c6() { wifi_station("c6", BIN_C6, "esp32c6_rev0", &[]); }
 
 /// The guest controller owns the advertising schedule and handles every END IRQ.
 #[test] #[ignore = "needs the ESP32-C3 mask ROM ELF fetched by CI"]

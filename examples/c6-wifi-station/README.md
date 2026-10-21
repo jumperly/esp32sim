@@ -73,12 +73,11 @@ and from the repository root:
 B=examples/c6-wifi-station/build-emu
 target/release/esp32sim-c6 --boot rom --flash-mb 4 --board waveshare-c6-lcd147 --console usb \
   --bootloader $B/bootloader/bootloader.bin --ptable $B/partition_table/partition-table.bin \
-  --app $B/c6_wifi_station.bin --elf $B/c6_wifi_station.elf --stub bb_init=0 \
+  --app $B/c6_wifi_station.bin --elf $B/c6_wifi_station.elf \
   --wifi ssid=esp32sim,psk=esp32sim-pass --max-seconds 14 --tft-png /tmp/station.png
 ```
 
-`--stub bb_init=0` is what every C6 radio run needs (the PHY's baseband calibration wants analog
-hardware). The unmodified WiFi library then does what it does on the board:
+The unmodified WiFi library does what it does on the board:
 
     station: STARTED
     station: SCAN found=1
@@ -119,9 +118,7 @@ done
 ```
 
 The build keeps the project's `c6_wifi_station.bin` name on every target. The ELFs are not
-committed, so the C6 test stubs `bb_init` by address: after a rebuild that changes the code,
-`riscv32-esp-elf-nm build-esp32c6/c6_wifi_station.elf | grep ' bb_init$'` gives the new one for
-the `--stub` in `wifi_station_c6` (`cli/tests/goldens.rs`). Then regenerate the goldens with `UPDATE_GOLDENS=1` and check that the station
+committed and the tests need none (no stubs). After a rebuild, regenerate the goldens with `UPDATE_GOLDENS=1` and check that the station
 lines and the WiFi and network counts stay the same. The licences of what the binaries contain
 are in `web/wasm/fw/public/wifi-station-NOTICE.txt`, taken from ESP-IDF 5.5.4; rebuilding with
 another ESP-IDF version means checking it against that version's `docs/en/COPYRIGHT.rst`. This is firmware validation, not a
@@ -141,12 +138,6 @@ three parts of `build-emu` to `web/wasm/fw/local/` as `c6-wifi-bootloader.bin`,
  "psram_mb": 0,
  "wifi": "ssid=esp32sim,psk=esp32sim-pass",
  "display_rotate": 270,
- "stubs": [
-  "bb_init=0"
- ],
- "symbols": {
-  "bb_init": "0x<address of bb_init in your build>"
- },
  "files": {
   "rom": "esp32c6_rev0_rom.elf",
   "bootloader": "local/c6-wifi-bootloader.bin",
@@ -158,8 +149,7 @@ three parts of `build-emu` to `web/wasm/fw/local/` as `c6-wifi-bootloader.bin`,
 }
 ```
 
-`riscv32-esp-elf-nm build-emu/c6_wifi_station.elf | grep ' bb_init$'` gives the address. Then
-`tools/wasm-build.sh`, `node tools/wasm-test.mjs c6-wifi-station` (it expects the five pings), and
+Then `tools/wasm-build.sh`, `node tools/wasm-test.mjs c6-wifi-station` (it expects the five pings), and
 `python3 -m http.server -d web 8790` with `http://127.0.0.1:8790/run.html?wasm&fw=c6-wifi-station`.
 There is no NAT in the browser: the lease, the gateway and its pings are all there is.
 

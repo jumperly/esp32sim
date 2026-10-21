@@ -3,12 +3,12 @@
 Status (2026-09-21): it runs. The specimen joins a real WPA2 network on the board (five of five
 gateway pings), and in the emulator the same unmodified image scans, finds the virtual access
 point, joins it through the WPA2 four-way handshake, takes a DHCP lease and gets five of five
-pings answered (`esp32sim-c6 --wifi ssid=esp32sim,psk=esp32sim-pass --stub bb_init=0`), with the
+pings answered (`esp32sim-c6 --wifi ssid=esp32sim,psk=esp32sim-pass`), with the
 same console lines and the same screen. What it took: three handshakes the library waits on
 (baseband channel switch and IQ estimate, the MAC core's ready flag), the MAC's events, RX ring
 and TX queues at the C6's offsets and with the C6's formats (below), AES through GDMA for the
 supplicant's key unwrap, and the access point, network and NAT moved out of the S3 crate into
-`esp-soc`. Not done: the PHY's baseband calibration is still the `bb_init` stub, the TSF and the
+`esp-soc`. Not done: the TSF and the
 power block are register RAM, and nothing beyond one station on one open or WPA2 network has
 been tried. The browser build runs it too, from a local manifest (the example's README).
 

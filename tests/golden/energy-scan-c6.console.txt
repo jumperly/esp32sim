@@ -70,5 +70,5 @@ I (186) phy: error: chgp_cal no done!!!
 error: pll_cal exceeds 2ms!!!
 error: pll_cal exceeds 2ms!!!
 error: pll_cal exceeds 2ms!!!
-I (196) phy_init: Saving new calibration data due to checksum failure or outdated calibration data, mode(2)
-I (196) phy: libbtbb version: ec2ecba, Mar  3 2025, 16:01:27
+I (226) phy_init: Saving new calibration data due to checksum failure or outdated calibration data, mode(2)
+I (226) phy: libbtbb version: ec2ecba, Mar  3 2025, 16:01:27

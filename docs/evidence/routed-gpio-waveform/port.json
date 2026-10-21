@@ -1,0 +1,51 @@
+{
+  "base": "77e43c20a70054ac84d1724d757fa9ce12668151",
+  "rust_diffs": [
+    {
+      "file": "cli/tests/routed_waveform.rs",
+      "accepted_change_identical": true
+    },
+    {
+      "file": "esp-soc/src/board.rs",
+      "accepted_change_identical": true
+    },
+    {
+      "file": "esp-soc/src/pins.rs",
+      "accepted_change_identical": true
+    },
+    {
+      "file": "esp-soc/tests/routed_waveform.rs",
+      "accepted_change_identical": true
+    },
+    {
+      "file": "esp32/src/bus.rs",
+      "accepted_change_identical": true
+    },
+    {
+      "file": "esp32/src/periph.rs",
+      "accepted_change_identical": true
+    },
+    {
+      "file": "esp32c3/src/bus.rs",
+      "accepted_change_identical": true
+    },
+    {
+      "file": "esp32c6/src/bus.rs",
+      "accepted_change_identical": true
+    },
+    {
+      "file": "esp32s3/src/bus.rs",
+      "accepted_change_identical": true
+    },
+    {
+      "file": "tests/gpio_waveform.rs",
+      "accepted_change_identical": true
+    }
+  ],
+  "catalog_ids": 229,
+  "catalog_changed_rows": [
+    "EX218"
+  ],
+  "goldens_unchanged": 55,
+  "resolution": "Keep main RTC CRC write hook and accepted waveform insertion; no implementation changes."
+}

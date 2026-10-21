@@ -15,6 +15,6 @@ quiet floor with the three WiFi channels on top). The end-of-run report counts s
 transfers, RMT frames and display writes; `--tft-png` writes what the panel shows; `press boot 150`
 in a script presses the BOOT button (GPIO 9).
 
-`--stub bb_init=0` skips the PHY blob's baseband calibration (TX DC, IQ, power detector — hardware
-handshakes on undocumented registers that the model does not have). Everything else in the PHY
-init runs; the 802.15.4 MAC model does not depend on the PHY. See ../../docs/esp32c6.md.
+The PHY blob's init runs in full, baseband calibration included (TX DC, power-detector tones, RX
+DCO and gain tables against the modelled baseband status fields, #203); the 802.15.4 MAC model
+does not depend on the PHY. See ../../docs/esp32c6.md.

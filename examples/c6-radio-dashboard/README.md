@@ -56,7 +56,7 @@ target/release/esp32sim-c6 --boot rom --flash-mb 4 --board waveshare-c6-lcd147 \
   --bootloader "$B/bootloader/bootloader.bin" \
   --ptable "$B/partition_table/partition-table.bin" \
   --app "$B/radio_dashboard.bin" --elf "$B/radio_dashboard.elf" \
-  --stub bb_init=0 --max-seconds 8 --tft-png /tmp/dashboard.png
+  --max-seconds 8 --tft-png /tmp/dashboard.png
 ```
 
 The existing spectrum path requires the calibration stub above; this is a display/energy

@@ -23,6 +23,21 @@ pub struct PinRoutes<'a> {
     mux: &'a RegRam,
 }
 impl PinRoutes<'_> {
+    /// Programmed GPIO-latch drive, not electrical input/pull resolution or a peripheral output.
+    /// IDF v5.5.4 components/soc/{esp32,esp32s3}/register/soc/gpio_reg.h:
+    /// FUNC0_OUT_SEL/OUT_INV_SEL/OEN_INV_SEL bits 0..8/9/11 (lines 7065..7092 and
+    /// 7790..7813); {esp32c3,esp32c6}: bits 0..7/8/10 (3883..3906 and 4992..5023).
+    /// For the GPIO selector, using GPIO_ENABLE regardless of OEN_SEL is inferred
+    /// model behavior shared with the classic adapter, not hardware calibration.
+    pub fn software_output(&self, pin: u8) -> Option<bool> {
+        let pin = usize::from(pin);
+        if !self.function(pin, 1) { return None; }
+        let signal = (self.chip.output_mask + 1) / 4;
+        let route = self.gpio.func_out_sel[pin];
+        if route & (signal * 2 - 1) != signal { return None; }
+        let enabled = (self.gpio.enable & (1u64 << pin) != 0) ^ (route & (signal * 8) != 0);
+        enabled.then(|| (self.gpio.out & (1u64 << pin) != 0) ^ (route & (signal * 2) != 0))
+    }
     pub fn valid_pin(&self, pin: usize) -> bool { pin < 64 && self.chip.valid & (1u64 << pin) != 0 }
     fn mux(&self, pin: usize) -> u32 { self.mux.read(4 + 4 * pin as u32) }
     pub fn function(&self, pin: usize, function: u32) -> bool { self.valid_pin(pin) && self.mux(pin) & (7 << 12) == function << 12 }

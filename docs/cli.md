@@ -1,7 +1,7 @@
 # Command line
 
 ```
-esp32sim [--chip s3|c3|c6] --boot rom --bootloader B.bin --ptable P.bin --app A.bin [--elf X.elf ...] [options]
+esp32sim [--chip esp32|s3|c3|c6] --boot rom --bootloader B.bin --ptable P.bin --app A.bin [--elf X.elf ...] [options]
 esp32sim --flash-image flash.bin --boot rom ...
 ```
 
@@ -17,13 +17,14 @@ PSRAM and register presets.
 | `--boot rom\|app` | `rom`: start at the mask ROM reset vector (real boot chain). `app`: load the app image segments and jump to its entry |
 | `--bootloader F`, `--ptable F`, `--app F` | written to flash at 0x0 / 0x8000 / 0x10000 |
 | `--flash-image F` | whole flash dump written at 0 |
-| `--chip s3\|c3\|c6` | which chip (default s3) |
+| `--chip esp32\|s3\|c3\|c6` | which chip (default s3; `esp32` is the classic ESP32) |
 | `--rom F` | mask ROM ELF (default: the chip's in `ESP32SIM_ROM_DIR`, then `~/.espressif/tools/esp-rom-elfs/*/`) |
 | `--mac xx:xx:xx:xx:xx:xx` | the station MAC the efuses report |
 | `--cam-stream PATH\|-`, `--cam-size WIDTHxHEIGHT` | live RGB24 camera source and its dimensions; requires `waveshare-cam` |
 | `--serial TEXT` | bytes into the USB-Serial/JTAG console before the run |
 | `--elf F` (repeatable) | symbols for logs/profiles (app ELF, bootloader ELF) |
-| `--flash-mb N`, `--psram-mb N` | flash size (JEDEC follows it) and octal PSRAM size (default 8 / 2) |
+| `--flash-mb N`, `--psram-mb N` | flash size (JEDEC follows it) and octal PSRAM size (default 8 / 2; the octal PSRAM's MR2 density follows it for 4, 8, 16, 32 and 64) |
+| `--flash-octal` | octal SPI flash (ESP32-S3-WROOM-2): Macronix octal commands, JEDEC C2 80 xx, efuse FLASH_TYPE octal; S3 only. An `--efuse-regs` dump is loaded after it: a dump that includes RD_REPEAT_DATA3 (efuse +0x3c) replaces that word, FLASH_TYPE (bit 9) with it |
 | `--board atech14\|waveshare-cam\|waveshare-lcd4b\|waveshare-amoled18-v2\|none` | board model (default atech14); on the C6: `waveshare-c6-lcd147` or `none`; on the classic ESP32: `ttgo-tdisplay` (alias `tdisplay`), `esp32dev-loopback` or `none`/`esp32dev` |
 | `--strap HEX`, `--reset-cause HEX`, `--efuse-regs F`, `--regs-init F` | reproduce a real chip's boot state (used by the differential tests) |
 | `--no-reboot` | stop at the first chip reset instead of rebooting from ROM |
@@ -41,6 +42,8 @@ PSRAM and register presets.
 ## Running
 | Flag | Meaning |
 | --- | --- |
+| `--version`, `-V` | print `esp32sim <version>` and exit |
+| `--help`, `-h` | print the usage line and exit |
 | `--max-seconds S` | stop after this much emulated time, including all reboots; also applies to `--cooja` |
 | `--max-insns N` | cap scheduler work across all reboots (details below); unavailable with `--cooja`, which uses `--max-seconds` |
 | `--i2s-tone PORT:HZ:AMPLITUDE` | continuous RX sine on I2S controller 0 or 1; amplitude 0..1, for example `0:1000:0.5`; repeat for multiple controllers |
