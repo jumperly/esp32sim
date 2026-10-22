@@ -509,6 +509,9 @@ impl SocBus {
             self.spi2_dma_fault = None;
             self.spi2_scheduled = None;
         }
+        if a == PERIPH_BASE + 0x25_000 && v & (1 << 24) != 0 {
+            self.spi3_dma_fault = None;
+        }
         // GDMA block: OUT_RST (0x60) or an OUT_LINK START/RESTART (0x80) on the
         // scheduled SPI2 source channel discards the transaction: the payload was
         // snapshotted for a chain that no longer exists, so hardware-model semantics
@@ -534,7 +537,6 @@ impl SocBus {
             self.spi2_pins = self.board.uses_spi_pins().then(|| self.periph.spi2_pins());
         }
         if a == PERIPH_BASE + 0x25_000 && v & (1 << 24) != 0 && !self.periph.spi3.has_pending_transfer() {
-            self.spi3_dma_fault = None;
             self.spi3_pins = self.board.uses_spi_pins().then(|| self.periph.spi3_pins());
         }
         self.periph.write32(a, v);

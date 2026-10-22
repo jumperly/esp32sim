@@ -1,7 +1,8 @@
 # EX235: GP-SPI3 (HSPI) on the ESP32-S3
 
-Base: upstream/main `f5a038bf`, rebased onto `af9ebc79` (see "Rebased onto main" below). The
-final source is the commit containing this receipt. Renumbered from EX232, which #243 uses.
+Base: upstream/main `af9ebc79`; the firmware run and the CPU comparison below were first made on
+`f5a038bf` and the checks repeated on `af9ebc79` ("Checks on main `af9ebc79`"). The final source
+is the commit containing this receipt.
 Inputs, hashes and the exact commands are in [inputs.json](inputs.json); the checks that ran
 and their results in [checks.json](checks.json).
 
@@ -164,11 +165,11 @@ MSVC build (no symbols in the release executable for `llvm-objdump`); `tick_impl
   controller number, so an SPI3 device needs a board that routes by pins or by host.
 - The firmware images are not committed and no golden pins them.
 
-## Rebased onto main
+## Checks on main `af9ebc79`
 
-Main `af9ebc79` merged into the branch; the SPI3 code is unchanged. Rust 1.99.1 (58cf8f9c3
+The same change on main `af9ebc79`. Rust 1.99.1 (58cf8f9c3
 2026-10-13), `cargo +1.99.1`, Windows 11, ROMs from `tools/fetch-rom-elfs.sh roms`; entries
-marked `rebased` in [checks.json](checks.json):
+marked `on_main` in [checks.json](checks.json):
 
 - Clippy native and wasm32 jit-tests, warnings denied: pass.
 - `ESP32SIM_ROM_DIR=roms cargo test --release --workspace --no-fail-fast -- --include-ignored
@@ -183,5 +184,14 @@ marked `rebased` in [checks.json](checks.json):
   `mount failed`. On main `af9ebc79` (3 emulated seconds): `tft ready`, no SPI3 line, core 1 at
   550 084 899 instructions, as on `f5a038bf`.
 
-CPU: not re-measured after the rebase; the run above against `f5a038bf` stands, and the per-tick
-SPI3 code is the same. A maintainer re-measurement on current main is welcome.
+## Review follow-up
+
+`spi3_dma_fault` is cleared on every USR write, as `spi2_dma_fault` is; it was cleared only
+while no SPI3 transfer was pending. The two rules agree in every state the model reaches today
+(SPI3's DMA data phase is committed at once, so no transfer is pending at a USR write); the change
+keeps a retry after a descriptor fault reading the same on both hosts. New test
+`spi3_dma_fault_is_cleared_by_the_next_transaction` (`esp32s3/src/bus/tests.rs`): a descriptor
+without its owner bit records `NotOwned` on SPI3 and reaches no board; the next CPU-FIFO
+transaction clears it and reaches the board as host 3. With the clear removed it fails. Workspace
+(`--include-ignored --skip external_`): 1019 passed, the same two `decoder_matches_corpus`
+failures; Clippy native and wasm, the wasm build and demos, the privacy check: pass.

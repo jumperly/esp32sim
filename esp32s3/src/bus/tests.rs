@@ -1770,3 +1770,32 @@ fn spi3_routes_come_from_its_matrix_signals() {
     assert_eq!((pins.sclk, pins.mosi, pins.miso, pins.cs), (1 << 6, 1 << 5, Some(4), 1 << 7));
     assert_eq!(bus.periph.spi2_pins().sclk, 0, "SPI2 is routed nowhere");
 }
+
+/// A descriptor fault on SPI3's DMA is recorded in `spi3_dma_fault` and cleared by the next USR
+/// write, as SPI2's is (`assert_dma_fault_and_recovery`): a CPU-FIFO retry reaches the board as host 3.
+#[test]
+fn spi3_dma_fault_is_cleared_by_the_next_transaction() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let mut bus = SocBus::new(1024, 1024, [0; 6]);
+    bus.board = Box::new(ProbeBoard { events: events.clone() });
+    bus.write32(FIRST_DESC, 4 | (4 << 12) | (1 << 30)).unwrap();        // owner bit clear: not the DMA's
+    bus.write32(FIRST_DESC + 4, 0x3fc9_0200).unwrap();
+    bus.write32(FIRST_DESC + 8, 0).unwrap();
+    bus.periph.gdma.out[1].peri_sel = 1;
+    bus.periph.gdma.out[1].desc = FIRST_DESC;
+    bus.periph.gdma.out[1].running = true;
+    bus.write32(SPI3 + 0x30, 1 << 28).unwrap();                         // DMA TX
+    bus.write32(SPI3 + 0x10, 1 << 27).unwrap();
+    bus.write32(SPI3 + 0x1c, 31).unwrap();
+    bus.write32(SPI3, 1 << 24).unwrap();
+    assert_eq!(bus.spi3_dma_fault, Some(DmaDescriptorFault::NotOwned { descriptor: FIRST_DESC }));
+    assert_eq!(bus.periph.spi3.transfers, 0);
+    assert!(events.lock().unwrap().is_empty());
+    bus.write32(SPI3 + 0x30, 0).unwrap();                               // CPU mode
+    bus.write32(SPI3 + 0x1c, 7).unwrap();
+    bus.write32(SPI3 + 0x98, 0xa5).unwrap();
+    bus.write32(SPI3, 1 << 24).unwrap();
+    assert_eq!(bus.spi3_dma_fault, None);
+    assert_eq!(bus.periph.spi3.transfers, 1);
+    assert_eq!(&*events.lock().unwrap(), &["spi:3:[a5]:0"]);
+}
