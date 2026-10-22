@@ -18,7 +18,7 @@ modeling oscillator calibration. Classic UART receive is event-driven and
 has no periodic tick callback.
 
 ```sh
-cargo +1.99.0 build --release -p esp32sim
+cargo build --release -p esp32sim
 ./target/release/esp32sim --chip esp32 --board esp32dev --boot rom \
   --rom web/wasm/fw/esp32_rev300_rom.elf \
   --bootloader web/wasm/fw/public/classic-hello-bootloader.bin \

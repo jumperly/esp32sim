@@ -45,7 +45,10 @@ jobs:
           tag='${{ inputs.tag || github.ref_name }}'
           dir="esp32sim-${tag#v}-${{ matrix.platform }}"
           mkdir -p "dist/$dir"
+          mkdir -p "dist/$dir/docs" "dist/$dir/tools"
           cp target/release/esp32sim target/release/esp32sim-c3 target/release/esp32sim-c6 LICENSE README.md "dist/$dir/"
+          cp docs/quick-start.md docs/getting-started.md docs/cli.md "dist/$dir/docs/"
+          cp tools/fetch-rom-elfs.sh "dist/$dir/tools/"
           tar -czf "dist/$dir.tar.gz" -C dist "$dir"
           tar -tzf "dist/$dir.tar.gz"
       - uses: actions/upload-artifact@v4

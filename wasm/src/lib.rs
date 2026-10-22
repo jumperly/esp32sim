@@ -66,6 +66,8 @@ pub struct Emu {
     buf: Vec<u8>,
     /// Jumperly patch J13: the host's side of the station's NAT (`esp32sim_net_host`)
     net: Option<esp_soc::nat::QueueHandle>,
+    /// a mask ROM ELF was loaded: a ROM boot without one would run from empty memory and print nothing
+    rom_loaded: bool,
     #[cfg(target_arch = "wasm32")]
     jit: BrowserJit,
 }
@@ -191,7 +193,7 @@ pub unsafe extern "C" fn esp32sim_new(board: *const u8, board_len: usize, flash_
     Box::into_raw(Box::new(Emu {
         m,
         out: Vec::new(), ethernet_out: Vec::new(), ble_out: String::new(),
-        booted: false,
+        booted: false, rom_loaded: false,
         buf: Vec::new(),
         net: None,
         #[cfg(target_arch = "wasm32")]
@@ -232,7 +234,7 @@ pub unsafe extern "C" fn esp32sim_load(e: *mut Emu, kind: u32, ptr: *const u8, l
     let e = unsafe { &mut *e };
     // SAFETY: The caller provides a readable input buffer for this call.
     let data = unsafe { bytes(ptr, len) };
-    match e.m.load(kind, data) { Ok(()) => 0, Err(msg) => { log(&format!("[emu] load kind {}: {}", kind, msg)); 1 } }
+    match e.m.load(kind, data) { Ok(()) => { if kind == 0 { e.rom_loaded = true; } 0 } Err(msg) => { log(&format!("[emu] load kind {}: {}", kind, msg)); 1 } }
 }
 
 /// Write bytes into flash at an arbitrary offset (a data partition's contents).
@@ -311,10 +313,14 @@ pub unsafe extern "C" fn esp32sim_reports(e: *mut Emu) {
 pub unsafe extern "C" fn esp32sim_boot(e: *mut Emu, app_direct: u32) -> u32 {
     // SAFETY: The caller provides exclusive access to a live emulator.
     let e = unsafe { &mut *e };
+    // a ROM boot without a ROM runs from empty memory and prints nothing: say so (the page refuses it
+    // earlier; the ABI stays permissive for callers that drive the machine another way)
+    if app_direct == 0 && !e.rom_loaded { log("[emu] boot: no mask ROM loaded: the run will print nothing (pick the chip's ROM ELF, or boot the app directly)"); }
     if let Err(msg) = e.m.boot(app_direct != 0) { log(&format!("[emu] boot: {}", msg)); return 1; }
     // the WebSocket server announces the board in its per-client hello; here there is one client
     let name = e.m.board_name();
-    if let Some(w) = e.m.web() { w.send_text(&format!("{{\"t\":\"board\",\"name\":\"{}\"}}", name)); }
+    let chip = e.m.chip();
+    if let Some(w) = e.m.web() { w.send_text(&format!("{{\"t\":\"board\",\"name\":\"{}\",\"chip\":\"{}\"}}", name, chip)); }
     e.booted = true; 0
 }
 

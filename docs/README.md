@@ -4,10 +4,12 @@ Four chips, two CPU architectures: the ESP32-S3 and the classic ESP32 (Xtensa), 
 and ESP32-C6 (RISC-V). Most documents describe the S3; [esp32.md](esp32.md),
 [esp32c3.md](esp32c3.md) and [esp32c6.md](esp32c6.md) cover the other chips.
 
-New here? Start with [getting-started.md](getting-started.md).
+New here? [quick-start.md](quick-start.md) runs your own firmware from a release tarball in three steps;
+[getting-started.md](getting-started.md) is the longer tour of each chip.
 
 | Document | What it covers |
 | --- | --- |
+| [quick-start.md](quick-start.md) | Install a release, fetch the mask ROM, run your own build, read the result, first debugging steps |
 | [getting-started.md](getting-started.md) | Building, running firmware on each chip, WiFi, scripts, the browser build, debugging |
 | [hardware-testing.md](hardware-testing.md) | How each chip is compared with real hardware, and the results |
 | [architecture.md](architecture.md) | How the emulator is built: crates, CPU core, SoC bus, scheduling, boards, UI |

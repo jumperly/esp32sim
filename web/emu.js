@@ -52,7 +52,8 @@
 
   window.EmuLink = {
     connect(handler, status) {
-      onmessage = handler; setStatus = status; if (failure) setStatus(failure);
+      // the status line is in the header, behind the configuration dialog: mirror it into the dialog too
+      onmessage = handler; setStatus = (s) => { status(s); const el = document.getElementById('fw_status'); if (el) el.textContent = s; }; if (failure) setStatus(failure);
       fetch('wasm/esp32sim.wasm').then((r) => { if (!r.ok) throw new Error('wasm/esp32sim.wasm: ' + r.status + (r.status === 404 ? ' — build it: tools/wasm-build.sh' : '')); return r.arrayBuffer(); })
         .then((buf) => worker.postMessage({ op: 'init', wasm: buf, frameAck: true, touchTrace: q.has('touchTrace') }, [buf]))
         .catch((e) => setStatus('cannot load wasm: ' + e.message));
@@ -83,16 +84,26 @@
       <label><input id="fw_appdirect" type="checkbox"> boot app directly (no ROM)</label>
     </div>
     <div class="row">
-      <label>ROM ELF <input type="file" id="fw_rom"></label>
+      <label>ROM ELF <input type="file" id="fw_rom"></label><span class="note" id="fw_romnote">optional: this site's copy of the chip's mask ROM is used when empty</span>
       <label>bootloader.bin <input type="file" id="fw_bootloader"></label>
       <label>partition-table.bin <input type="file" id="fw_ptable"></label>
       <label>app.bin <input type="file" id="fw_app"></label>
       <label>app.elf (symbols) <input type="file" id="fw_elf"></label>
       <label>script <input type="file" id="fw_script"></label>
-      <button class="go" id="fw_go">▶ Boot</button>
-    </div>`;
+      <button class="go" id="fw_go">▶ Boot</button><span class="note" id="fw_status"></span>
+    </div>
+    <div class="row note">Your build's three images are in its build directory: <code>bootloader/bootloader.bin</code>, <code>partition_table/partition-table.bin</code> and the app. Booting again replaces the running machine; the files stay chosen. <a href="https://github.com/mikroverk/esp32sim/blob/main/docs/quick-start.md" target="_blank">Quick start ↗</a></div>`;
   document.body.insertBefore(panel, document.querySelector('main'));
   const $ = (id) => document.getElementById(id);
+  // The memory the demos use for each board (the CLI's defaults: S3 8 / 2, the others 4 / 0); picking
+  // a board sets them, the visitor can still change them.
+  const MEMORY = { 'waveshare-lcd4b': [16, 8], 'waveshare-amoled18-v2': [16, 8], 'waveshare-cam': [16, 8], atech14: [8, 2], none: [8, 2],
+    esp32: [4, 0], 'ttgo-tdisplay': [4, 0], esp32c3: [4, 0], esp32c6: [4, 0], 'waveshare-c6-lcd147': [4, 0] };
+  $('fw_board').onchange = () => { const m = MEMORY[$('fw_board').value]; if (m) { $('fw_flash').value = m[0]; $('fw_psram').value = m[1]; } };
+  // The mask ROM the site hosts for the chip a board name implies (the files tools/fetch-demo-assets.sh
+  // puts in wasm/fw/): used when the visitor picks no ROM ELF of their own.
+  const romFor = (board) => board === 'esp32c3' ? 'esp32c3_rev3_rom.elf' : /c6/.test(board) ? 'esp32c6_rev0_rom.elf'
+    : /^(esp32|esp32dev.*|ttgo-tdisplay|tdisplay)$/.test(board) ? 'esp32_rev300_rom.elf' : 'esp32s3_rev0_rom.elf';
   const readFile = (f) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsArrayBuffer(f); });
 
   // Preserve the value text so the Rust parser owns all return-value rules.
@@ -101,8 +112,9 @@
     return (symbols[name] || name) + (split < 0 ? '' : spec.slice(split));
   }
   async function boot(cfg, files) {
-    if (started) { location.reload(); return; }
-    setStatus('loading firmware…');
+    // booting again replaces the running machine (the worker deletes it on `create`); the page keeps
+    // its console and the dialog keeps its files
+    setStatus(started ? 'restarting with the new firmware…' : 'loading firmware…');
     let experiments;
     try { const { experimentsFromParams } = await import('./wasm/experiments.mjs'); experiments = experimentsFromParams(q, cfg.board); }
     catch (err) { setStatus(err.message); return; }
@@ -142,7 +154,15 @@
     const files = [];
     for (const k of ['rom', 'bootloader', 'ptable', 'app', 'elf', 'script']) { const f = $('fw_' + k).files[0]; if (f) files.push([k, await readFile(f)]); }
     if (!files.some((x) => x[0] === 'app')) { setStatus('an app.bin is required'); return; }
-    boot({ board: $('fw_board').value, flash_mb: +$('fw_flash').value, psram_mb: +$('fw_psram').value, wifi: $('fw_wifi').value.trim(), stubs: $('fw_stubs').value.split(/[ ,]+/).filter(Boolean), appDirect: $('fw_appdirect').checked }, files);
+    const board = $('fw_board').value;
+    if (!$('fw_appdirect').checked && !files.some((x) => x[0] === 'rom')) {
+      const u = romFor(board);
+      setStatus(`fetching the mask ROM (${u})…`);
+      const r = await fetch(`wasm/fw/${u}`).catch(() => null);
+      if (!r || !r.ok) { setStatus(missing(u, r ? r.status : 'unreachable') + ' — pick the ROM ELF file instead, or tick "boot app directly"'); return; }
+      files.unshift(['rom', await r.arrayBuffer()]);
+    }
+    boot({ board, flash_mb: +$('fw_flash').value, psram_mb: +$('fw_psram').value, wifi: $('fw_wifi').value.trim(), stubs: $('fw_stubs').value.split(/[ ,]+/).filter(Boolean), appDirect: $('fw_appdirect').checked }, files);
   };
   fetch('wasm/fw/demos.json', { cache: 'no-cache' }).then((r) => r.ok ? r.json() : []).then((demos) => {
     const row = $('fw_demos'); if (!demos.length) return; row.style.display = '';

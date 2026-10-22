@@ -12,6 +12,8 @@ pub(super) trait MachineApi {
     fn write_flash(&mut self, off: usize, d: &[u8]) -> Result<(), String>;
     fn boot(&mut self, app_direct: bool) -> Result<(), String>;
     fn board_name(&self) -> String;
+    /// The chip, as the `Soc` names it (`esp32s3`, `esp32c3`, `esp32c6`, `esp32`).
+    fn chip(&self) -> &'static str;
     fn web(&self) -> Option<&WebServer>;
     fn run_slice(&mut self, cycles: u32) -> u32;
     fn cpu_hz(&self) -> f64;
@@ -32,6 +34,7 @@ impl<S: Soc> MachineApi for Machine<S> {
     fn write_flash(&mut self, off: usize, d: &[u8]) -> Result<(), String> { Machine::write_flash(self, off, d) }
     fn boot(&mut self, app_direct: bool) -> Result<(), String> { if app_direct { self.boot_app(0x10000).map(|_| ()) } else { self.boot_rom(); Ok(()) } }
     fn board_name(&self) -> String { self.bus.board_ref().name().to_string() }
+    fn chip(&self) -> &'static str { S::NAME }
     fn web(&self) -> Option<&WebServer> { self.web.as_ref() }
     fn run_slice(&mut self, cycles: u32) -> u32 {
         self.max_cycles = self.bus.cycles() + cycles as u64;

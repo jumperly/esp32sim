@@ -20,7 +20,11 @@ fetch the page stops at `esp32s3_rev0_rom.elf: 404`. xterm.js is only for the Te
 `?wasm` switches `web/run.html` from its WebSocket transport to the worker; the page gains a
 firmware panel: board, flash/PSRAM size, an optional WiFi spec, function stubs, and file inputs
 for the mask-ROM ELF, `bootloader.bin`, `partition-table.bin`, the app image, its ELF (symbols
-— needed for stubs) and a script. **Boot** starts it; the rest of the page — console tabs,
+— needed for stubs) and a script. The ROM input may stay empty: the page then fetches
+`wasm/fw/<chip>_rom.elf` for the chip the board implies, and refuses to boot without one (a ROM boot
+from empty memory would run silently). Picking a board sets the flash and PSRAM sizes the demos use.
+**Boot** starts it, and pressing it again replaces the machine without reloading the page, so the
+chosen files stay; the rest of the page — console tabs,
 display, touch, buttons, knob, audio, camera — is the same UI the native emulator serves.
 
 For your own demos, `?wasm&fw=<name>` loads `web/wasm/fw/<name>.json` and boots it without

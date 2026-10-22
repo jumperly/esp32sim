@@ -1,7 +1,8 @@
 # Getting started
 
 How to build esp32sim and run firmware on each chip. For every flag, see the
-[CLI reference](cli.md).
+[CLI reference](cli.md). The short version, from a release tarball with no Rust toolchain, is
+[quick-start.md](quick-start.md).
 
 - [The chips at a glance](#the-chips-at-a-glance)
 - [Build and get the ROMs](#build-and-get-the-roms)
@@ -248,8 +249,10 @@ python3 -m http.server -d web 8790   # then open http://127.0.0.1:8790/?wasm&fw=
 The demo firmware is committed. The mask ROMs, xterm.js and the Linux image are not, and every demo
 boots from the ROM, so run the fetch once. It gets the same files the Pages site serves.
 
-The emulator runs inside the page, in a Web Worker. Pick a board, load the ROM ELF and firmware
-from disk (or use `?wasm&fw=<name>` for a hosted manifest), and press Boot.
+The emulator runs inside the page, in a Web Worker. Pick a board, load the firmware from disk (or
+use `?wasm&fw=<name>` for a hosted manifest), and press Boot. The ROM ELF input is optional: left
+empty, the page fetches the site's copy of the chip's mask ROM (`wasm/fw/<chip>_rom.elf`, which the
+fetch above puts there). Booting again replaces the machine and keeps the chosen files.
 
 - hello_world, the Touch-LCD-4B panel with its SID player, the Atech board, the ESP32-C3 and the
   ESP32-C6 all run at real time in Chrome.

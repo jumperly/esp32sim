@@ -48,6 +48,10 @@ You can also load your own firmware for any of the chips.
 
 ## Quick start
 
+No Rust needed: the [releases](https://github.com/mikroverk/esp32sim/releases) carry prebuilt binaries
+for macOS and Linux, and [docs/quick-start.md](docs/quick-start.md) takes your own build from the tarball
+to a run in three steps. From a checkout:
+
 ```sh
 cargo build --release
 tools/fetch-demo-assets.sh --no-linux       # downloads the mask ROMs, which are not in the repo
@@ -66,6 +70,7 @@ WiFi, scripts, the browser build and debugging.
 
 ## Documentation
 
+- [Quick start](docs/quick-start.md): install the release, fetch the mask ROM, run your own build, read the result
 - [Getting started](docs/getting-started.md): running firmware on each chip, WiFi, scripts, the browser build
 - [CLI reference](docs/cli.md): every flag, environment variable and output file
 - [Boards](docs/boards.md): what each board models, and how to add one
@@ -77,7 +82,8 @@ WiFi, scripts, the browser build and debugging.
 ## Contributing
 
 Bug fixes, peripherals, boards and new chips are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) lists
-what a pull request needs; these are the same checks CI runs.
+what a pull request needs; these are the same checks CI runs. Security problems go through
+[SECURITY.md](SECURITY.md), not the public issue tracker.
 
 ## Credits and license
 

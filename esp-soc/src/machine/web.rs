@@ -89,7 +89,7 @@ impl<S: Soc> Machine<S> {
             let mut hello: Vec<Vec<u8>> = Vec::new();
             hello.push(frame(1, format!("{{\"t\":\"serial\",\"src\":\"uart0\",\"data\":\"{}\"}}", json_escape(&String::from_utf8_lossy(&self.console.uart0))).as_bytes()));
             hello.push(frame(1, format!("{{\"t\":\"serial\",\"src\":\"usb\",\"data\":\"{}\"}}", json_escape(&String::from_utf8_lossy(&self.console.usb))).as_bytes()));
-            hello.push(frame(1, format!("{{\"t\":\"board\",\"name\":\"{}\"}}", board.name()).as_bytes()));
+            hello.push(frame(1, format!("{{\"t\":\"board\",\"name\":\"{}\",\"chip\":\"{}\"}}", board.name(), S::NAME).as_bytes()));
             if let Some((w_, h_, px, _)) = board.display() { hello.push(frame(2, &display_message(w_, h_, &px))); }
             if let Some(rgb) = board.camera_preview(320, 240) { hello.push(frame(2, &camera_message(&rgb))); }
             if let Some((leds, _)) = board.leds() { hello.push(frame(1, format!("{{\"t\":\"ring\",\"leds\":[{}]}}", leds_json(leds)).as_bytes())); }

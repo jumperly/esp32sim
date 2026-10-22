@@ -32,7 +32,7 @@ Text frames (JSON):
 
 | `t` | Fields | When |
 | --- | --- | --- |
-| `board` | `name` | on connect; the page switches layout |
+| `board` | `name`, `chip` (`esp32s3`, `esp32c3`, `esp32c6`, `esp32`) | on connect; the page switches layout and titles a bare module by the chip |
 | `serial` | `src` (`usb`/`uart0`), `data` | console output (ANSI colours stripped by the page) |
 | `ring` | `leds` `[[r,g,b]…]` | ring changed |
 | `stat` | `time`, `insns`, `frames`, `behind`, `resyncs`, `speed` (emulated seconds per wall second over the last second, `null` before the first second and when not paced), `cam`, `gpio_in` | every 20 ms emulated |

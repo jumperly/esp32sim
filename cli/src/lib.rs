@@ -10,10 +10,32 @@ use std::path::PathBuf;
 pub mod cooja;
 mod camera;
 
-fn usage(chip: &str) -> ! {
+fn usage(chip: &str) -> ! { help(chip, 2) }
+
+/// `--help` prints this and exits 0; a usage error prints it and exits 2.
+fn help(chip: &str, code: i32) -> ! {
     eprintln!("usage: esp32sim [--chip esp32|s3|c3|c6] --boot rom|app --bootloader B.bin --ptable P.bin --app A.bin [--elf X.elf]... [options]");
-    eprintln!("       see docs/cli.md for every flag (default chip here: {})", chip);
-    std::process::exit(2)
+    eprintln!("       esp32sim --flash-image flash.bin --boot rom [options]            (a whole flash dump instead of the three images)");
+    eprintln!("       default chip here: {}; esp32sim-c3 and esp32sim-c6 are --chip c3 / --chip c6", chip);
+    eprintln!();
+    eprintln!("  --rom F               the chip's mask ROM ELF; default: $ESP32SIM_ROM_DIR, then ~/.espressif/tools/esp-rom-elfs/*/");
+    eprintln!("                        (Espressif's, not in the tarball: tools/fetch-rom-elfs.sh DIR downloads all four)");
+    eprintln!("  --board NAME          board model (S3: atech14, waveshare-lcd4b, waveshare-amoled18-v2, waveshare-cam, none;");
+    eprintln!("                        C6: waveshare-c6-lcd147, none; classic: ttgo-tdisplay, esp32dev, none)");
+    eprintln!("  --flash-mb N, --psram-mb N   memory sizes (S3 default 8 / 2, C3, C6 and classic 4 / 0)");
+    eprintln!("  --max-seconds S       stop after S emulated seconds (always give one: the run returns)");
+    eprintln!("  --console usb|uart0|both|none   which consoles to print (uart0 shows the ROM and bootloader)");
+    eprintln!("  --wifi ssid=…,psk=…   a virtual access point with DHCP, DNS, NTP and NAT to the host network");
+    eprintln!("  --script F            host actions at emulated times (button presses, touches, serial input, stop)");
+    eprintln!("  --tft-png F, --wav F  save the display / the audio at the end of the run");
+    eprintln!("  --web PORT            serve the board UI at http://127.0.0.1:PORT/ in real time");
+    eprintln!("  --elf F               symbols for logs, traces and profiles (repeatable)");
+    eprintln!("  --trace-fn PREFIX, --break PC, --watch ADDR, --peek ADDR,N, --profile, --vcd F, --debug AREAS, --no-jit");
+    eprintln!("                        debugging; --no-jit is the oracle when a result looks wrong");
+    eprintln!("  --no-dump             skip the register dump at exit");
+    eprintln!();
+    eprintln!("Every flag: docs/cli.md. First run: docs/quick-start.md. Both are in the tarball and at github.com/mikroverk/esp32sim.");
+    std::process::exit(code)
 }
 
 fn usage_error(message: &str) -> ! { eprintln!("{message}"); std::process::exit(2) }
@@ -172,7 +194,7 @@ pub fn parse(args: &[String], default_chip: &str) -> Opts {
             "--cooja-slice-us" => o.cooja_slice_us = next().parse().expect("slice-us"),
             "--cooja-verbose" => o.cooja_verbose = true,
             "--cooja-rx-timing" => o.cooja_rx_at_end = match next().as_str() { "start" => false, "end" => true, x => { eprintln!("--cooja-rx-timing {}: start or end", x); std::process::exit(2) } },
-            "-h" | "--help" => usage(default_chip),
+            "-h" | "--help" => help(default_chip, 0),
             "-V" | "--version" => { println!("esp32sim {}", env!("CARGO_PKG_VERSION")); std::process::exit(0) }
             _ => { eprintln!("unknown arg {}", a); usage(default_chip) }
         }
