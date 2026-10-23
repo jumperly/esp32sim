@@ -341,7 +341,7 @@ fn authentication_to_a_nearby_network_goes_unanswered() {
 }
 
 #[test]
-fn nearby_specs_parse_with_defaults_and_the_access_points_own_ssid_is_left_out() {
+fn nearby_specs_parse_with_defaults_and_the_access_points_own_ssid_or_bssid_is_left_out() {
     let home = BeaconAp::parse("ssid=Home").unwrap();
     assert_eq!((home.channel, home.rssi, home.secure, home.bssid[0]), (1, -60, true, 0x02), "defaults; a locally administered unicast BSSID");
     assert_eq!(home.bssid, BeaconAp::parse("ssid=Home,chan=3").unwrap().bssid, "the same BSSID every time");
@@ -353,13 +353,46 @@ fn nearby_specs_parse_with_defaults_and_the_access_points_own_ssid_is_left_out()
     }
     assert!(BeaconAp::parse_all(&vec!["ssid=x".to_string(); 33]).is_err(), "more than 32");
     let mut link = StationLink::default();
-    assert!(!link.set_beacons(nearby()), "no access point yet");
+    assert!(link.set_beacons(nearby()).is_none(), "no access point yet");
     link.attach(Some(VirtualAp::new(config(), false)), None);
     let mut list = nearby();
-    list.push(BeaconAp { ssid: "esp32sim".into(), ..home });
-    assert!(link.set_beacons(list));
-    assert_eq!(link.ap().unwrap().beacons.len(), 2, "the access point's own SSID is that access point");
+    list.push(BeaconAp { ssid: "esp32sim".into(), ..home.clone() });
+    list.push(BeaconAp { ssid: "Office".into(), bssid: config().bssid, ..home });
+    let left_out = link.set_beacons(list).unwrap();
+    assert_eq!(link.ap().unwrap().beacons, nearby(), "the access point's own SSID or BSSID is that access point");
+    assert_eq!(left_out.iter().map(|(b, why)| (b.ssid.as_str(), *why)).collect::<Vec<_>>(),
+        [("esp32sim", "the access point's SSID"), ("Office", "the access point's BSSID")]);
 }
+
+/// Two networks around on one BSSID would both answer from it: `parse_all` refuses them, whether
+/// the BSSID is derived from one SSID twice or given twice.
+#[test]
+fn nearby_networks_need_a_bssid_each() {
+    let specs = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    assert!(BeaconAp::parse_all(&specs(&["ssid=Home", "ssid=Home,chan=6"])).unwrap_err().contains("share the BSSID"));
+    assert!(BeaconAp::parse_all(&specs(&["ssid=Home,bssid=02:00:00:00:00:42", "ssid=Cafe,bssid=02:00:00:00:00:42"])).unwrap_err()
+        .contains("'Home' and 'Cafe' share the BSSID 02:00:00:00:00:42"));
+    assert_eq!(BeaconAp::parse_all(&specs(&["ssid=Home,bssid=02:00:00:00:00:42", "ssid=Home,bssid=02:00:00:00:00:43"])).unwrap().len(), 2,
+        "one SSID on two BSSIDs is two networks");
+}
+
+/// A network around answers a probe request sent to the broadcast address or its own, with a
+/// wildcard BSSID or its own (IEEE 802.11-2020 11.1.4.3.4), and no other.
+#[test]
+fn a_nearby_network_answers_only_probes_addressed_to_it() {
+    let home = [0x02, 1, 2, 3, 4, 5];
+    for (a1, a3, answers) in [([0xff; 6], [0xff; 6], true), (home, [0xff; 6], true), ([0xff; 6], home, true), (home, home, true),
+        ([0x02, 9, 8, 7, 6, 5], [0xff; 6], false), ([0xff; 6], [0x02, 9, 8, 7, 6, 5], false)] {
+        let mut ap = VirtualAp::new(config(), false);
+        ap.beacons = vec![nearby().remove(0)];
+        let mut probe = probe_request(&[0, 4, b'H', b'o', b'm', b'e']);
+        probe[4..10].copy_from_slice(&a1);
+        probe[16..22].copy_from_slice(&a3);
+        assert!(ap.on_station_tx(&probe, 1000).is_none());
+        assert_eq!(ap.queue.len(), usize::from(answers), "a1 {a1:02x?} a3 {a3:02x?}");
+    }
+}
+
 /// A probe request from the station to `a1` with these SSID elements (Jumperly patch J11).
 fn probe(a1: [u8; 6], ssids: &[&[u8]]) -> Vec<u8> {
     let mut frame = station_frame(4 << 4, &[]);

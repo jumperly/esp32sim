@@ -295,7 +295,7 @@ fn setup_s3(o: &Opts) -> esp32s3::Machine {
         let (cfg, nat) = wifi_config(spec, o.net == "nat" || o.net == "user", m.bus.debug.has("net"));
         m.bus.attach_wifi(cfg, nat).unwrap_or_else(|e| { eprintln!("--wifi: {e}"); std::process::exit(2) });
     }
-    m.bus.periph.wifi.link.set_beacons(nearby_networks(o));
+    attach_nearby_networks(&mut m.bus.periph.wifi.link, o);
     if let Some(p) = &o.cam_image { match esp_soc::picture::load(p) { Ok(pic) => { eprintln!("[emu] camera picture {} ({}x{})", p, pic.w, pic.h); m.bus.board.set_camera_picture(pic).unwrap_or_else(|e| usage_error(e)); } Err(e) => { eprintln!("[emu] {}", e); std::process::exit(2); } } }
     m.bus.periph.lcd_cam.frame_cycles = (esp32s3::periph::CPU_HZ as f64 / o.cam_fps) as u64;
     let stopwatch = m.bus.board.name() == "stopwatch";
@@ -330,13 +330,18 @@ fn setup_s3(o: &Opts) -> esp32s3::Machine {
 }
 
 /// `--wifi-nearby SPEC` (repeatable): the networks around the station, which a scan lists and
-/// nothing can join; they need the access point of `--wifi`.
-fn nearby_networks(o: &Opts) -> Vec<esp_soc::wifi::BeaconAp> {
-    if o.wifi_nearby.is_empty() { return Vec::new(); }
+/// nothing can join; they need the access point of `--wifi`. Each one kept is named, and each one
+/// left out (the access point's own SSID or BSSID) says why.
+fn attach_nearby_networks(link: &mut esp_soc::wifi::StationLink, o: &Opts) {
+    if o.wifi_nearby.is_empty() { return; }
     if o.wifi.is_none() { usage_error("--wifi-nearby needs the access point of --wifi"); }
     let list = esp_soc::wifi::BeaconAp::parse_all(&o.wifi_nearby).unwrap_or_else(|e| { eprintln!("--wifi-nearby: {e}"); std::process::exit(2) });
-    for b in &list { eprintln!("[emu] network around: '{}' bssid {} channel {} {} dBm ({})", b.ssid, esp_soc::wifi::mac_str(&b.bssid), b.channel, b.rssi, if b.secure { "WPA2-PSK" } else { "open" }); }
-    list
+    for (b, why) in link.set_beacons(list).unwrap_or_default() {
+        eprintln!("[emu] --wifi-nearby '{}' left out: it has {}", b.ssid, why);
+    }
+    for b in link.ap().map_or(&[][..], |ap| &ap.beacons) {
+        eprintln!("[emu] network around: '{}' bssid {} channel {} {} dBm ({})", b.ssid, esp_soc::wifi::mac_str(&b.bssid), b.channel, b.rssi, if b.secure { "WPA2-PSK" } else { "open" });
+    }
 }
 
 /// `--wifi SPEC` with `--net`: the virtual access point's configuration and, for `--net nat`,
@@ -363,7 +368,7 @@ fn setup_c3(o: &Opts) -> esp32c3::Machine {
         let (cfg, nat) = wifi_config(spec, o.net == "nat" || o.net == "user", m.bus.debug.has("net"));
         m.bus.attach_wifi(cfg, nat).unwrap_or_else(|e| { eprintln!("--wifi: {e}"); std::process::exit(2) });
     }
-    m.bus.periph.wifi.link.set_beacons(nearby_networks(o));
+    attach_nearby_networks(&mut m.bus.periph.wifi.link, o);
     for (flag, on) in [("--board", o.board != "atech14" && o.board != "none"), ("--cam-image", o.cam_image.is_some()), ("--cam-stream", o.cam_stream.is_some()), ("--cam-size", o.cam_size.is_some()), ("--psram-mb", o.psram_mb.is_some()), ("--flash-octal", o.flash_octal), ("--efuse-regs", o.efuse_regs.is_some()), ("--regs-init", o.regs_init.is_some()), ("--regstat", o.regstat.is_some())] {
         if on { eprintln!("{} is not available on the C3", flag); std::process::exit(2); }
     }
@@ -381,7 +386,7 @@ fn setup_esp32(o: &Opts) -> esp32::Machine {
         let (cfg, nat) = wifi_config(spec, o.net == "nat" || o.net == "user", m.bus.debug.has("net"));
         m.bus.attach_wifi(cfg, nat).unwrap_or_else(|e| { eprintln!("--wifi: {e}"); std::process::exit(2) });
     }
-    m.bus.periph.wifi.link.set_beacons(nearby_networks(o));
+    attach_nearby_networks(&mut m.bus.periph.wifi.link, o);
     for (flag, on) in [("--cam-image", o.cam_image.is_some()), ("--psram-mb", o.psram_mb.is_some()), ("--flash-octal", o.flash_octal), ("--efuse-regs", o.efuse_regs.is_some()), ("--regs-init", o.regs_init.is_some()), ("--regstat", o.regstat.is_some())] {
         if on { eprintln!("{} is not available on the classic ESP32", flag); std::process::exit(2); }
     }
@@ -399,7 +404,7 @@ fn setup_c6(o: &Opts) -> esp32c6::Machine {
         let (cfg, nat) = wifi_config(spec, o.net == "nat" || o.net == "user", m.bus.debug.has("net"));
         m.bus.attach_wifi(cfg, nat).unwrap_or_else(|e| { eprintln!("--wifi: {e}"); std::process::exit(2) });
     }
-    m.bus.periph.wifi_mac.link.set_beacons(nearby_networks(o));
+    attach_nearby_networks(&mut m.bus.periph.wifi_mac.link, o);
     for (flag, on) in [("--cam-image", o.cam_image.is_some()), ("--cam-stream", o.cam_stream.is_some()), ("--cam-size", o.cam_size.is_some()), ("--psram-mb", o.psram_mb.is_some()), ("--flash-octal", o.flash_octal), ("--efuse-regs", o.efuse_regs.is_some()), ("--regs-init", o.regs_init.is_some()), ("--regstat", o.regstat.is_some())] {
         if on { eprintln!("{} is not available on the C6", flag); std::process::exit(2); }
     }

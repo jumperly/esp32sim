@@ -124,8 +124,8 @@ fn parse_bssid(value: &str) -> Result<[u8; 6], String> {
 /// A network around the station, heard on the air but not joinable: it answers probe requests,
 /// so a scan lists it with its channel, signal and security (the `bssid`, `ssid`, `primary`,
 /// `rssi` and `authmode` of IDF's `wifi_ap_record_t`, v5.5.5
-/// components/esp_wifi/include/esp_wifi_types_generic.h:325-349; v4.4.8
-/// components/esp_wifi/include/esp_wifi_types.h:189-210), and nothing else, so connecting to it
+/// components/esp_wifi/include/esp_wifi_types_generic.h:320-349; v4.4.8
+/// components/esp_wifi/include/esp_wifi_types.h:191-210), and nothing else, so connecting to it
 /// fails as to a network out of reach.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BeaconAp { pub ssid: String, pub bssid: [u8; 6], pub channel: u8, pub rssi: i8, pub secure: bool }
@@ -163,10 +163,17 @@ impl BeaconAp {
         Ok(b)
     }
 
-    /// Every `--wifi-nearby` spec, at most `BEACONS_MAX` of them.
+    /// Every `--wifi-nearby` spec, at most `BEACONS_MAX` of them, each on a BSSID of its own (two
+    /// specs with one SSID and no `bssid` derive the same one).
     pub fn parse_all(specs: &[String]) -> Result<Vec<BeaconAp>, String> {
         if specs.len() > BEACONS_MAX { return Err(format!("more than {BEACONS_MAX} nearby networks")); }
-        specs.iter().map(|s| Self::parse(s)).collect()
+        let list = specs.iter().map(|s| Self::parse(s)).collect::<Result<Vec<_>, _>>()?;
+        for (i, b) in list.iter().enumerate() {
+            if let Some(o) = list[..i].iter().find(|o| o.bssid == b.bssid) {
+                return Err(format!("nearby networks '{}' and '{}' share the BSSID {}", o.ssid, b.ssid, mac_str(&b.bssid)));
+            }
+        }
+        Ok(list)
     }
 
     /// Jumperly patch J22: the list `esp32sim_wifi_beacons` takes: entries of `[ssid_len u8][ssid][channel u8][rssi i8]
@@ -320,10 +327,13 @@ impl VirtualAp {
                     ies(f, 24).into_iter().find(|(id, d)| *id == 0 && !d.is_empty() && *d != self.cfg.ssid.as_bytes()).map(|(_, d)| d.to_vec())
                 } else { None };
                 if ssid_ok && to_us(&f[4..10]) { let r = self.beacon_like(5, &a2, now_us); self.stats.1 += 1; self.send(now_us + 1500, r); }
-                // the networks around answer a wildcard probe, or one for their SSID
+                // the networks around answer a wildcard probe, or one for their SSID, sent to the
+                // broadcast address or their own with a wildcard BSSID or their own (IEEE
+                // 802.11-2020 11.1.4.3.4)
                 let asked: Vec<Vec<u8>> = ies(f, 24).into_iter().filter(|(id, _)| *id == 0).map(|(_, d)| d.to_vec()).collect();
+                let addressed = |b: &BeaconAp| [&f[4..10], &f[16..22]].iter().all(|a| *a == [0xff; 6] || *a == b.bssid);
                 let around: Vec<BeaconAp> = self.beacons.iter()
-                    .filter(|b| asked.iter().any(|s| s.is_empty() || *s == b.ssid.as_bytes())).cloned().collect();
+                    .filter(|b| addressed(b) && asked.iter().any(|s| s.is_empty() || *s == b.ssid.as_bytes())).cloned().collect();
                 for (i, b) in around.iter().enumerate() {
                     let r = self.beacon_ap_response(b, &a2, now_us);
                     self.send(now_us + 1900 + 400 * i as u64, r);
@@ -591,14 +601,18 @@ impl StationLink {
     pub fn rx_frames(&self) -> u64 { self.rx_frames }
     pub fn rx_dropped(&self) -> u64 { self.rx_dropped }
     pub fn tx_dropped(&self) -> u64 { self.tx_dropped }
-    /// The networks around (beacon-only, not joinable), replacing the ones there were; false
-    /// without an access point. A network with the access point's own SSID is that access point
-    /// and is left out.
-    pub fn set_beacons(&mut self, beacons: Vec<BeaconAp>) -> bool {
-        let Some(ap) = self.ap.as_mut() else { return false };
-        let own = ap.cfg.ssid.clone();
-        ap.beacons = beacons.into_iter().filter(|b| b.ssid != own).collect();
-        true
+    /// The networks around (beacon-only, not joinable), replacing the ones there were; `None`
+    /// without an access point. A network with the access point's own SSID or BSSID would be that
+    /// access point, so it is left out: the ones left out come back with the reason.
+    pub fn set_beacons(&mut self, beacons: Vec<BeaconAp>) -> Option<Vec<(BeaconAp, &'static str)>> {
+        let ap = self.ap.as_mut()?;
+        let mut left_out = Vec::new();
+        ap.beacons = beacons.into_iter().filter_map(|b| {
+            let why = if b.ssid == ap.cfg.ssid { "the access point's SSID" } else if b.bssid == ap.cfg.bssid { "the access point's BSSID" } else { return Some(b) };
+            left_out.push((b, why));
+            None
+        }).collect();
+        Some(left_out)
     }
     /// Jumperly patch J11: `VirtualAp::take_probed` of the access point, None without one.
     pub fn take_probed_ssid(&mut self) -> Option<Vec<u8>> { self.ap.as_mut()?.take_probed() }

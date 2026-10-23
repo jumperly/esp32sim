@@ -1,6 +1,8 @@
-# EX234: networks around the station (`--wifi-nearby`)
+# EX237: networks around the station (`--wifi-nearby`)
 
-Base: upstream/main `9890ac55`. The final source is the commit containing this receipt.
+Base: upstream/main `51a91540`; the firmware runs and the CPU comparison below were first made on
+`9890ac55` and the checks repeated on `51a91540` ("Checks on main `51a91540`"). The final source
+is the commit containing this receipt.
 Inputs, hashes and the exact commands are in [inputs.json](inputs.json); the checks that ran
 and their results in [checks.json](checks.json).
 
@@ -36,8 +38,8 @@ delivered. Without the option nothing changes; the Wi-Fi goldens pass byte-ident
   signed, dBm) and lines 59-60 (`channel`, `secondary_channel`) of `wifi_pkt_rx_ctrl_t`; v4.4.8
   `components/esp_wifi/include/esp_wifi_types.h` lines 387 and 408-409: the fields the chips' RX
   descriptors carry and the scan reads.
-- v5.5.5 `components/esp_wifi/include/esp_wifi_types_generic.h` lines 325-349 (`wifi_ap_record_t`:
-  `bssid`, `ssid`, `primary`, `rssi`, `authmode`), v4.4.8 `esp_wifi_types.h` lines 189-210: what
+- v5.5.5 `components/esp_wifi/include/esp_wifi_types_generic.h` lines 320-349 (`wifi_ap_record_t`:
+  `bssid`, `ssid`, `primary`, `rssi`, `authmode`), v4.4.8 `esp_wifi_types.h` lines 191-210: what
   `WiFi.scanNetworks()` reports per network; `WIFI_AUTH_OPEN` / `WIFI_AUTH_WPA2_PSK` (v5.5.5 lines
   87 and 90) are what the station derives from the Privacy bit and the RSN element.
 - The RX descriptor layouts themselves are unchanged from main (the S3 words are silicon-noted
@@ -58,8 +60,8 @@ value, the 32 limit) and `set_beacons` dropping the access point's own SSID.
 
 ## Firmware
 
-Arduino-ESP32 3.3.12 sketches (in this directory), from the mask ROM, `--wifi ssid=Jumperly
---net none` (commands in inputs.json):
+Arduino-ESP32 3.3.12 sketches (in this directory) on the ESP32-S3, from the mask ROM,
+`--wifi ssid=Jumperly --net none` (commands in inputs.json):
 
 | Run | Options | Console |
 | --- | --- | --- |
@@ -82,9 +84,7 @@ count and produced the same console SHA-256 on both builds (`identical_work_and_
 nor its bus is touched, and none of this change's code runs without `--wifi`.
 
 Nothing is flagged by the receipt rules (slower in at least 6/7 pairs, or non-overlapping
-ranges): S3 hello −2.02% (slower 1/7), C3 hello −15.38% (1/7), C6 hello −2.29% (3/7). An A/A
-control of this setup (main against a byte-identical copy of itself, S3 hello) is in EX233's
-receipt: +1.67%, 5/7, so differences of this size are the setup's own.
+ranges): S3 hello −2.02% (slower 1/7), C3 hello −15.38% (1/7), C6 hello −2.29% (3/7).
 
 ### run 1, started 2026-10-15T18:51:09
 
@@ -139,3 +139,49 @@ receipt: +1.67%, 5/7, so differences of this size are the setup's own.
   it exists for scans and for the failure of a join. Hidden SSIDs, 5 GHz channels and WPA3 are
   not modelled; the RSN element is the access point's WPA2-PSK one.
 - The firmware images are not committed and no golden pins them.
+
+## Checks on main `51a91540`
+
+The same change on main `51a91540`. Rust 1.99.1 (58cf8f9c3 2026-10-13), `cargo +1.99.1`,
+Windows 11, ROMs from `tools/fetch-rom-elfs.sh roms`; entries marked `on_main` in
+[checks.json](checks.json):
+
+- Clippy native and wasm32 jit-tests, warnings denied: pass.
+- `ESP32SIM_ROM_DIR=roms cargo test --release --workspace --no-fail-fast -- --include-ignored
+  --skip external_`: 1020 passed, 2 failed, 0 ignored over 109 binaries; the failures are the two
+  `decoder_matches_corpus` tests (Windows drive-letter path split), unrelated. The Wi-Fi tests
+  above pass; no golden changed. Virtual-quantum scheduler (`ESP32SIM_VQ_NATIVE=1`, `machine`,
+  `virtual_stops`): 43 passed.
+- The wasm build and the eight standard demos, the evidence privacy check: pass.
+- Firmware, the same images (`wifi-net.bin` `16e7673a…`, `wifi-home.bin` `4439d502…`) and
+  commands: the scan prints `scan: 4 network(s)` with the same four lines, the control
+  `scan: 1 network(s)`; the join prints `not connected: status=6`, and its frame log
+  (`--debug wifi-frames`, 30 s) has 30 probe requests for `Home`, 30 probe responses from Home's
+  derived BSSID delivered to the station, 30 authentication frames from the station to that
+  BSSID and no authentication response, with the access point's beacons throughout.
+
+## Review follow-up
+
+- **One BSSID per network.** `BeaconAp::parse_all` refuses two networks around on one BSSID
+  (one SSID given twice without `bssid`, or one `bssid` given twice): both would answer from that
+  address. `StationLink::set_beacons` leaves out a network with the access point's SSID or BSSID,
+  which would otherwise be that access point (with its BSSID, `rx_meta` would give every frame of
+  the access point the network's channel and RSSI), and returns the ones left out with the reason;
+  the CLI prints `[emu] --wifi-nearby '…' left out: it has the access point's BSSID` for those and
+  `network around: …` only for the ones kept.
+- **Probe addressing.** A network around answers a probe request sent to the broadcast address or
+  its own, with a wildcard BSSID or its own (IEEE 802.11-2020 11.1.4.3.4), and no other.
+- **Chip-side tests.** `wifi_rx_ctrl_carries_a_nearby_networks_channel_and_rssi` (S3, C3) and
+  `classic_rx_ctrl_carries_a_nearby_networks_channel_and_rssi` deliver a frame from a network
+  around and one from the access point and read the RX descriptor: the RSSI byte (the classic
+  with its +96 offset) and the channel word. The C6 writes the RSSI only and is covered by
+  firmware, as before.
+- **Citations.** `wifi_ap_record_t` is v5.5.5 `esp_wifi_types_generic.h` lines 320-349 and v4.4.8
+  `esp_wifi_types.h` lines 191-210.
+
+Tests: `nearby_networks_need_a_bssid_each`, `a_nearby_network_answers_only_probes_addressed_to_it`
+and the access point's BSSID case in the set_beacons test; each fails with its rule removed.
+Workspace (`--include-ignored --skip external_`, main `20117b08` merged): 1044 passed, the same
+two `decoder_matches_corpus` failures; virtual-quantum tests 43; Clippy native and wasm, the wasm
+build and demos, the privacy check: pass. The firmware runs above give the same scan, control and
+join results (30 / 30 / 30 / 0 frames).

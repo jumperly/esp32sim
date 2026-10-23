@@ -1,6 +1,6 @@
-// Joins the network "Home" with a password. A new board serves "Jumperly", so the simulator tells
-// the user which network the sketch looks for; with the board's wifiSsid "Home" and wifiPassword
-// "home-pass-123" it connects.
+// Joins the network "Home" with a password and reports whether it connected within 20 s. With
+// `--wifi ssid=Home,psk=home-pass-123` it connects; with another access point and Home only a
+// network around (`--wifi-nearby ssid=Home`), the join times out.
 #include <WiFi.h>
 
 void setup() {

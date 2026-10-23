@@ -1,6 +1,6 @@
-// Wi-Fi in the simulator: scan, join the board's network (DHCP), a DNS lookup, SNTP time and an
-// HTTP GET to the outside, which is refused (the simulated network has no internet yet). The
-// network is the board's default: SSID "Jumperly", open (attributes wifiSsid / wifiPassword).
+// A Wi-Fi scan with each network's channel, signal and security, then a join of NET_SSID (DHCP),
+// a DNS lookup, SNTP time and an HTTP GET to the outside. The receipt runs it against
+// `--wifi ssid=Jumperly` (an open access point) with `--net none`.
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <time.h>

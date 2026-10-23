@@ -449,8 +449,9 @@ pub unsafe extern "C" fn esp32sim_wifi_ap(e: *mut Emu, ssid: *const u8, ssid_len
 
 /// Jumperly patch J22: the networks around the user (the local helper's scan), heard by the
 /// board's scans but not joinable, replacing the ones there were. `data` holds entries of
-/// `[ssid_len u8][ssid][channel u8][rssi i8][secure u8][bssid 6]` (empty: none), at most 32; a network
-/// with the access point's own SSID is left out. Returns 0, or 1 (no access point, bad data; logged).
+/// `[ssid_len u8][ssid][channel u8][rssi i8][secure u8][bssid 6]` (empty: none), at most 32. A network
+/// on a BSSID already listed, or with the access point's own SSID or BSSID, is left out with a log
+/// line (`StationLink::set_beacons`). Returns 0, or 1 (no access point, bad data; logged).
 ///
 /// # Safety
 /// `e` must point to a live emulator to which the caller has exclusive access; for a nonzero `len`,
@@ -465,8 +466,19 @@ pub unsafe extern "C" fn esp32sim_wifi_beacons(e: *mut Emu, data: *const u8, len
         Ok(list) => list,
         Err(reason) => { log(&format!("[emu] wifi: {reason}")); return 1; }
     };
-    let set = e.m.chip_mut().is_some_and(|c| c.wifi_link().set_beacons(list));
-    if set { 0 } else { log("[emu] wifi: beacons need the virtual access point (esp32sim_wifi_ap)"); 1 }
+    // a real scan may list one BSSID twice: the first one answers, as on the air
+    let mut seen = Vec::new();
+    let list = list.into_iter().filter(|b| {
+        let first = !seen.contains(&b.bssid);
+        if first { seen.push(b.bssid); } else { log(&format!("[emu] wifi: network around '{}' left out: its BSSID {} is listed already", b.ssid, esp_soc::wifi::mac_str(&b.bssid))); }
+        first
+    }).collect();
+    let Some(left_out) = e.m.chip_mut().and_then(|c| c.wifi_link().set_beacons(list)) else {
+        log("[emu] wifi: beacons need the virtual access point (esp32sim_wifi_ap)");
+        return 1;
+    };
+    for (b, why) in left_out { log(&format!("[emu] wifi: network around '{}' left out: it has {why}", b.ssid)); }
+    0
 }
 
 /// Jumperly patch J23: the virtual BLE controller (`--ble` of the CLI) on the S3, the C3 or (J28)
