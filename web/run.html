@@ -109,6 +109,7 @@
       <canvas id="lcd" width="480" height="480" style="margin-top:8px;width:480px;height:480px;border-radius:12px;background:#000;cursor:crosshair;touch-action:none"></canvas>
       <div class="row" id="lcdextras" style="display:none;margin-top:8px"><span class="boardbtn" id="lcdboot" data-pin="9">BOOT</span><span class="st">press to switch all-channel / single-channel scan</span><span class="led" id="lcdled" title="WS2812"></span><span class="st">WS2812</span></div>
       <div class="row" id="tdbuttons" style="display:none;margin-top:8px"><span class="boardbtn" data-pin="0">left (GPIO 0)</span><span class="boardbtn" data-pin="35">right (GPIO 35)</span><span class="st">the board's two buttons</span></div>
+      <div class="row" id="stopwatchbuttons" style="display:none;margin-top:8px"><span class="boardbtn" data-pin="2">A (GPIO 2)</span><span class="boardbtn" data-pin="1">B (GPIO 1)</span></div>
     </div>
     <div class="card" id="netpanel" style="display:none">
       <div class="row"><strong>Network</strong><span class="st" id="netstat">two emulated ESP32-C6 motes on one 802.15.4 medium</span></div>
@@ -218,7 +219,7 @@ const lcdRaw = document.createElement('canvas');
 let lcdRotation = 0;
 // what the panel header says once a frame has arrived, and the rotation that reads upright for a
 // board's usual firmware (the T-Display is used landscape, MADCTL MV|MX: its top is the glass's right edge)
-const PANEL_TEXT = { 'waveshare-c6-lcd147': 'ST7789 172×320 over SPI2 + GDMA', 'ttgo-tdisplay': 'ST7789 135×240 over VSPI' };
+const PANEL_TEXT = { 'waveshare-c6-lcd147': 'ST7789 172×320 over SPI2 + GDMA', 'ttgo-tdisplay': 'ST7789 135×240 over VSPI', stopwatch: 'CO5300 468×466 QSPI · CST820 touch' };
 const PANEL_ROTATE = { 'ttgo-tdisplay': 270 };
 function paintLcd() {
   const c = $('#lcd'), w = lcdRaw.width, h = lcdRaw.height; if (!w || !h) return;
@@ -324,6 +325,17 @@ function handleMessage(data) {
     else if (m.t === 'emu') addSerial('usb', m.msg + '\n');
     else if (m.t === 'board') { boardName = m.name; setLcdRotation(new URLSearchParams(location.search).get('rotate') ?? (window.EmuLink && window.EmuLink.displayRotate) ?? PANEL_ROTATE[m.name] ?? 0); document.body.classList.toggle('bare', m.name !== 'atech14'); $('#line').placeholder = lineHint(m.name); if (m.name === 'atech14') { document.querySelector('h1').textContent = 'ESP32‑S3 emulator — Atech 14‑port board'; } else if (m.name === 'esp32c3') { document.querySelector('h1').textContent = 'ESP32‑C3 emulator — RISC-V, console only'; } else if (m.name === 'esp32c6') { document.querySelector('h1').textContent = 'ESP32‑C6 emulator — RISC-V, console only'; } else if (m.name === 'waveshare-c6-lcd147') { document.querySelector('h1').textContent = 'ESP32‑C6 emulator — Waveshare ESP32‑C6‑LCD‑1.47'; $('#lcdpanel').style.display = ''; $('#lcdstat').textContent = 'ST7789 172×320 over SPI2 + GDMA — nothing drawn yet: this firmware has not written the display'; $('#lcd').style.display = 'none'; $('#lcdextras').style.display = ''; } else if (m.name === 'ttgo-tdisplay') { document.querySelector('h1').textContent = 'ESP32 emulator — LilyGO TTGO T-Display'; $('#lcdpanel').style.display = ''; $('#lcdstat').textContent = 'ST7789 135×240 over VSPI — nothing drawn yet: this firmware has not written the display'; $('#lcd').style.display = 'none'; $('#tdbuttons').style.display = ''; document.querySelector(`.tabs button[data-src="${window.EmuLink && window.EmuLink.terminal ? 'term' : 'uart0'}"]`).click(); } else if (m.name === 'none') { document.querySelector('h1').textContent = ({ esp32: 'ESP32', esp32c3: 'ESP32‑C3', esp32c6: 'ESP32‑C6' }[m.chip] || 'ESP32‑S3') + ' emulator — bare module'; document.querySelector(`.tabs button[data-src="${window.EmuLink && window.EmuLink.terminal ? 'term' : 'uart0'}"]`).click(); } if (m.name === 'waveshare-cam') { document.querySelector('h1').textContent = 'ESP32‑S3 emulator — Waveshare ESP32‑S3‑CAM‑OV5640'; $('#campanel').style.display = ''; } if (m.name === 'waveshare-lcd4b') { document.querySelector('h1').textContent = 'ESP32‑S3 emulator — Waveshare ESP32‑S3‑Touch‑LCD‑4B'; $('#lcdpanel').style.display = ''; }  syncTitle(); }
     if (m.t === 'board' && m.name === 'waveshare-amoled18-v2') { document.querySelector('h1').textContent = 'ESP32‑S3 emulator, Waveshare ESP32‑S3‑Touch‑AMOLED‑1.8 V2'; $('#lcdstat').textContent = 'CO5300 368×448 over QSPI, click or drag to touch'; const lcd = $('#lcd'); const quarter = lcdRotation === 90 || lcdRotation === 270; lcd.style.width = (quarter ? 448 : 368) + 'px'; lcd.style.height = (quarter ? 368 : 448) + 'px'; $('#lcdpanel').style.display = ''; syncTitle(); }
+    if (m.t === 'board') {
+      $('#stopwatchbuttons').style.display = m.name === 'stopwatch' ? '' : 'none';
+      if (m.name === 'stopwatch') {
+        document.querySelector('h1').textContent = 'ESP32‑S3 emulator — M5Stack StopWatch';
+        $('#lcdstat').textContent = PANEL_TEXT.stopwatch;
+        const lcd = $('#lcd'), quarter = lcdRotation === 90 || lcdRotation === 270;
+        lcd.width = quarter ? 466 : 468; lcd.height = quarter ? 468 : 466;
+        lcd.style.width = lcd.width + 'px'; lcd.style.height = lcd.height + 'px';
+        $('#lcdpanel').style.display = ''; syncTitle();
+      }
+    }
     else if (m.t === 'grid') { drawGrid(m.id, m.leds); }
     else if (m.t === 'net') {
       $('#netpanel').style.display = ''; document.body.classList.add('bare');

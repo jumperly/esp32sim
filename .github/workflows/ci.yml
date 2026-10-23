@@ -78,6 +78,7 @@ jobs:
           node tools/worker-pacing-test.mjs
           node tools/worker-channel-test.mjs
           node --test tools/touch-input-test.mjs
+          node --test tools/stopwatch-ui-test.mjs
       - name: Browser benchmark verdict, configuration and receipt tests
         run: |
           node --test tools/wasm-build-policy.test.mjs

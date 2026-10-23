@@ -30,6 +30,29 @@ form for coding agents, plus the conventions for experiments and evidence.
 - Say what was compared with silicon and what was derived from another chip's model. Code copied
   from another chip keeps none of that chip's "verified on silicon" notes.
 
+## Code style
+
+The code is dense by design: a register map should fit on a screen. Match the file you are in.
+
+- **No rustfmt.** The tree isn't formatted with it, and running it on a whole file rewrites
+  hundreds of lines and buries the actual change. Format only the lines you write, the way their
+  neighbours look. Clippy with warnings denied is the only enforced lint.
+- **Short things stay on one line**: a constructor, a one-expression method, a few related fields,
+  several short `match` arms. Long logic gets its own lines.
+- **A register block is a `match off` on hex offsets** in `read` and `write`, with unmodelled
+  offsets falling through to `RegRam` (see [docs/adding.md](docs/adding.md)). Name the struct after the
+  block and its fields after the IDF register fields (`int_ena`, `int_raw`), so one search finds
+  both.
+- **Each file opens with a one-line `//!`** saying what it models. Comments say why: what the
+  firmware relies on, what silicon does, and the header and IDF version behind it. Don't restate
+  the code.
+- **The guest must not be able to crash the emulator.** Values from registers, descriptors or DMA
+  lengths are clamped or turned into the error the hardware would report (a short SHA DMA chain
+  raises `OUT_DSCR_ERR` in `esp-periph/src/sha.rs`), never an `unwrap` or an index panic.
+- **Tests go in a `#[cfg(test)] mod tests` at the end of the file**, or in a sibling `tests.rs`
+  once they outgrow it (`esp32s3/src/bus/tests.rs`). Tests that boot firmware go in a `tests/`
+  directory; the golden-output tests are in `cli/tests/goldens.rs`.
+
 ## Checks to run before pushing
 
 CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) installs the newest stable Rust on every

@@ -1,6 +1,20 @@
 use super::*;
 
 #[test]
+fn stopwatch_memory_defaults_preserve_other_boards_and_explicit_overrides() {
+    for (board, flash, psram) in [("stopwatch", 16, 8), ("waveshare-amoled18-v2", 8, 2)] {
+        let options = parse(&["esp32sim".into(), "--board".into(), board.into()], "esp32s3");
+        let machine = setup_s3(&options);
+        assert_eq!(machine.bus.flash.len(), flash << 20);
+        assert_eq!(machine.bus.psram.len(), psram << 20);
+    }
+    let options = parse(&["esp32sim".into(), "--board".into(), "stopwatch".into(), "--flash-mb".into(), "8".into(), "--psram-mb".into(), "2".into()], "esp32s3");
+    let machine = setup_s3(&options);
+    assert_eq!(machine.bus.flash.len(), 8 << 20);
+    assert_eq!(machine.bus.psram.len(), 2 << 20);
+}
+
+#[test]
 fn ble_is_opt_in_and_requires_a_supported_adapter_and_symbols() {
     assert!(!parse(&["esp32sim".into()], "esp32s3").ble);
     assert!(parse(&["esp32sim".into(), "--ble".into()], "esp32s3").ble);

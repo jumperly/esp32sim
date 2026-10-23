@@ -23,9 +23,9 @@ PSRAM and register presets.
 | `--cam-stream PATH\|-`, `--cam-size WIDTHxHEIGHT` | live RGB24 camera source and its dimensions; requires `waveshare-cam` |
 | `--serial TEXT` | bytes into the USB-Serial/JTAG console before the run |
 | `--elf F` (repeatable) | symbols for logs/profiles (app ELF, bootloader ELF) |
-| `--flash-mb N`, `--psram-mb N` | flash size (JEDEC follows it) and octal PSRAM size (default 8 / 2; the octal PSRAM's MR2 density follows it for 4, 8, 16, 32 and 64) |
+| `--flash-mb N`, `--psram-mb N` | flash size (JEDEC follows it) and octal PSRAM size (default 8 / 2, or 16 / 8 for StopWatch; the octal PSRAM's MR2 density follows it for 4, 8, 16, 32 and 64) |
 | `--flash-octal` | octal SPI flash (ESP32-S3-WROOM-2): Macronix octal commands, JEDEC C2 80 xx, efuse FLASH_TYPE octal; S3 only. An `--efuse-regs` dump is loaded after it: a dump that includes RD_REPEAT_DATA3 (efuse +0x3c) replaces that word, FLASH_TYPE (bit 9) with it |
-| `--board atech14\|waveshare-cam\|waveshare-lcd4b\|waveshare-amoled18-v2\|none` | board model (default atech14); on the C6: `waveshare-c6-lcd147` or `none`; on the classic ESP32: `ttgo-tdisplay` (alias `tdisplay`), `esp32dev-loopback` or `none`/`esp32dev` |
+| `--board atech14\|waveshare-cam\|waveshare-lcd4b\|waveshare-amoled18-v2\|stopwatch\|none` | board model (default atech14); on the C6: `waveshare-c6-lcd147` or `none`; on the classic ESP32: `ttgo-tdisplay` (alias `tdisplay`), `esp32dev-loopback` or `none`/`esp32dev` |
 | `--strap HEX`, `--reset-cause HEX`, `--efuse-regs F`, `--regs-init F` | reproduce a real chip's boot state (used by the differential tests) |
 | `--no-reboot` | stop at the first chip reset instead of rebooting from ROM |
 | `--flash-at OFFSET=FILE` (repeatable) | write a file into flash at a hex offset — a data partition's contents (the panel's `demo` partition takes `energydata.json`) |
@@ -159,6 +159,12 @@ S3/C3 accept builds exposing the required VHCI/lifecycle symbols, controller BSS
 and function sizes; there is no IDF version gate. Arduino 3.3.8 with IDF 5.5.4 is
 validated. IDF 4.4 Bluedroid is unsupported and fails with a missing-symbol error.
 Other IDF releases have not been validated.
+
+S3 VHCI transmit packets may also reside in mapped PSRAM, as used by
+StopWatch's ESP-IDF 6.1 build with external NimBLE allocation. Every page must
+map to installed PSRAM; flash, invalid mappings and out-of-range packets are
+rejected. The controller task trampoline and its receive buffer still require
+internal controller BSS.
 
 `[ble]` output reports advertising data and discovered GATT handles. Script commands
 use seconds like the other script actions. For example:

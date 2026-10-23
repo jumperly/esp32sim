@@ -41,6 +41,12 @@ ESP32-S3 peripheral MMIO reads and writes must be aligned 32-bit accesses. Byte 
 CPU-side: full base ISA, FPU (single precision), MAC16, booleans, PIE (all esp-dl/esp-dsp
 ops; FFT/GPIO/s32 corners decode but are not executed).
 
+## Board I2C devices
+
+[M5PM1 and M5IOE1](m5-i2c.md) implement the StopWatch firmware's register
+accesses, battery inputs, observable shutdown request and OLED/touch power-reset
+signals. They are reusable devices, not a registered StopWatch board.
+
 ## Host ADC inputs
 
 `SocBus::analog_set(pin, AnalogSource)` supplies volts, as a constant or an emulated-time

@@ -141,8 +141,54 @@ parameters, not a hardware calibration or evidence of tear-free rendering.
 
 Waveshare does not opt into this scan. Its existing GPIO13 oscillator remains
 unchanged, including its optional measured 16,773 us period / 578 us high variant;
-STE and TE commands do not change that legacy waveform. The StopWatch board,
-registration, I2C power/reset coupling and UI are separate work.
+STE and TE commands do not change that legacy waveform.
+
+## `stopwatch` — M5Stack StopWatch (ESP32-S3)
+
+Selected with `--board stopwatch` (alias `m5stack-stopwatch`). The native CLI
+defaults to 16 MB flash and 8 MB PSRAM for this board; `--flash-mb` and
+`--psram-mb` override them. `BoardModel` has no memory-size defaults.
+The browser Configure selector includes `stopwatch`; memory sizes remain
+explicit browser configuration values.
+
+| Device | Bus | Model |
+| --- | --- | --- |
+| CO5300 | SPI2 QSPI | 468×466 RGB565 RAM, column offset 6; CASET 6..473, RASET 0..465; split RAMWR/RAMWRC transfers |
+| TE | GPIO38 | STE-aware synthetic scan: 500 lines, 15,000 µs period, 120 µs high pulse; 3,600,000 / 28,800 cycles at 240 MHz |
+| M5PM1 at `0x6e` | I2C0, SDA47/SCL48 | ID `0x2050`, retained power configuration, battery input and latched shutdown request |
+| M5IOE1 at `0x4f` | I2C0 | OLED rail, OLED reset and touch reset through shared state; synthetic UID `0x0000` |
+| CST820 at `0x15` | I2C0 | Identity and latched touch coordinates, clamped to 467/465; reset clears pending touch |
+| Buttons A / B | GPIO2 / GPIO1, active low | Released-high initial inputs; script names `a` / `b` or `btn_a` / `btn_b`; browser buttons |
+
+Power/reset wiring follows M5Stack's public hardware documentation and
+power-management guide, linked in [the M5 device sources](m5-i2c.md#stopwatch-address-and-wiring-sources):
+M5IOE1 IO8 enables the OLED rail, IO5 releases OLED reset and IO4 releases touch
+reset. The board accepts SPI2 panel writes only while the rail and OLED reset
+are high and the PMIC shutdown latch is clear. Every M5 write updates the wiring,
+including reset pulses between board callbacks. Reset assertion, rail loss or
+PMIC shutdown clears panel RAM and command state, drives TE low and cancels
+future TE edges. Restoring power does not reenable TE without a panel command.
+The display change counter remains monotonic across resets.
+
+PMIC `SYS_CMD=0xa1` blanks the panel and is reported as
+`power_off_requested=true`; it does not halt the CPU. Battery input defaults to
+3900 mV, not charging. These values and the expander UID are synthetic.
+Touch input is ignored while touch reset is asserted or after shutdown.
+
+The directed `esp32s3 --test stopwatch` tests cover factory selection, bus-0
+attachments, firmware register initialization, reset/rail/shutdown gating,
+framebuffer stride, CST820 reports and GPIO38 interrupt routing. The scan
+parameters are not hardware measurements. Physical scanout, touch IRQs,
+BMI270 and RX8130 are not modeled. These tests do not establish firmware boot,
+relay connectivity or tear-free rendering. Native `--web` keeps native
+networking; browser-only WASM has no NAT for external relay connections.
+
+The original PR's native boot report used private StopWatch firmware revision
+`9e0d4dc`. Its `relay_connected` log and rendered status face were a manual
+observation, not a checked-in test or a public firmware fixture. That run cannot
+be reproduced from this repository alone; no public build or private relay
+configuration is included. CI covers the directed board and UI tests above,
+not that firmware's boot or relay connection.
 
 ## `waveshare-c6-lcd147` — Waveshare ESP32-C6-LCD-1.47 (ESP32-C6)
 

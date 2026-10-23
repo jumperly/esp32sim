@@ -7,6 +7,8 @@ use crate::regram::RegRam;
 use std::collections::VecDeque;
 use emu_core::ClockDomain;
 
+pub mod m5;
+
 pub trait I2cDevice {
     /// Current 7-bit address, sampled after each data write. Defaults to the attached address.
     fn address(&self, configured: u8) -> u8 { configured }
