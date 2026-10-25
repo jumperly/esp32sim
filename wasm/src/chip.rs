@@ -196,5 +196,9 @@ mod tests {
         // SAFETY: the test owns the live emulator until it deletes it.
         assert!(unsafe { &mut *c6 }.m.chip_mut().is_none(), "the C6 has no host ABI");
         unsafe { esp32sim_delete(c6) };
+        let p4 = new("esp32p4");
+        // SAFETY: the test owns the live emulator until it deletes it.
+        assert!(unsafe { &mut *p4 }.m.chip_mut().is_none(), "the P4 has no host ABI");
+        unsafe { esp32sim_delete(p4) };
     }
 }
