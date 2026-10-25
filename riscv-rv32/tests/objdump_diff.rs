@@ -3,8 +3,10 @@
 //! objdump cannot decode (`.insn`) must decode as illegal.
 //! The checked-in corpus (`tests/corpus/*.dis`, sampled from a real app and the mask ROM) runs
 //! every time; `RISCV_DIS_FILES=/path/rom.dis:/path/app.dis` runs the ignored full-size test, and
-//! `RISCV_P4_DIS_FILES` the same for listings of P4 (RV32IMAFC) code.
+//! `RISCV_P4_DIS_FILES` the same for listings of P4 (RV32IMAFC) code. The lists are split as
+//! `PATH` is (`std::env::split_paths`: `:`, or `;` on Windows, where `:` is in every path).
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use riscv_rv32::decode::{decode, decode_for, Op};
 use riscv_rv32::disasm;
 use riscv_rv32::state::{MISA_RV32IMAC, MISA_RV32IMAFC};
@@ -51,15 +53,15 @@ fn lines(text: &str) -> impl Iterator<Item = Line<'_>> {
     })
 }
 
-fn read(file: &str) -> String { std::fs::read_to_string(file).unwrap_or_else(|e| panic!("{}: {}", file, e)) }
+fn read(file: &Path) -> String { std::fs::read_to_string(file).unwrap_or_else(|e| panic!("{}: {}", file.display(), e)) }
 
 /// Every instruction in the listings must decode, for a core whose `misa` is `misa`, to objdump's
 /// mnemonic and operands, and every `.insn` word objdump could not decode must be illegal. Xesppie
 /// (`esp.*`) is not modelled and is counted, not compared. Returns the case count.
-fn check(files: &str, misa: u32) -> usize {
+fn check(files: &[PathBuf], misa: u32) -> usize {
     let (mut total, mut bad, mut unknown, mut xesppie) = (0usize, 0usize, 0usize, 0usize);
     let mut by_mnemonic: BTreeMap<String, (usize, usize, String)> = BTreeMap::new();
-    for file in files.split(':') {
+    for file in files {
         let text = read(file);
         for Line { addr, hex, bytes, len, theirs } in lines(&text) {
             if theirs.is_empty() { continue; }
@@ -114,12 +116,18 @@ fn is_f_text(m: &str) -> bool {
     m.starts_with('f') && !m.starts_with("fence")
 }
 
-const C3_C6: &str = "rom.dis:hello_world.dis:c6-rom.dis:c6-hello_world.dis";
-const P4: &str = "p4-rom.dis:p4-idf.dis:rv32f.dis";
+const C3_C6: &[&str] = &["rom.dis", "hello_world.dis", "c6-rom.dis", "c6-hello_world.dis"];
+const P4: &[&str] = &["p4-rom.dis", "p4-idf.dis", "rv32f.dis"];
 
-fn corpus(names: &str) -> String {
-    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/corpus");
-    names.split(':').map(|n| format!("{}/{}", dir, n)).collect::<Vec<_>>().join(":")
+fn corpus(names: &[&str]) -> Vec<PathBuf> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/corpus");
+    names.iter().map(|n| dir.join(n)).collect()
+}
+
+/// The files a `*_DIS_FILES` variable lists.
+fn listed(var: &str) -> Vec<PathBuf> {
+    let list = std::env::var_os(var).unwrap_or_else(|| panic!("{var}=/path/rom.dis:/path/app.dis is required for this test"));
+    std::env::split_paths(&list).collect()
 }
 
 /// Hermetic: the sampled corpora checked in next to this test (see the headers for provenance).
@@ -142,9 +150,8 @@ fn p4_decoder_matches_corpus() {
 #[test]
 fn cores_without_f_reject_every_f_instruction() {
     let mut f = 0;
-    let files = format!("{}:{}", corpus(P4), corpus(C3_C6));
-    for file in files.split(':') {
-        let text = read(file);
+    for file in [corpus(P4), corpus(C3_C6)].concat() {
+        let text = read(&file);
         for l in lines(&text) {
             let with_f = decode_for(MISA_RV32IMAFC, l.addr, l.bytes);
             for plain in [decode(l.addr, l.bytes), decode_for(MISA_RV32IMAC, l.addr, l.bytes)] {
@@ -164,14 +171,12 @@ fn cores_without_f_reject_every_f_instruction() {
 #[test]
 #[ignore = "set RISCV_DIS_FILES=/path/rom.dis:/path/app.dis (riscv32-esp-elf-objdump -d)"]
 fn external_decoder_matches_objdump() {
-    let files = std::env::var("RISCV_DIS_FILES").expect("RISCV_DIS_FILES=/path/rom.dis:/path/app.dis is required for this test");
-    check(&files, 0);
+    check(&listed("RISCV_DIS_FILES"), 0);
 }
 
 /// The same for listings of P4 code, decoded as RV32IMAFC.
 #[test]
 #[ignore = "set RISCV_P4_DIS_FILES=/path/p4rom.dis:/path/app.dis (riscv32-esp-elf-objdump -d)"]
 fn external_p4_decoder_matches_objdump() {
-    let files = std::env::var("RISCV_P4_DIS_FILES").expect("RISCV_P4_DIS_FILES=/path/p4rom.dis:/path/app.dis is required for this test");
-    check(&files, MISA_RV32IMAFC);
+    check(&listed("RISCV_P4_DIS_FILES"), MISA_RV32IMAFC);
 }
