@@ -538,7 +538,7 @@ pub unsafe extern "C" fn esp32sim_ble_virtual_command(e: *mut Emu, cmd: *const u
 /// Jumperly patch J25: the Bluetooth devices around the user (the web page found them), heard by
 /// the guest's scans and not connectable, replacing the ones there were. `data`: entries of
 /// `[addr 6][addr_type u8 (0 public, 1 random)][rssi i8][adv_len u8][adv][rsp_len u8][rsp]`, the
-/// data at most 31 bytes each, at most 64 devices (empty: none). Returns 0, or 1 (no virtual
+/// data at most 31 bytes each, at most `NEARBY_MAX` (32) devices (empty: none). Returns 0, or 1 (no virtual
 /// controller, bad data; logged).
 ///
 /// # Safety

@@ -35,7 +35,7 @@ const ADV: &[u8] = b"\x02\x01\x06\x03\x03\x0f\x18\x09\x09esp32sim";
 pub struct Nearby { pub addr: [u8; 6], pub addr_type: u8, pub rssi: i8, pub adv: Vec<u8>, pub scan_response: Vec<u8> }
 
 /// The most devices around the peer reports.
-pub const NEARBY_MAX: usize = 64;
+pub const NEARBY_MAX: usize = 32;
 
 /// Jumperly patch J26: what crosses the "air" between the boards of a project, through the host.
 /// Out of an emulator: its advertising, connection requests, data and disconnections; into one:

@@ -288,7 +288,7 @@ errors, unsupported HCI opcodes); at most 1024 wait, older ones are dropped.
 `esp32sim_ble_nearby(e, ptr, len)` (Jumperly patch J25): the Bluetooth devices around the user,
 heard by the guest's scans (not connectable), replacing the ones there were. Entries of `[addr 6,
 least significant byte first][addr_type u8: 0 public, 1 random][rssi i8][adv_len u8][adv][rsp_len
-u8][rsp]`, the data at most 31 bytes each, at most 64 devices (`len` 0: none). Each scan of the
+u8][rsp]`, the data at most 31 bytes each, at most 32 devices (`len` 0: none). Each scan of the
 guest — and a running one when the list changes — gets an LE Advertising Report per device
 (ADV_IND; SCAN_RSP too for an active scan, an empty one included). 0, or 1 without the virtual
 controller or for bad data.
