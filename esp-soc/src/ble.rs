@@ -41,7 +41,7 @@ pub enum LinkEvent {
     Advertising(Vec<u8>, Vec<u8>),
     AdvertisingStopped,
     Scan(bool),
-    /// Jumperly patch J25: the guest stopped scanning.
+    /// LE Set Scan Enable turned scanning off.
     ScanStopped,
     /// Jumperly patch J26: the guest asks to connect to a device that is not the peer (another
     /// board of the project, by its address).
@@ -70,11 +70,10 @@ pub enum LinkAction {
     RemoteConnected([u8; 6]),
     /// Jumperly patch J26: the connection this guest asked for failed.
     ConnectFailed([u8; 6]),
-    /// Jumperly patch J25: an advertising report of a device around the user (not the peer):
-    /// its address, advertising data, scan response (sent to an active scan) and RSSI.
-    Report { addr: [u8; 6], addr_type: u8, data: Vec<u8>, scan_response: Vec<u8>, rssi: i8, active: bool },
     Advertisement(Vec<u8>, bool),
     Data(u16, Vec<u8>),
+    /// A device around the station (`peer::Nearby`) in the guest's scan: an LE Advertising Report.
+    Report { addr: [u8; 6], addr_type: u8, data: Vec<u8>, scan_response: Vec<u8>, rssi: i8, active: bool },
 }
 
 const HANDLE: u16 = 1;
@@ -539,9 +538,9 @@ impl HciController for Controller {
                 }
                 LinkAction::Data(cid, pdu) if self.connected => self.l2cap(cid, &pdu),
                 LinkAction::Report { addr, addr_type, data, scan_response, rssi, active } => {
-                    // LE Advertising Report: ADV_IND, then SCAN_RSP for an active scan. Jumperly
-                    // patch J26: an empty one too, as a scannable advertiser answers every scan
-                    // request (a scanner waiting for it reports the device only at the scan's end).
+                    // LE Advertising Report (Bluetooth Core 5.4, Vol 4 Part E 7.7.65.2): ADV_IND, and
+                    // for an active scan SCAN_RSP, an empty one too, as a scannable advertiser
+                    // answers every scan request.
                     for (kind, payload) in [(0u8, &data), (4u8, &scan_response)] {
                         if kind == 4 && !active { continue; }
                         let mut e = vec![2, 1, kind, addr_type];

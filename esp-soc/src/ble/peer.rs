@@ -28,9 +28,9 @@ pub fn advertising_fields(data: &[u8]) -> Vec<String> {
 
 const ADV: &[u8] = b"\x02\x01\x06\x03\x03\x0f\x18\x09\x09esp32sim";
 
-/// Jumperly patch J25: a Bluetooth device around the user (the web page found it): the guest's
-/// scans report it with its address, advertising data, scan response and signal; it cannot be
-/// connected to.
+/// A Bluetooth device around the station (`--ble-nearby`): the guest's scans report it with its
+/// address, advertising data, scan response and signal, and nothing connects to it. `addr` is in
+/// HCI order (least significant byte first); `addr_type` 0 is public, 1 random.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Nearby { pub addr: [u8; 6], pub addr_type: u8, pub rssi: i8, pub adv: Vec<u8>, pub scan_response: Vec<u8> }
 
@@ -112,7 +112,76 @@ impl Nearby {
         Ok(out)
     }
 }
-/// An address as printed (most significant byte first), from its HCI order (least first).
+
+impl Nearby {
+    /// `--ble-nearby`'s `key=value,...`: `name` (a Complete Local Name after the LE General
+    /// Discoverable Flags, at most 26 bytes so both fit the 31-byte advertising data), `adv` and
+    /// `rsp` (the advertising data and the scan response as hex, at most 31 bytes each; `adv`
+    /// replaces the data `name` builds), `addr` (as printed, most significant byte first; default:
+    /// a random static address derived from the advertising data, the same every run), `type`
+    /// `random` (default) or `public`, `rssi` in dBm (default -60). A device needs `name` or `adv`.
+    pub fn parse(spec: &str) -> Result<Nearby, String> {
+        let (mut name, mut adv, mut rsp, mut addr, mut public, mut rssi) = (None, None, Vec::new(), None, false, -60i8);
+        let data = |key: &str, value: &str| hex_bytes(value).filter(|d| d.len() <= 31)
+            .ok_or_else(|| format!("invalid nearby-device {key} '{value}': expected hex, at most 31 bytes"));
+        for entry in spec.split(',') {
+            let (key, value) = entry.split_once('=').ok_or_else(|| format!("invalid nearby-device option '{entry}': expected key=value"))?;
+            match key {
+                "name" => name = Some(value.to_string()),
+                "adv" => adv = Some(data(key, value)?),
+                "rsp" => rsp = data(key, value)?,
+                "addr" => addr = Some(parse_addr(value).ok_or_else(|| format!("invalid nearby-device addr '{value}': expected six hex octets, aa:bb:cc:dd:ee:ff"))?),
+                "type" => public = match value {
+                    "public" => true,
+                    "random" => false,
+                    _ => return Err(format!("invalid nearby-device type '{value}': expected public or random")),
+                },
+                "rssi" => rssi = value.parse().map_err(|_| format!("invalid nearby-device rssi '{value}': expected -128 through 127 dBm"))?,
+                _ => return Err(format!("unknown nearby-device option '{key}'")),
+            }
+        }
+        let adv = match (adv, name) {
+            (Some(adv), _) => adv,
+            (None, Some(name)) if (1..=26).contains(&name.len()) => {
+                let mut d = vec![2, 0x01, 0x06, name.len() as u8 + 1, 0x09];
+                d.extend_from_slice(name.as_bytes());
+                d
+            }
+            (None, Some(name)) => return Err(format!("invalid nearby-device name '{name}': 1 to 26 bytes fit the advertising data")),
+            (None, None) => return Err("a nearby device needs a name or advertising data (adv=)".into()),
+        };
+        let addr = addr.unwrap_or_else(|| {
+            // FNV-1a over the advertising data; a random static address has its top two bits set
+            let h = adv.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &c| (h ^ u64::from(c)).wrapping_mul(0x100_0000_01b3)).to_le_bytes();
+            [h[0], h[1], h[2], h[3], h[4], h[5] | 0xc0]
+        });
+        Ok(Nearby { addr, addr_type: u8::from(!public), rssi, adv, scan_response: rsp })
+    }
+
+    /// Every `--ble-nearby` spec, at most `NEARBY_MAX`, each on an address of its own and none on
+    /// the virtual peer's or the guest's: two advertisers on one address would answer as one.
+    pub fn parse_all(specs: &[String]) -> Result<Vec<Nearby>, String> {
+        if specs.len() > NEARBY_MAX { return Err(format!("more than {NEARBY_MAX} nearby devices")); }
+        let list = specs.iter().map(|s| Self::parse(s)).collect::<Result<Vec<_>, _>>()?;
+        for (i, n) in list.iter().enumerate() {
+            if n.addr == super::PEER { return Err(format!("nearby device {} has the virtual peer's address", addr_text(&n.addr))); }
+            if n.addr == super::ADDRESS { return Err(format!("nearby device {} has the guest's address", addr_text(&n.addr))); }
+            if list[..i].iter().any(|o| o.addr == n.addr) { return Err(format!("two nearby devices share the address {}", addr_text(&n.addr))); }
+        }
+        Ok(list)
+    }
+}
+
+/// An address as printed (most significant byte first) in HCI order (least significant first).
+fn parse_addr(text: &str) -> Option<[u8; 6]> {
+    let parts: Vec<_> = text.split(':').collect();
+    if parts.len() != 6 || parts.iter().any(|p| p.len() != 2) { return None; }
+    let mut a = [0u8; 6];
+    for (b, p) in a.iter_mut().rev().zip(&parts) { *b = u8::from_str_radix(p, 16).ok()?; }
+    Some(a)
+}
+
+/// An address as printed (most significant byte first), from its HCI order.
 pub fn addr_text(a: &[u8; 6]) -> String { a.iter().rev().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(":") }
 pub fn hex(b: &[u8]) -> String { b.iter().map(|v| format!("{v:02x}")).collect() }
 fn uuid(b: &[u8]) -> String {
@@ -353,6 +422,8 @@ impl Peer {
                 rssi: n.rssi,
                 active,
             });
+            let fields: Vec<_> = [&n.adv, &n.scan_response].into_iter().flat_map(|data| advertising_fields(data)).collect();
+            self.log.push(format!("scan report addr={} rssi={} {}", addr_text(&n.addr), n.rssi, fields.join(" ")));
         }
     }
     pub fn command(&mut self, command: &str) -> Result<(), String> {
@@ -720,6 +791,7 @@ impl Default for Session {
 }
 impl Session {
     pub fn new(controller: Box<dyn HciController>, link: Link) -> Self { Self { controller, peer: Peer::new(link), cycles: 0 } }
+    /// A guest reset; the devices around stay, as they are not the chip's.
     pub fn reset(&mut self) {
         self.controller.reset();
         // Jumperly patch J25: the devices around the user outlive a reboot of the guest.
@@ -1145,5 +1217,87 @@ mod tests {
         assert_eq!(&a[..5], &[2, 1, 0x20, 0xfb, 0]);
         assert_eq!(&b[..3], &[2, 1, 0x10]);
         assert_eq!(a.len() - 5 + b.len() - 5, 304);
+    }
+
+    /// One LE Advertising Report: (kind, address type, address in HCI order, data, rssi).
+    type Report = (u8, u8, [u8; 6], Vec<u8>, i8);
+    /// The LE Advertising Reports of the packets the guest gets.
+    fn reports(c: &mut Session) -> Vec<Report> {
+        let mut out = Vec::new();
+        while let Some(p) = c.pop_packet() {
+            if p[1] != 0x3e || p[3] != 2 { continue; }
+            let n = p[13] as usize;
+            out.push((p[5], p[6], p[7..13].try_into().unwrap(), p[14..14 + n].to_vec(), p[14 + n] as i8));
+        }
+        out
+    }
+    fn thermo() -> Nearby { Nearby::parse("name=Thermo,rssi=-70,addr=c4:aa:01:02:03:04,type=public,rsp=03030f18").unwrap() }
+    /// LE Set Scan Parameters (active or passive), then LE Set Scan Enable.
+    fn scan(c: &mut Session, active: bool) {
+        cmd(c, 0x200b, &[u8::from(active), 0x10, 0, 0x10, 0, 0, 0]);
+        cmd(c, 0x200c, &[1, 0]);
+    }
+
+    #[test]
+    fn nearby_specs_parse_with_defaults_and_their_own_addresses() {
+        let t = thermo();
+        assert_eq!(t.adv, b"\x02\x01\x06\x07\x09Thermo");
+        assert_eq!((t.addr, t.addr_type, t.rssi), ([4, 3, 2, 1, 0xaa, 0xc4], 0, -70), "addr in HCI order, public");
+        assert_eq!(t.scan_response, [3, 3, 0x0f, 0x18]);
+        let plain = Nearby::parse("name=Thermo").unwrap();
+        assert_eq!((plain.addr_type, plain.rssi, plain.addr[5] & 0xc0), (1, -60, 0xc0), "random static by default");
+        assert_eq!(plain.addr, Nearby::parse("name=Thermo,rssi=-90").unwrap().addr, "the same address every time");
+        assert_ne!(plain.addr, Nearby::parse("name=Scale").unwrap().addr);
+        assert_eq!(Nearby::parse("adv=0201060303aafe").unwrap().adv, [2, 1, 6, 3, 3, 0xaa, 0xfe]);
+        for bad in ["rssi=-60", "name=", &format!("name={}", "x".repeat(27)), &format!("adv={}", "00".repeat(32)), "name=a,rsp=zz",
+            "name=a,addr=c4:aa:01:02:03", "name=a,addr=c4:aa:01:02:03:4", "name=a,type=static", "name=a,rssi=loud", "name=a,uuid=180f", "name"] {
+            assert!(Nearby::parse(bad).is_err(), "{bad}");
+        }
+        let specs = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(Nearby::parse_all(&specs(&["name=Thermo", "name=Thermo,rssi=-90"])).unwrap_err().contains("share the address"));
+        assert!(Nearby::parse_all(&specs(&["name=a,addr=02:53:49:00:00:02"])).unwrap_err().contains("virtual peer"));
+        assert!(Nearby::parse_all(&specs(&["name=a,addr=02:53:49:00:00:01"])).unwrap_err().contains("guest"));
+        assert!(Nearby::parse_all(&vec!["name=x".to_string(); NEARBY_MAX + 1]).is_err());
+        assert_eq!(Nearby::parse_all(&specs(&["name=Thermo", "name=Scale"])).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_scan_reports_the_devices_around_after_the_virtual_peer() {
+        for active in [true, false] {
+            let mut c = Session::default();
+            c.set_nearby(vec![thermo()]);
+            assert!(reports(&mut c).is_empty(), "nothing before a scan");
+            scan(&mut c, active);
+            let r = reports(&mut c);
+            let peer: Vec<_> = r.iter().filter(|x| x.2 == super::super::PEER).collect();
+            let around: Vec<_> = r.iter().filter(|x| x.2 == thermo().addr).map(|x| (x.0, x.1, x.3.clone(), x.4)).collect();
+            assert!(!peer.is_empty(), "the virtual peer first");
+            let mut expected = vec![(0, 0, thermo().adv, -70)];
+            if active { expected.push((4, 0, vec![3, 3, 0x0f, 0x18], -70)); }
+            assert_eq!(around, expected, "ADV_IND, and SCAN_RSP for an active scan (active={active})");
+            assert!(c.drain_log().iter().any(|l| l.starts_with("scan report addr=c4:aa:01:02:03:04 rssi=-70 name=\"Thermo\"")));
+        }
+    }
+
+    #[test]
+    fn a_running_scan_hears_a_new_list_at_once_and_a_stopped_one_nothing() {
+        let mut c = Session::default();
+        scan(&mut c, true);
+        assert!(reports(&mut c).iter().all(|x| x.2 == super::super::PEER));
+        c.set_nearby(vec![thermo()]);
+        assert_eq!(reports(&mut c).iter().filter(|x| x.2 == thermo().addr).count(), 2, "ADV_IND and SCAN_RSP at once");
+        cmd(&mut c, 0x200c, &[0, 0]);
+        reports(&mut c);
+        c.set_nearby(vec![thermo()]);
+        assert!(reports(&mut c).is_empty(), "no scan, no report");
+    }
+
+    #[test]
+    fn the_devices_around_survive_a_guest_reset() {
+        let mut c = Session::default();
+        c.set_nearby(vec![thermo()]);
+        c.reset();
+        scan(&mut c, false);
+        assert_eq!(reports(&mut c).iter().filter(|x| x.2 == thermo().addr).count(), 1);
     }
 }
