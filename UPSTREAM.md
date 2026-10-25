@@ -24,9 +24,9 @@ The fork's ABI tests (`wasm/tests/jumperly.rs`) boot the Arduino sketches of the
 | Branch | Patch | Upstream PR | Fork PR | Receipt |
 | --- | --- | --- | --- | --- |
 | `patch/octal-flash` | J16 (device part: octal flash, octal PSRAM density, `--flash-octal`) | mikroverk/esp32sim#232, merged 2026-10-21 (`77e43c20`) | #1 | EX231, `docs/evidence/octal-flash-wroom-2/` |
-| `patch/s3-spi3` (`patch/s3-spi3-v2`: one commit on main) | J18 (device part: GP-SPI3, `spi_pins` for it) | mikroverk/esp32sim#266, merged 2026-10-22 (`20117b08`) | #2, #6 | EX235, `docs/evidence/s3-spi3/` |
+| `patch/s3-spi3` (`patch/s3-spi3-v2`: one commit on main; both deleted after the merge) | J18 (device part: GP-SPI3, `spi_pins` for it) | mikroverk/esp32sim#266, merged 2026-10-22 (`20117b08`) | #2, #6 | EX235, `docs/evidence/s3-spi3/` |
 | `patch/nat-transport` | J12 (`NatTransport`, `StdTransport`, `dns_query`, `abort_all`, `local_ntp`) | text ready | #3 | EX233, `docs/evidence/nat-transport/` |
-| `patch/wifi-beacons` (`patch/wifi-beacons-v2`: one commit on main) | J22 (device part: `BeaconAp`, `rx_meta`, `--wifi-nearby`) | mikroverk/esp32sim#270, merged 2026-10-23 (`a6e0b60e`) | #4 | EX237, `docs/evidence/wifi-nearby/` |
+| `patch/wifi-beacons` (`patch/wifi-beacons-v2`: one commit on main; both deleted after the merge) | J22 (device part: `BeaconAp`, `rx_meta`, `--wifi-nearby`) | mikroverk/esp32sim#270, merged 2026-10-23 (`a6e0b60e`) | #4 | EX237, `docs/evidence/wifi-nearby/` |
 | `patch/host-abi` | everything below not listed above | never | direct merge | none (fork-only) |
 
 Dropped: J10 (quad SPI PSRAM commands) — upstream's #197 models them.
