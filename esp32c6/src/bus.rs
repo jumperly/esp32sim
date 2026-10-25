@@ -157,6 +157,7 @@ impl SocBus {
         }
         if self.periph.sha.dma_pending { self.sha_dma_write(a); }
         if matches!(a >> 12, 0x60015 | 0x60080) || a == PERIPH_BASE + 0x960ac { self.parlio_dma_write(a); }
+        if a >> 12 == 0x60017 { self.sdio_slc_write(); }
         if old_drive != (self.periph.gpio.enable, self.periph.gpio.out) {
             self.deliver_gpio_output();
         }
@@ -290,7 +291,7 @@ impl SocBus {
     fn wifi_rx_deliver(&mut self, frame: &[u8], now_us: u64) {
         const RX_CTRL: usize = 92;
         let mac = &self.periph.wifi_mac;
-        if mac.rx_next == 0 { self.periph.wifi_mac.link.drop_rx(); return; }
+        if mac.rx_next == 0 { self.periph.wifi_mac.link.drop_rx_unarmed(); return; }
         let desc = mac.addr(mac.rx_next);
         let log = mac.link.ap().is_some_and(|ap| ap.log);
         let (dw0, buf, next) = (self.sram32(desc), self.sram32(desc.wrapping_add(4)), self.sram32(desc.wrapping_add(8)));

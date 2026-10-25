@@ -42,7 +42,7 @@ binaries in `target/release/`.
 
 Every run boots the chip's own mask ROM, exactly as the silicon does. The ROM is Espressif's
 (Apache-2.0, [espressif/esp-rom-elfs](https://github.com/espressif/esp-rom-elfs)) and is not in
-the tarball. One command fetches all four, pinned by SHA-256:
+the tarball. One command fetches all five, pinned by SHA-256:
 
 ```sh
 tools/fetch-rom-elfs.sh roms
@@ -132,6 +132,7 @@ the end-of-run report:
 | the audio the firmware played | `--wav out.wav` |
 | GPIO edges and interrupt lines as a waveform | `--vcd gpio.vcd` (open it in GTKWave or PulseView) |
 | a PWM pin's frequency and duty | `--pwm 4` |
+| an ADC pad's last 12-bit sample | `--adc 1` |
 | memory at the end of the run | `--peek 0x3fc90000,64` |
 | which functions ran, and for how long | `--profile-blocks` (needs `--elf`) |
 | every call to a function, with arguments | `--trace-fn my_function` |

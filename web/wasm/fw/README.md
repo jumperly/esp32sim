@@ -32,6 +32,21 @@ accompany them. They are native CI fixtures; no new browser manifest is required
 The classic ESP32 hello inputs are `public/classic-hello-*`, built from
 [`examples/hello_world-classic`](../../../examples/hello_world-classic/README.md).
 `classic-hello-NOTICE.txt` lists only linked firmware components.
+The ESP32-P4 goldens' inputs are `public/p4-hello*`, `p4-sdcard*`, `p4-sdsectors*` and
+`p4-usbmsc*`, ESP-IDF v5.5.3 examples built from [`examples/hello_world-p4`](../../../examples/hello_world-p4/README.md)
+(one and both cores), [`sd_card-p4`](../../../examples/sd_card-p4/README.md),
+[`sd_card-p4-sectors`](../../../examples/sd_card-p4-sectors/README.md) and
+[`usb_msc-p4`](../../../examples/usb_msc-p4/README.md); the last links TinyUSB and esp_tinyusb
+besides ESP-IDF, with its licences in `public/p4-usbmsc-NOTICE.txt`. The single-core
+hello_world, which `p4-hello.json` runs, is committed; the rest are pinned by SHA-256 in
+`tools/fetch-p4-firmware.sh`, which fetches them from
+[mikroverk/esp32sim-firmware](https://github.com/mikroverk/esp32sim-firmware) at a pinned commit.
+Images over 1 MB, and images only the tests boot, go there rather than into this repository.
+The co-processor goldens' inputs are `public/p4-hosted*` and `c6-hosted*`: IDF v5.5.3's WiFi station
+example with esp_hosted 2.12.13 on the P4 and ESP-Hosted 2.12.13's slave on the C6, and the same
+pair with ESP-Hosted's raw throughput test, built as
+[`examples/esp-hosted-p4`](../../../examples/esp-hosted-p4/README.md) describes; their licences are in
+`public/hosted-NOTICE.txt`; `tools/fetch-p4-firmware.sh` pins them too.
 
 `tdisplay-prices.json` is the LilyGO TTGO T-Display demo on the classic ESP32: stock MicroPython
 v1.29.0 (`ESP32_GENERIC-20260824-v1.29.0.bin`, MIT, fetched from micropython.org by

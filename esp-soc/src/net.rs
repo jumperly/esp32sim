@@ -11,6 +11,12 @@
 pub(crate) mod packet;
 use packet::{checksum, dns_question, dns_reply, ethernet, ip_packet, transport_checksum, udp_packet, GATEWAY_MAC};
 
+/// `epoch=S` as `--wifi` and `--net` take it: seconds since 1970, at most 32 bits of them
+/// (2106-02-07), so the network's clock in microseconds never overflows.
+pub fn parse_epoch(v: &str) -> Result<u64, String> {
+    v.parse().ok().filter(|&s| s <= u32::MAX as u64).ok_or_else(|| format!("invalid epoch '{v}': expected seconds since 1970, at most {}", u32::MAX))
+}
+
 pub struct VirtualNet {
     pub gw_mac: [u8; 6],
     pub gw_ip: [u8; 4],
@@ -34,6 +40,11 @@ pub struct VirtualNet {
     pub pings: u64,
     pub unhandled: u64,
     now_us: u64,
+    /// the network's clock at power-on, microseconds since 1970: SNTP answers it plus emulated
+    /// time, so a run that asks for the time is the same every time. Without one, the host's
+    /// clock at the first answer fixes it (read then, not at attach: the browser build gets the
+    /// host's time from its page only once a run is going).
+    pub epoch_us: Option<u64>,
 }
 
 /// Jumperly patch J14: IPv4 packets between the boards of one network. A packet for a peer, and a
@@ -69,7 +80,7 @@ impl VirtualNet {
     pub fn new(log: bool) -> Self {
         VirtualNet { gw_mac: GATEWAY_MAC, gw_ip: [10, 0, 2, 2], dns_ip: [10, 0, 2, 3],
                      sta_ip: [10, 0, 2, 15], mask: [255, 255, 255, 0],
-                     log, nat: None, local_ntp: false, lan: None, sta_mac: None, dhcp_acks: 0, dns_answers: 0, ntp_answers: 0, tcp_rejects: 0, arp_replies: 0, pings: 0, unhandled: 0, now_us: 0 }
+                     log, nat: None, local_ntp: false, lan: None, sta_mac: None, dhcp_acks: 0, dns_answers: 0, ntp_answers: 0, tcp_rejects: 0, arp_replies: 0, pings: 0, unhandled: 0, now_us: 0, epoch_us: None }
     }
 
     /// Handle one Ethernet frame from the station; returns frames to send back to it.
@@ -284,11 +295,13 @@ impl VirtualNet {
         vec![self.frame(src, 0x0800, &ip_packet(17, dip, sip, &udp))]
     }
 
-    /// SNTP: hand out the host's clock, so firmware waiting for time gets it.
+    /// SNTP: the network's clock, so firmware waiting for time gets it.
     #[allow(clippy::identity_op, reason = "the zero leap-indicator field remains visible in the packed header")]
     fn ntp(&mut self, q: &[u8], src: &[u8; 6], sip: &[u8; 4], dip: &[u8; 4], sport: u16) -> Vec<Vec<u8>> {
         if q.len() < 48 { return Vec::new(); }
-        let now = std::time::Duration::from_millis(crate::host::unix_time_ms());
+        let now_us = self.now_us;
+        let epoch = *self.epoch_us.get_or_insert_with(|| (crate::host::unix_time_ms() * 1000).saturating_sub(now_us));
+        let now = std::time::Duration::from_micros(epoch.saturating_add(now_us));
         let secs = (now.as_secs() + 2_208_988_800) as u32;               // seconds since 1900
         let frac = ntp_fraction(now.subsec_nanos());
         let mut r = vec![0u8; 48];
@@ -302,7 +315,7 @@ impl VirtualNet {
         }
         r[24..32].copy_from_slice(&q[40..48]);                           // originate = client transmit
         self.ntp_answers += 1;
-        if self.log { eprintln!("[net] NTP request -> host time ({} s since 1900)", secs); }
+        if self.log { eprintln!("[net] NTP request -> {} s since 1900", secs); }
         let udp = udp_packet(dip, sip, 123, sport, &r);
         vec![self.frame(src, 0x0800, &ip_packet(17, dip, sip, &udp))]
     }
@@ -464,6 +477,31 @@ mod tests {
         for _ in 0..LAN_OUT_MAX + 3 { net.handle(&ethernet(&GATEWAY_MAC, &STA_MAC, 0x0800, &syn_to(&PEER)), 1); }
         let lan = net.lan.as_ref().unwrap();
         assert_eq!((lan.out.len(), lan.sent, lan.dropped), (LAN_OUT_MAX, LAN_OUT_MAX as u64, 3));
+    }
+
+    /// SNTP hands out the network's clock plus emulated time: with a fixed epoch the answer is the
+    /// same every run; without one the host's clock is read once, at the first answer.
+    #[test]
+    fn an_epoch_past_32_bits_of_seconds_is_refused() {
+        assert_eq!(parse_epoch("4294967295"), Ok(4_294_967_295));
+        for v in ["4294967296", "18446744073709551615", "-1", "soon"] { assert!(parse_epoch(v).is_err(), "{v}"); }
+    }
+
+    #[test]
+    fn sntp_answers_the_epoch_plus_emulated_time() {
+        let transmit = |net: &mut VirtualNet, now_us: u64| {
+            net.now_us = now_us;
+            let f = net.ntp(&[0x23; 48], &[2; 6], &net.sta_ip.clone(), &net.gw_ip.clone(), 123).remove(0);
+            u32::from_be_bytes(f[14 + 20 + 8 + 40..][..4].try_into().unwrap()) as u64
+        };
+        let mut net = VirtualNet::new(false);
+        net.epoch_us = Some(1_700_000_000_000_000);
+        assert_eq!(transmit(&mut net, 2_500_000), 1_700_000_002 + 2_208_988_800, "epoch + 2.5 s, whole seconds");
+        assert_eq!(transmit(&mut net, 62_500_000), 1_700_000_062 + 2_208_988_800);
+        let mut host = VirtualNet::new(false);
+        let first = transmit(&mut host, 1_000_000);
+        assert!(host.epoch_us.is_some(), "fixed at the first answer");
+        assert_eq!(transmit(&mut host, 11_000_000), first + 10, "then emulated time, not the host's");
     }
 
     #[test]

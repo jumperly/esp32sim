@@ -155,6 +155,22 @@ fn pwm_pins_are_observation_options() {
 }
 
 #[test]
+fn adc_pins_and_raw_counts_are_host_options() {
+    use emu_core::Bus;
+    let o = parse(&["esp32sim".into(), "--adc".into(), "1".into(), "--adc".into(), "20".into(),
+        "--adc-raw".into(), "1=1234".into(), "--adc-raw".into(), "20=4095".into()], "s3");
+    assert_eq!(o.adc_pins, [1, 20]);
+    assert_eq!(o.adc_raw, [(1, 1234), (20, 4095)]);
+    let mut m = setup_s3(&o);
+    apply_adc_raw(&mut m, &o.adc_raw);
+    m.bus.write32(0x6000_880c, 1 << 19).unwrap();
+    m.bus.write32(0x6000_880c, (1 << 19) | (1 << 17)).unwrap();
+    let s = m.bus.adc_observation(1).unwrap();
+    assert_eq!(s.raw, 1234);
+    assert_eq!(s.generation, 1);
+}
+
+#[test]
 fn analog_scripts_validate_inputs_and_keep_panel_touch_separate() {
     use esp_soc::ScriptAction;
     let mut m = esp32::machine([0; 6], 4 << 20);
