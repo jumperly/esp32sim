@@ -749,9 +749,6 @@ pub struct Peripherals {
     pub i2s: [crate::i2s::ClassicI2s; 2],
     /// Jumperly patch J28: the SDIO slave DMA block the ROM touches in download mode.
     pub slc: ClassicSlc,
-    /// Jumperly patch J28: the guest started deep sleep in this boot (`take_deep_sleep`).
-    deep_sleep: bool,
-    deep_sleep_told: bool,
 }
 
 device_set! { Peripherals; clock: (clock) CPU_HZ, [(ClockDomain::RtcSlow, 1600)];
@@ -841,8 +838,6 @@ impl Peripherals {
             adc: ClassicAdc::new(),
             i2s: [crate::i2s::ClassicI2s::for_port(0), crate::i2s::ClassicI2s::for_port(1)],
             slc: ClassicSlc::default(),
-            deep_sleep: false,
-            deep_sleep_told: false,
         };
         for uart in &mut p.uart { uart.write(0x20, 1 << 27); }
         p.sync_crypto();
@@ -886,14 +881,6 @@ impl Peripherals {
     }
     /// SENS and RTC_IO sit in the RTC domain: like RTC_CNTL's register RAM they keep their
     /// values, including touch-timer and DAC power state, across a guest reboot.
-    /// Jumperly patch J28: true once per boot after the guest started deep sleep (RTC_CNTL_STATE0
-    /// SLEEP_EN, or RTC_MEM_CONF RTC_MEM_CRC_START, its first step): sleep is not modelled, the
-    /// chip stops there.
-    pub fn take_deep_sleep(&mut self) -> bool {
-        let new = self.deep_sleep && !self.deep_sleep_told;
-        self.deep_sleep_told |= new;
-        new
-    }
     pub(crate) fn restore_rtc_analog(&mut self, adc: ClassicAdc) {
         self.adc = adc;
         self.gpio.rtc_pads = self.adc.rtc_pad_mask();
@@ -951,13 +938,7 @@ impl Peripherals {
             // RTC_CNTL_TOUCH_SLP_TIMER_EN; :249 bit 31 RTC_CNTL_SLEEP_EN.
             0x3ff4_8018 => {
                 self.adc.touch_timer = v & (1 << 23) != 0;
-                if v & (1 << 31) != 0 { self.deep_sleep = true; }   // Jumperly patch J28
             }
-            // Jumperly patch J28: rtc_cntl_reg.h:2017,2030 RTC_MEM_CONF (+0x100) bit 8
-            // RTC_MEM_CRC_START. `esp_deep_sleep_start` has the ROM checksum the RTC fast memory
-            // before SLEEP_EN (`set_rtc_memory_crc`); the model never finishes it, so the guest
-            // stops there.
-            0x3ff4_8100 if v & (1 << 8) != 0 => self.deep_sleep = true,
             _ => {}
         }
         let i2c = match (addr - PERIPH_BASE) >> 12 {

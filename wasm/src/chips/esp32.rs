@@ -9,9 +9,9 @@ use esp_soc::SocBus;
 /// UART0..2; console port 3 (USB-Serial/JTAG on the S3 and C3) does not exist here.
 const UARTS: u32 = 3;
 const ALL_PINS: u64 = (1u64 << PINS) - 1;
-/// The host log line for a guest that starts deep sleep (no "reset" in it: the adapter takes a
-/// warning with that word for a chip reset).
-pub(crate) const DEEP_SLEEP_NOTE: &str = "[emu] deep sleep is not modelled: the chip stops here";
+/// The host log line for a guest that starts deep sleep with a wake source the model lacks (no
+/// "reset" in it: the adapter takes a warning with that word for a chip reset).
+pub(crate) const DEEP_SLEEP_NOTE: &str = "[emu] deep sleep: only an EXT0 pin wake is modelled, other wake sources never fire";
 
 impl JumperlyChip for ::esp32::Machine {
     fn pins(&self) -> u32 { PINS as u32 }
@@ -167,9 +167,9 @@ impl JumperlyChip for ::esp32::Machine {
         gpio < PINS as u32 && self.bus.periph.adc.set_touch_input(gpio as u8, touched)
     }
 
-    /// Deep sleep is not modelled: once per boot, a line when the guest starts it.
+    /// Only an EXT0 wake ends deep sleep: once per sleep, a line when the guest enables another.
     fn take_notes(&mut self) -> Vec<&'static str> {
-        if self.bus.periph.take_deep_sleep() { vec![DEEP_SLEEP_NOTE] } else { Vec::new() }
+        if self.bus.take_unmodelled_wake() { vec![DEEP_SLEEP_NOTE] } else { Vec::new() }
     }
 }
 

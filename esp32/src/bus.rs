@@ -82,6 +82,8 @@ pub struct SocBus {
     pub(crate) slice_yield: bool,
     /// Jumperly patch J28: the GP-SPI transfer the host has (`pending_spi_host` / `finish_spi_host`).
     spi_wait: Option<SpiWait>,
+    /// Jumperly patch J28: `take_unmodelled_wake` told the host about this sleep.
+    deep_sleep_told: bool,
     pub(crate) deep_sleep: bool,
 }
 
@@ -119,7 +121,7 @@ impl SocBus {
             pins_active: false,
             ble: Default::default(),
             deep_sleep: false,
-            pin_watch: None, rmt_tap: None, pwm_tap: None, i2c_host: false, spi_host: false, slice_yield: false, spi_wait: None,   // Jumperly patch J28
+            pin_watch: None, rmt_tap: None, pwm_tap: None, i2c_host: false, spi_host: false, slice_yield: false, spi_wait: None, deep_sleep_told: false,   // Jumperly patch J28
         }
     }
     /// Jumperly patch J28: hand LEDC output changes to the host.
@@ -150,11 +152,23 @@ impl SocBus {
     /// Jumperly patch J28: nothing in the circuit drives `pin` (`ClassicGpio::float_input`).
     pub fn gpio_float_input(&mut self, pin: u8) {
         self.periph.gpio.float_input(pin);
+        self.ext0_wake();
         self.irq_dirty = true;
         if let Some(ev) = &mut self.gpio_events {
             ev.push((self.cycles, pin, self.periph.gpio.gpio.input & (1 << pin) != 0));
         }
         self.sample_power_on_strap();
+    }
+    /// Jumperly patch J28: true once per deep sleep that has a wake source besides EXT0 enabled
+    /// (rtc_cntl_reg.h:505-529 RTC_CNTL_WAKEUP_STATE_REG WAKEUP_ENA[22:11]: timer, EXT1, touch, ULP, ...): only EXT0 wakes
+    /// the chip (`ext0_wake`), the others never come.
+    pub fn take_unmodelled_wake(&mut self) -> bool {
+        if !self.deep_sleep {
+            self.deep_sleep_told = false;
+            return false;
+        }
+        let other = self.periph.rtc.0.ram.read(0x34) >> 11 & 0xfff & !1 != 0;
+        other && !std::mem::replace(&mut self.deep_sleep_told, true)
     }
     /// Jumperly patch J28: the power-on reset samples the strapping pins from the circuit too. Until
     /// the first instruction runs (the ROM reads GPIO_STRAP_REG first thing) the host's inputs
@@ -1553,25 +1567,37 @@ mod tests {
         assert_eq!(b.periph.gpio.gpio.strap, 0x13, "running: the latched strap stays");
     }
 
-    /// Jumperly patch J28: the first step of deep sleep (RTC_MEM_CRC_START) or SLEEP_EN is noted
-    /// once per boot; nothing else changes.
+    /// Jumperly patch J28: a deep sleep with a timer wake enabled is noted once; one with only EXT0
+    /// is not, and a floated pin wakes it like a driven one.
     #[test]
-    fn deep_sleep_is_noted_once_per_boot() {
+    fn a_deep_sleep_with_an_unmodelled_wake_is_noted_once() {
         use esp_soc::SocBus as _;
+        let sleep = |b: &mut SocBus, ena: u32| {
+            b.write32(0x3ff4_8084, 1 << 31).unwrap();                       // DIG_PWC DG_WRAP_PD_EN
+            b.write32(0x3ff4_8038, ena << 11).unwrap();                     // WAKEUP_STATE: ENA
+            b.write32(0x3ff4_8018, 1 << 31).unwrap();                       // SLEEP_EN
+        };
         let mut b = SocBus::new(4 << 20, [0; 6]);
-        b.write32(0x3ff4_8100, 0).unwrap();
-        b.write32(0x3ff4_8018, 1 << 23).unwrap();
-        assert!(!b.periph.take_deep_sleep());
-        b.write32(0x3ff4_8100, 1 << 8).unwrap();                            // RTC_MEM_CRC_START
-        b.write32(0x3ff4_8018, 1 << 31).unwrap();                           // SLEEP_EN
-        assert!(b.periph.take_deep_sleep());
-        assert!(!b.periph.take_deep_sleep(), "once per boot");
-        b.write32(0x3ff4_8018, 1 << 31).unwrap();
-        assert!(!b.periph.take_deep_sleep());
+        assert!(!b.take_unmodelled_wake());
+        sleep(&mut b, 1 << 3);                                              // RTC_TIMER_TRIG_EN
+        assert!(b.deep_sleep);
+        assert!(b.take_unmodelled_wake());
+        assert!(!b.take_unmodelled_wake(), "once per sleep");
         b.reboot([0; 6]);
-        assert!(!b.periph.take_deep_sleep());
-        b.write32(0x3ff4_8018, 1 << 31).unwrap();
-        assert!(b.periph.take_deep_sleep(), "the next boot notes it again");
+        assert!(!b.take_unmodelled_wake());
+        sleep(&mut b, 1 << 3 | 1);
+        assert!(b.take_unmodelled_wake(), "the next sleep notes it again");
+        b.reboot([0; 6]);
+        assert!(!b.take_unmodelled_wake());
+        // EXT0 on GPIO0 (RTC IO 11, RTC mux and input), wake on low; the pin held high.
+        b.write32(0x3ff4_8498, (1 << 19) | (1 << 13)).unwrap();
+        b.write32(0x3ff4_84bc, 11 << 27).unwrap();
+        b.gpio_set_input(0, true);
+        sleep(&mut b, 1);
+        assert!(!b.take_unmodelled_wake(), "EXT0 is modelled");
+        assert!(!b.periph.rtc.0.sw_reset);
+        b.gpio_float_input(0);                                              // no pull: low
+        assert!(b.periph.rtc.0.sw_reset, "a floated pin wakes like a driven one");
     }
 
     #[test]

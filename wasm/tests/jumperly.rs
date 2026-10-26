@@ -1764,7 +1764,8 @@ fn esp32_a_host_reset_turns_the_dac_off() {
     assert!(dac_take(&mut e).is_empty(), "reported once");
 }
 
-/// `esp_deep_sleep_start()` is not modelled: the chip stops, and the host log gets one line.
+/// `esp_deep_sleep_start()` on the RTC timer: the chip sleeps, the timer wake never comes (only
+/// EXT0 is modelled), and the host log gets one line.
 #[test]
 fn esp32_deep_sleep_logs_one_line() {
     take_native_log();
@@ -1773,7 +1774,7 @@ fn esp32_deep_sleep_logs_one_line() {
     text += &e.run_esp32(500_000).2;
     assert!(text.contains("wake=0") && !text.contains("wake=4"), "{text}");
     let notes: Vec<String> = take_native_log().into_iter().filter(|l| l.contains("sleep")).collect();
-    assert_eq!(notes, ["[emu] deep sleep is not modelled: the chip stops here"]);
+    assert_eq!(notes, ["[emu] deep sleep: only an EXT0 pin wake is modelled, other wake sources never fire"]);
     assert!(!notes[0].to_lowercase().contains("reset"), "the adapter would take it for a chip reset");
     let mut strap = Emu::boot_esp32("esp32-strap");
     strap.run_esp32(300_000);
