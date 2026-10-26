@@ -77,6 +77,7 @@ impl Soc for Esp32 {
 }
 
 impl esp_soc::SocBus for SocBus {
+    fn set_psram_size(&mut self, bytes: usize) -> Result<(), String> { self.configure_psram(bytes) }
     fn enable_ble(&mut self, elf: &esp_soc::elf::Elf) -> Result<(), String> {
         self.ble.enable(&elf.by_name, elf.symbol_sizes.get("esp_bt_controller_init").copied().unwrap_or(0), &<Self as esp_soc::ble::vhci::VhciBus>::abi())
     }
@@ -131,6 +132,7 @@ impl esp_soc::SocBus for SocBus {
     }
     fn reboot(&mut self, mac: [u8; 6]) -> u32 {
         self.deep_sleep = false;
+        self.reset_psram();
         self.ble.restore_flash(&mut self.flash);
         self.ble.reset();
         let cause = self.periph.rtc.0.reset_cause;

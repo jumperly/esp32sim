@@ -15,6 +15,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Node 24 LTS, not the runner image's Node 22: on 22, V8 holds the modules the WASM JIT
+      # releases, and tools/wasm-jit-test.mjs grows to 4.7 GB in 210 s (on an M-series Mac; on the
+      # runner 9 minutes, and out of memory once the module grows). On 24 the same run takes 0.2 GB
+      # and 14 s.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
       # The fork's ABI tests (wasm/tests/jumperly.rs) boot Arduino sketches from jumperly/fixtures, a
       # private repository: a read-only deploy key of it in the FIXTURES_DEPLOY_KEY secret.
       - uses: actions/checkout@v4
@@ -71,7 +78,7 @@ jobs:
       - name: Production WASM sections (no DWARF, profile names retained)
         run: node tools/check-wasm-sections.mjs web/wasm/esp32sim.wasm
       - name: Test the wasm module (the real build, under Node, through the page's manifests)
-        run: ESP32SIM_ROM_DIR=$PWD/roms node tools/wasm-test.mjs hello c3-hello c6-hello p4-hello c6-energy-scan c6-contiki c6-contiki-net c6-rpl-net panel tdisplay-prices
+        run: ESP32SIM_ROM_DIR=$PWD/roms node tools/wasm-test.mjs hello c3-hello c6-hello p4-hello c6-energy-scan c6-contiki c6-contiki-net c6-rpl-net panel tdisplay-prices tdisplay-schematik
       - name: Timing and BLE observation ABI (real wasm exports)
         run: |
           node wasm/tests/timing-api.mjs web/wasm/esp32sim.wasm

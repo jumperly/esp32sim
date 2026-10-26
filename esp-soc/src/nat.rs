@@ -200,6 +200,19 @@ struct DnsQuery {
 
 fn qtype_name(qtype: u16) -> &'static str { if qtype == 1 { "A" } else { "AAAA" } }
 
+/// Current TCP occupancy, independent of cumulative connection statistics.
+///
+/// Only `active` counts against the 64-flow table limit: a new SYN on a full table evicts a
+/// TimeWait entry. A small `active` still does not mean a new connect will be admitted: the limit
+/// of 8 host connects in progress is process-wide, shared by every `Nat`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TcpFlowCounts {
+    /// Connecting and connected flows, including half-close and unacknowledged FIN.
+    pub active: usize,
+    /// Completed flows retained to retry the final ACK.
+    pub time_wait: usize,
+}
+
 pub struct Nat {
     tcp: Vec<Tcp>,
     udp: Vec<Udp>,
@@ -297,6 +310,22 @@ impl Nat {
         self.dns.push_back(DnsQuery { qid, guest_mac: *guest_mac, guest_ip: *guest_ip, guest_port, dns_ip: *dns_ip,
             query: msg[..q.end].to_vec(), name: q.name, qtype: q.qtype, at_us: now_us });
         true
+    }
+
+    /// Snapshot TCP transport state without polling sockets, retransmitting or expiring flows.
+    /// Closed entries are excluded even before the next poll removes them. Expiration and
+    /// transitions (including pending connector results) take effect only through normal polling.
+    pub fn tcp_flow_counts(&self) -> TcpFlowCounts {
+        let mut counts = TcpFlowCounts::default();
+        for flow in &self.tcp {
+            match flow.state {
+                // Jumperly patch J15: a host-initiated flow waiting for the guest's SYN-ACK is active.
+                FlowState::Connecting(_) | FlowState::Accepting(_) | FlowState::Connected(_) => counts.active += 1,
+                FlowState::TimeWait => counts.time_wait += 1,
+                FlowState::Closed => {}
+            }
+        }
+        counts
     }
 
     /// Forward a UDP datagram through a transport flow, which accepts replies only from its peer.
