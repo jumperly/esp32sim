@@ -316,6 +316,18 @@ fn run_cooja(o: &mut Opts) {
     report(&mut m, o, match summary.stopped { Some(_) => Stop::Halted, None => Stop::MaxInsns }, dt);
 }
 
+fn set_camera_image(board: &mut esp_soc::Board, path: Option<&str>) {
+    if let Some(p) = path {
+        match esp_soc::picture::load(p) {
+            Ok(pic) => {
+                eprintln!("[emu] camera picture {} ({}x{})", p, pic.w, pic.h);
+                board.set_camera_picture(pic).unwrap_or_else(|e| usage_error(e));
+            }
+            Err(e) => { eprintln!("[emu] {}", e); std::process::exit(2); }
+        }
+    }
+}
+
 /// `--coproc`: the P4 with an ESP32-C6 on its SDIO bus, both run in lock-step (`cosim`). The P4
 /// is set up and booted as for a normal run; `--wifi`, `--net` and `--debug` also go to the C6.
 /// Both consoles go to stdout line by line, the C6's prefixed `[c6] ` (or to `console=FILE`).
@@ -426,7 +438,7 @@ fn setup_s3(o: &Opts) -> esp32s3::Machine {
         m.bus.attach_wifi(cfg, nat).unwrap_or_else(|e| { eprintln!("--wifi: {e}"); std::process::exit(2) });
     }
     attach_nearby_networks(&mut m.bus.periph.wifi.link, o);
-    if let Some(p) = &o.cam_image { match esp_soc::picture::load(p) { Ok(pic) => { eprintln!("[emu] camera picture {} ({}x{})", p, pic.w, pic.h); m.bus.board.set_camera_picture(pic).unwrap_or_else(|e| usage_error(e)); } Err(e) => { eprintln!("[emu] {}", e); std::process::exit(2); } } }
+    set_camera_image(&mut m.bus.board, o.cam_image.as_deref());
     m.bus.periph.lcd_cam.frame_cycles = (esp32s3::periph::CPU_HZ as f64 / o.cam_fps) as u64;
     let stopwatch = m.bus.board.name() == "stopwatch";
     let flash_mb = o.flash_mb.unwrap_or(if stopwatch { 16 } else { 8 });
@@ -529,14 +541,15 @@ fn setup_esp32(o: &Opts) -> esp32::Machine {
     m.bus.set_flash_size(o.flash_mb.unwrap_or(4) << 20);
     if !o.debug.is_empty() { let mut f = esp_soc::DebugFlags::from_env(); for d in &o.debug { f.parse(d); } m.set_debug(&f); }
     let board = if o.board == "atech14" { "none" } else { &o.board };
-    m.bus.board = esp32::board::make_board(board).unwrap_or_else(|| usage_error(&format!("unknown classic ESP32 board '{board}' (none, bare, esp32dev, ttgo-tdisplay)")));
+    m.bus.board = esp32::board::make_board(board).unwrap_or_else(|| usage_error(&format!("unknown classic ESP32 board '{board}' (none, bare, esp32dev, ttgo-tdisplay, ai-thinker-cam)")));
     m.bus.attach_board_devices();
+    set_camera_image(&mut m.bus.board, o.cam_image.as_deref());
     if let Some(spec) = &o.wifi {
         let (cfg, nat) = wifi_config(spec, &o.net, m.bus.debug.has("net"));
         m.bus.attach_wifi(cfg, nat).unwrap_or_else(|e| { eprintln!("--wifi: {e}"); std::process::exit(2) });
     }
     attach_nearby_networks(&mut m.bus.periph.wifi.link, o);
-    for (flag, on) in [("--cam-image", o.cam_image.is_some()), ("--psram-mb", o.psram_mb.is_some()), ("--flash-octal", o.flash_octal), ("--efuse-regs", o.efuse_regs.is_some()), ("--regs-init", o.regs_init.is_some()), ("--regstat", o.regstat.is_some())] {
+    for (flag, on) in [("--psram-mb", o.psram_mb.is_some()), ("--flash-octal", o.flash_octal), ("--efuse-regs", o.efuse_regs.is_some()), ("--regs-init", o.regs_init.is_some()), ("--regstat", o.regstat.is_some())] {
         if on { eprintln!("{} is not available on the classic ESP32", flag); std::process::exit(2); }
     }
     m

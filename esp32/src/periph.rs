@@ -412,6 +412,15 @@ impl ClassicGpio {
             self.gpio.set_input(pin as u8, level);
         }
     }
+    /// Physical matrix input, retaining inversion. IDF v4.4.7 gpio_reg.h:
+    /// GPIO_FUNCm_IN_SEL_CFG source bits 0..5, invert bit 6, matrix-select bit 7.
+    /// Unlike the non-inverted input_pin helper, DVP data can use inversion.
+    pub(crate) fn matrix_input_route(&self, signal: usize) -> Option<(u8, bool)> {
+        let cfg = *self.gpio.func_in_sel.get(signal)?;
+        let pin = (cfg & 0x3f) as usize;
+        (cfg & (1 << 7) != 0 && pin < 40 && self.matrix_pad(pin) && self.input_enabled(pin))
+            .then_some((pin as u8, cfg & (1 << 6) != 0))
+    }
     pub fn input_pin(&self, signal: usize) -> Option<u8> {
         esp_soc::pins::ChipPins::ESP32.routes(&self.gpio, &self.route_mux).input_pin(signal)
             .or_else(|| Self::direct_pin(signal).filter(|&pin| (self.mux(pin) >> 12) & 7 == 1 && self.input_enabled(pin)).map(|p| p as u8))
@@ -620,8 +629,8 @@ impl Device for ClassicRtc {
         if off == 0x48 {
             self.0.ram.write(0x44, self.0.ram.read(0x44) & !v);
         } else if off == 0x38 {
-            // WAKEUP_CAUSE[10:0] is read-only; wake events are not modeled here.
-            self.0.ram.write(0x34, v & (0xfff << 11));
+            // WAKEUP_CAUSE[10:0] is read-only; EXT0 wake sets it in the bus.
+            self.0.ram.write(0x34, (v & (0xfff << 11)) | (self.0.ram.read(0x34) & 0x7ff));
         } else if off == 0x100 {
             // IDF v5.5.4 register/soc/rtc_cntl_reg.h:2017-2039: START bit 8,
             // FINISH bit 31, result +0x104. Completion is produced by the bus on START;
@@ -830,7 +839,7 @@ impl Peripherals {
             analog: crate::wifi::Analog::default(),
             fe: crate::wifi::FrontEnd::default(),
             adc: ClassicAdc::new(),
-            i2s: Default::default(),
+            i2s: [crate::i2s::ClassicI2s::for_port(0), crate::i2s::ClassicI2s::for_port(1)],
             slc: ClassicSlc::default(),
             deep_sleep: false,
             deep_sleep_told: false,
@@ -990,6 +999,11 @@ impl Peripherals {
             // IDF v5.5.4 register/soc/dport_reg.h:947,965 (I2S clocks),
             // 982,1000 (resets). Cache on writes, not in the per-tick DMA loop.
             for (port, bit) in [4, 21].into_iter().enumerate() {
+                // Camera DMA must not survive a peripheral reset. Keep the
+                // established PCM reset behavior unchanged in this slice.
+                if self.dport.ram.read(0xc4) & (1 << bit) != 0 && self.i2s[port].camera_rx().is_some() {
+                    self.i2s[port] = crate::i2s::ClassicI2s::for_port(port);
+                }
                 self.i2s[port].clock_enabled = self.dport.ram.read(0xc0) & (1 << bit) != 0
                     && self.dport.ram.read(0xc4) & (1 << bit) == 0;
             }
