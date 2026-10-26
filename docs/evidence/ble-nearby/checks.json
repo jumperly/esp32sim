@@ -73,5 +73,21 @@
     "command": "the S3 and C3 runs without --ble-nearby",
     "exit_code": 0,
     "uart0": "found name=esp32sim ..., scan done n=1"
+  },
+  {
+    "check": "review-follow-up",
+    "base": "main ddf753a5 merged",
+    "command": "cargo +1.99.1 test --release --workspace --no-fail-fast -- --include-ignored --skip external_",
+    "exit_code": 0,
+    "tests": {
+      "binaries": 129,
+      "passed": 1321,
+      "failed": 0,
+      "ignored": 0
+    },
+    "changes": "ADV_SCAN_IND (0x02) instead of ADV_IND; rssi -127..20 or 127; random addr with top bits 10 refused; name with adv refused; docs/cli.md: no ',' in name",
+    "mutations": "each new rule removed (event type, rssi range, reserved bits, name with adv) fails the matching peer test",
+    "firmware": "S3 and C3 scans: the same four lines, scan done n=3",
+    "other": "clippy native and wasm, wasm build and demos, privacy, virtual-quantum 43: pass"
   }
 ]

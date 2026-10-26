@@ -29,8 +29,9 @@ pub fn advertising_fields(data: &[u8]) -> Vec<String> {
 const ADV: &[u8] = b"\x02\x01\x06\x03\x03\x0f\x18\x09\x09esp32sim";
 
 /// A Bluetooth device around the station (`--ble-nearby`): the guest's scans report it with its
-/// address, advertising data, scan response and signal, and nothing connects to it. `addr` is in
-/// HCI order (least significant byte first); `addr_type` 0 is public, 1 random.
+/// address, advertising data, scan response and signal, as a scannable advertiser that does not
+/// accept connections (ADV_SCAN_IND). `addr` is in HCI order (least significant byte first);
+/// `addr_type` 0 is public, 1 random.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Nearby { pub addr: [u8; 6], pub addr_type: u8, pub rssi: i8, pub adv: Vec<u8>, pub scan_response: Vec<u8> }
 
@@ -118,8 +119,11 @@ impl Nearby {
     /// Discoverable Flags, at most 26 bytes so both fit the 31-byte advertising data), `adv` and
     /// `rsp` (the advertising data and the scan response as hex, at most 31 bytes each; `adv`
     /// replaces the data `name` builds), `addr` (as printed, most significant byte first; default:
-    /// a random static address derived from the advertising data, the same every run), `type`
-    /// `random` (default) or `public`, `rssi` in dBm (default -60). A device needs `name` or `adv`.
+    /// a random static address derived from the advertising data, the same every run; a random
+    /// address may not have the reserved top bits 10, Vol 6 Part B 1.3.2), `type` `random` (default)
+    /// or `public`, `rssi` in dBm, -127 to +20 or 127 for "not available" as an LE Advertising
+    /// Report carries it (Vol 4 Part E 7.7.65.2; default -60). A device needs `name` or `adv`, not
+    /// both.
     pub fn parse(spec: &str) -> Result<Nearby, String> {
         let (mut name, mut adv, mut rsp, mut addr, mut public, mut rssi) = (None, None, Vec::new(), None, false, -60i8);
         let data = |key: &str, value: &str| hex_bytes(value).filter(|d| d.len() <= 31)
@@ -136,12 +140,14 @@ impl Nearby {
                     "random" => false,
                     _ => return Err(format!("invalid nearby-device type '{value}': expected public or random")),
                 },
-                "rssi" => rssi = value.parse().map_err(|_| format!("invalid nearby-device rssi '{value}': expected -128 through 127 dBm"))?,
+                "rssi" => rssi = value.parse().ok().filter(|r: &i8| (-127..=20).contains(r) || *r == 127)
+                    .ok_or_else(|| format!("invalid nearby-device rssi '{value}': expected -127 through 20 dBm, or 127 (not available)"))?,
                 _ => return Err(format!("unknown nearby-device option '{key}'")),
             }
         }
         let adv = match (adv, name) {
-            (Some(adv), _) => adv,
+            (Some(_), Some(_)) => return Err("a nearby device takes name or adv, not both".into()),
+            (Some(adv), None) => adv,
             (None, Some(name)) if (1..=26).contains(&name.len()) => {
                 let mut d = vec![2, 0x01, 0x06, name.len() as u8 + 1, 0x09];
                 d.extend_from_slice(name.as_bytes());
@@ -155,6 +161,9 @@ impl Nearby {
             let h = adv.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &c| (h ^ u64::from(c)).wrapping_mul(0x100_0000_01b3)).to_le_bytes();
             [h[0], h[1], h[2], h[3], h[4], h[5] | 0xc0]
         });
+        if !public && addr[5] >> 6 == 0b10 {
+            return Err(format!("invalid nearby-device addr {}: a random address's top bits 10 are reserved", addr_text(&addr)));
+        }
         Ok(Nearby { addr, addr_type: u8::from(!public), rssi, adv, scan_response: rsp })
     }
 
@@ -1249,8 +1258,13 @@ mod tests {
         assert_eq!(plain.addr, Nearby::parse("name=Thermo,rssi=-90").unwrap().addr, "the same address every time");
         assert_ne!(plain.addr, Nearby::parse("name=Scale").unwrap().addr);
         assert_eq!(Nearby::parse("adv=0201060303aafe").unwrap().adv, [2, 1, 6, 3, 3, 0xaa, 0xfe]);
+        // An LE Advertising Report's RSSI: -127 to +20 dBm, or 127 for not available.
+        for (rssi, v) in [("-127", -127), ("20", 20), ("127", 127)] { assert_eq!(Nearby::parse(&format!("name=a,rssi={rssi}")).unwrap().rssi, v); }
+        // The reserved top bits 10 only refuse a random address; a public one may have them.
+        assert_eq!(Nearby::parse("name=a,addr=84:aa:01:02:03:04,type=public").unwrap().addr_type, 0);
         for bad in ["rssi=-60", "name=", &format!("name={}", "x".repeat(27)), &format!("adv={}", "00".repeat(32)), "name=a,rsp=zz",
-            "name=a,addr=c4:aa:01:02:03", "name=a,addr=c4:aa:01:02:03:4", "name=a,type=static", "name=a,rssi=loud", "name=a,uuid=180f", "name"] {
+            "name=a,addr=c4:aa:01:02:03", "name=a,addr=c4:aa:01:02:03:4", "name=a,type=static", "name=a,rssi=loud", "name=a,uuid=180f", "name",
+            "name=a,adv=020106", "name=a,rssi=-128", "name=a,rssi=21", "name=a,rssi=126", "name=a,addr=84:aa:01:02:03:04"] {
             assert!(Nearby::parse(bad).is_err(), "{bad}");
         }
         let specs = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
@@ -1272,9 +1286,9 @@ mod tests {
             let peer: Vec<_> = r.iter().filter(|x| x.2 == super::super::PEER).collect();
             let around: Vec<_> = r.iter().filter(|x| x.2 == thermo().addr).map(|x| (x.0, x.1, x.3.clone(), x.4)).collect();
             assert!(!peer.is_empty(), "the virtual peer first");
-            let mut expected = vec![(0, 0, thermo().adv, -70)];
+            let mut expected = vec![(2, 0, thermo().adv, -70)];
             if active { expected.push((4, 0, vec![3, 3, 0x0f, 0x18], -70)); }
-            assert_eq!(around, expected, "ADV_IND, and SCAN_RSP for an active scan (active={active})");
+            assert_eq!(around, expected, "ADV_SCAN_IND, and SCAN_RSP for an active scan (active={active})");
             assert!(c.drain_log().iter().any(|l| l.starts_with("scan report addr=c4:aa:01:02:03:04 rssi=-70 name=\"Thermo\"")));
         }
     }
@@ -1290,6 +1304,18 @@ mod tests {
         reports(&mut c);
         c.set_nearby(vec![thermo()]);
         assert!(reports(&mut c).is_empty(), "no scan, no report");
+    }
+
+    /// Jumperly patch J27: with the air on the host carries a connection to a device around, so
+    /// the guest hears it as connectable.
+    #[test]
+    fn with_the_air_on_a_device_around_is_connectable() {
+        let mut c = Session::default();
+        c.enable_air([1, 0, 0, 0x28, 0x6f, 0x24]);
+        c.set_nearby(vec![thermo()]);
+        scan(&mut c, true);
+        let kinds: Vec<u8> = reports(&mut c).iter().filter(|x| x.2 == thermo().addr).map(|x| x.0).collect();
+        assert_eq!(kinds, [0, 4], "ADV_IND, then SCAN_RSP");
     }
 
     #[test]
