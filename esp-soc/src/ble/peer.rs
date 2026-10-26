@@ -1299,7 +1299,7 @@ mod tests {
         scan(&mut c, true);
         assert!(reports(&mut c).iter().all(|x| x.2 == super::super::PEER));
         c.set_nearby(vec![thermo()]);
-        assert_eq!(reports(&mut c).iter().filter(|x| x.2 == thermo().addr).count(), 2, "ADV_IND and SCAN_RSP at once");
+        assert_eq!(reports(&mut c).iter().filter(|x| x.2 == thermo().addr).count(), 2, "ADV_SCAN_IND and SCAN_RSP at once");
         cmd(&mut c, 0x200c, &[0, 0]);
         reports(&mut c);
         c.set_nearby(vec![thermo()]);

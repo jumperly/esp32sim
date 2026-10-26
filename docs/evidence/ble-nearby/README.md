@@ -17,12 +17,12 @@ station, the Bluetooth counterpart of `--wifi-nearby` (EX237):
   `Nearby::parse_all` refuses two devices on one address and a device on the virtual peer's or the
   guest's address: two advertisers on one address would answer as one.
 - The virtual peer reports each device when the guest starts a scan, after its own report, as an LE
-  Advertising Report: ADV_SCAN_IND (scannable, not connectable) with the advertising data, and for an
-  active scan SCAN_RSP with the
-  scan response (an empty one too, as a scannable advertiser answers every scan request). A list
-  set during a scan is reported at once; after LE Set Scan Enable turns scanning off
-  (`LinkEvent::ScanStopped`, new) nothing is. Nothing connects to a device around. The list
-  survives a guest reset (`Session::reset`), as the devices are not the chip's.
+  Advertising Report: ADV_SCAN_IND (scannable, not connectable) with the advertising data, and for
+  an active scan SCAN_RSP with the scan response (an empty one too, as a scannable advertiser
+  answers every scan request). A list set during a scan is reported at once; after LE Set Scan
+  Enable turns scanning off (`LinkEvent::ScanStopped`, new) nothing is. Nothing connects to a
+  device around. The list survives a guest reset (`Session::reset`), as the devices are not the
+  chip's.
 - `SocBus::ble_nearby` hands the list to the virtual controller on the S3, C3, C6 and classic
   ESP32 (`vhci::Ble::set_nearby`, the C6's `Ble::set_nearby`). The CLI checks the specs with the
   other arguments, before the ROM loads, and names each device:
@@ -85,7 +85,7 @@ from the mask ROM with `--ble --elf <app ELF>` for 8 emulated seconds (commands 
 ## Limits
 
 - Legacy advertising only (ADV_SCAN_IND / SCAN_RSP, 31 bytes each); no extended advertising, no
-  connectable device around, no directed or non-connectable event types.
+  connectable device around: no ADV_IND, ADV_DIRECT_IND or ADV_NONCONN_IND.
 - A device around is reported once per scan start (or list change during a scan), not repeatedly
   at an advertising interval; a scanner that counts reports over time sees one.
 - The full C3 controller (`--ble full`) does not carry the list: the option needs `--ble`.
