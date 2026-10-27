@@ -30,6 +30,7 @@ The fork's ABI tests (`wasm/tests/jumperly.rs`) boot the Arduino sketches of the
 | `patch/wifi-beacons` (`patch/wifi-beacons-v2`: one commit on main; both deleted after the merge) | J22 (device part: `BeaconAp`, `rx_meta`, `--wifi-nearby`) | mikroverk/esp32sim#270, merged 2026-10-23 (`a6e0b60e`) | #4 | EX237, `docs/evidence/wifi-nearby/` |
 | `patch/objdump-windows-paths` | the `objdump_diff` corpus tests split their paths with `std::env::split_paths` (a Windows drive letter) | mikroverk/esp32sim#287, merged 2026-10-25 (`ddf753a5`) | #7 | none (tests only) |
 | `patch/ble-nearby` | J25 (device part, `--ble-nearby`: `peer::Nearby`, `LinkEvent::ScanStopped`, `SocBus::ble_nearby`) | mikroverk/esp32sim#286, merged 2026-10-26 (`2718410a`) | #8 | EX246, `docs/evidence/ble-nearby/` |
+| `patch/ble-privacy` | the #296 fix: LL Privacy reported, the 10-entry resolving list with an ESP32-S3's statuses | mikroverk/esp32sim#300, open (`upstream/main` `2e36224d` merged in) | #9 | EX248, `docs/evidence/ble-privacy/` |
 | `patch/host-abi` | everything below not listed above | never | direct merge | none (fork-only) |
 
 Dropped: J10 (quad SPI PSRAM commands) — upstream's #197 models them.
