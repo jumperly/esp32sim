@@ -22,8 +22,8 @@ The controller now does what an ESP32-S3's own controller does for these command
   octet 35 bits 0-2 (Read Local Resolvable Address, Set Address Resolution Enable, Set Resolvable
   Private Address Timeout) and octet 39 bit 2 (Set Privacy Mode) (Vol 4 Part E 6.27).
 - A resolving list of 10 entries (Vol 4 Part E 7.8.38-7.8.45, 7.8.77), with the S3's statuses:
-  - Add: 0x12 for an identity already in the list (or an address type above 1), 0x07 Memory
-    Capacity Exceeded for the eleventh entry, else 0.
+  - Add: 0x12 for an identity already in the list, 0x07 Memory Capacity Exceeded for the eleventh
+    entry, else 0.
   - Remove: 0x02 Unknown Connection Identifier for an identity not in the list.
   - Clear: 0. Read Resolving List Size: 10.
   - Read Peer / Local Resolvable Address: 0x02 and a zero address (the S3 answers so for an
@@ -33,6 +33,10 @@ The controller now does what an ESP32-S3's own controller does for these command
     above the 0x0E10 the specification gives.
   - Set Privacy Mode: 0x12 for a mode above 1, 0x02 for an identity not in the list.
   - HCI Reset and a guest reset empty the list.
+
+  An address type above 1 (only 0 public and 1 random are valid, 7.8.38) follows the
+  specification and was not probed: Add answers it 0x12; Remove, Set Privacy Mode and Read Peer
+  Resolvable Address find no entry with it and answer 0x02.
 
 The list keeps the peers' identity addresses only. Nothing is resolved against the IRKs and no
 resolvable private address is made: the virtual peer and the devices around use identity or
@@ -108,8 +112,11 @@ Set Privacy Mode's value check and list lookup, and the Read Resolvable Address 
 - Adding to or removing from the list while address resolution is on and the controller is
   advertising, scanning or initiating is accepted; the specification disallows it (0x0C), which
   the probe did not exercise on the S3.
-- The size and statuses come from one ESP32-S3; the C3 and C6 controllers were not probed, and the
-  same answers are used for them. The classic ESP32's Bluedroid does not take this path
-  (`CONFIG_BT_BLE_RPA_SUPPORTED` defaults to n there), but its controller answers the same.
+- The size and statuses come from one ESP32-S3; the C3, C6 and classic ESP32 controllers were not
+  probed, and the same answers are used for them. The classic may differ: IDF v5.5.4 gives it
+  network privacy mode only (`components/bt/host/bluedroid/Kconfig.in:477`) and
+  `SOC_BLE_DEVICE_PRIVACY_SUPPORTED 0` (`components/soc/esp32/include/soc/soc_caps.h:454`; 1 on
+  the S3, C3 and C6), so its controller may not take Set Privacy Mode as the S3 does. Its
+  Bluedroid does not take this path (`CONFIG_BT_BLE_RPA_SUPPORTED` defaults to n there).
 - The firmware images are not committed and no golden pins them. No CPU comparison: nothing runs
   per tick, only a few more HCI commands at host start-up.
