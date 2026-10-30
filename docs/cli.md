@@ -279,7 +279,10 @@ peripheral named `esp32sim` advertising the Battery Service.
 
 This models one unencrypted LE link, legacy advertisements and ATT MTU 23.
 It does not model RF, pairing, physical connection timing or the controller's
-registers. Unsupported HCI commands return Unknown Command. The callback task
+registers. Unsupported HCI commands return Unknown Command. The controller reports LL
+Privacy and keeps a 10-entry resolving list with an ESP32-S3 controller's statuses, so a host
+stack can set up controller privacy; it resolves no addresses and makes no resolvable private
+address. The callback task
 and its storage stay allocated until reboot. C6 initializes the guest NPL support
 and a heap-backed mbuf pool; it uses no controller BSS reservation. Cost-model execution
 does not support function substitutions; reported cycle time is not radio timing.

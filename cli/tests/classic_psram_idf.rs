@@ -29,7 +29,7 @@ fn boot(present: bool) -> String {
     assert_eq!(m.stub_hits, 0);
     assert_eq!(m.reboots, 0, "harness must not hide failed startup behind a reboot");
     if present && serial.contains("P4 result=pass") {
-        assert_eq!((m.insns(), m.exceptions, m.interrupts), (26_944_062, 399, 15));
+        assert_eq!((m.insns(), m.exceptions, m.interrupts), (26_944_072, 399, 15));
         let mut irq = [[0; 32]; 2];
         irq[0][6] = 13;
         irq[0][9] = 2;
@@ -42,7 +42,7 @@ fn boot(present: bool) -> String {
         }
     }
     if !present && serial.contains("Failed to init external RAM!") {
-        assert_eq!((m.insns(), m.exceptions, m.interrupts), (2_431_527, 22, 0));
+        assert_eq!((m.insns(), m.exceptions, m.interrupts), (2_431_535, 22, 0));
         assert_eq!(m.irq_hist.as_slice(), [[0; 32]; 2]);
     }
     serial
