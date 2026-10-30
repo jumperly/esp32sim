@@ -2,6 +2,8 @@
 
 The `esp32` crate models the dual-core LX6 classic ESP32 and loads the ECO3 mask ROM. It boots the real
 rev-3 mask ROM through the second-stage bootloader into an unchanged application.
+It reports silicon revision v3.0, the ECO3 that ROM belongs to: eFuse CHIP_VER_REV1 and REV2,
+and bit 31 of SYSCON_DATE, so an image built with `CONFIG_ESP32_REV_MIN_3` boots.
 The shared Xtensa core enables DFP context registers only for this target.
 Double-precision arithmetic and PSRAM are not modeled.
 
