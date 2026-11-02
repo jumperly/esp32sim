@@ -30,7 +30,8 @@ pub struct VirtualNet {
     pub local_ntp: bool,
     /// Jumperly patch J14: the other boards of the same network, reached at the IP level
     pub lan: Option<Lan>,
-    /// Jumperly patch J14: the station's MAC, learned from what it sends (None before its first frame)
+    /// Jumperly patch J14: the station's MAC, learned from what it sends or from its association
+    /// (None before either); upstream's `[u8; 6]` field of the same name, which `--hostfwd` uses, is this one
     pub sta_mac: Option<[u8; 6]>,
     pub dhcp_acks: u64,
     pub dns_answers: u64,
