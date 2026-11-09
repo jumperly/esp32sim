@@ -272,8 +272,10 @@ esp_wifi + libpp/libnet80211        unmodified blob, drives the MAC registers
   to the socket; socket reads come back as segments the emulator sequences, acknowledges,
   retransmits and closes. UDP is a bound socket per flow with an idle reaper. Name lookups go to
   the host's own resolver, unless the transport resolves names itself, in which case the NAT
-  answers the guest's A/AAAA queries from the emulated resolver's address. A guest reboot aborts
-  the NAT's flows (`Nat::abort_all`).
+  answers the guest's A/AAAA queries from the emulated resolver's address. `--hostfwd` listeners
+  live on `StdTransport`; it hands each accepted connection to the NAT (`tcp_accept`), which sends
+  the station a SYN from the gateway once it knows the station's MAC. A guest reboot aborts the
+  NAT's flows (`Nat::abort_all`).
 - **Crypto accelerators**: mbedTLS drives AES (block + GDMA, ECB/CBC/CTR/OFB), SHA (block + GDMA,
   SHA-1 through SHA-512) and the RSA/MPI unit; the WPA supplicant unwraps the group key on AES.
   All three are modelled at the register level, so a TLS session exercises the same peripherals

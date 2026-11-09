@@ -1764,18 +1764,16 @@ fn esp32_a_host_reset_turns_the_dac_off() {
     assert!(dac_take(&mut e).is_empty(), "reported once");
 }
 
-/// `esp_deep_sleep_start()` on the RTC timer: the chip sleeps, the timer wake never comes (only
-/// EXT0 is modelled), and the host log gets one line.
+/// `esp_deep_sleep_start()` on the RTC timer (2 s): upstream models the timer wake (#336), so the
+/// chip boots again with `wake=4` and the host log gets no note (J28's is for the other sources).
 #[test]
-fn esp32_deep_sleep_logs_one_line() {
+fn esp32_deep_sleep_wakes_on_the_rtc_timer_without_a_note() {
     take_native_log();
     let mut e = Emu::boot_esp32("esp32-sleep");
     let mut text = e.run_esp32_until("wake=0", 1_000_000);
-    text += &e.run_esp32(500_000).2;
-    assert!(text.contains("wake=0") && !text.contains("wake=4"), "{text}");
-    let notes: Vec<String> = take_native_log().into_iter().filter(|l| l.contains("sleep")).collect();
-    assert_eq!(notes, ["[emu] deep sleep: only an EXT0 pin wake is modelled, other wake sources never fire"]);
-    assert!(!notes[0].to_lowercase().contains("reset"), "the adapter would take it for a chip reset");
+    text += &e.run_esp32_until("wake=4", 3_000_000);
+    assert!(text.contains("wake=0") && text.contains("wake=4"), "{text}");
+    assert!(!take_native_log().iter().any(|l| l.contains("deep sleep:")), "the RTC timer is modelled");
     let mut strap = Emu::boot_esp32("esp32-strap");
     strap.run_esp32(300_000);
     assert!(!take_native_log().iter().any(|l| l.contains("sleep")), "no note without sleep");

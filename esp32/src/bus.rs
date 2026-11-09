@@ -162,15 +162,15 @@ impl SocBus {
         }
         self.sample_power_on_strap();
     }
-    /// Jumperly patch J28: true once per deep sleep that has a wake source besides EXT0 enabled
-    /// (rtc_cntl_reg.h:505-529 RTC_CNTL_WAKEUP_STATE_REG WAKEUP_ENA[22:11]: timer, EXT1, touch, ULP, ...): only EXT0 wakes
-    /// the chip (`ext0_wake`), the others never come.
+    /// Jumperly patch J28: true once per deep sleep that has a wake source besides EXT0 and the RTC
+    /// timer enabled (rtc_cntl_reg.h:505-529 RTC_CNTL_WAKEUP_STATE_REG WAKEUP_ENA[22:11]: EXT1, touch, ULP,
+    /// ...): only those two wake the chip (`ext0_wake`, upstream's `timer_wake`), the others never come.
     pub fn take_unmodelled_wake(&mut self) -> bool {
         if !self.deep_sleep {
             self.deep_sleep_told = false;
             return false;
         }
-        let other = self.periph.rtc.0.ram.read(0x34) >> 11 & 0xfff & !1 != 0;
+        let other = self.periph.rtc.0.ram.read(0x34) >> 11 & 0xfff & !(1 | 1 << 3) != 0;
         other && !std::mem::replace(&mut self.deep_sleep_told, true)
     }
     /// Jumperly patch J28: the power-on reset samples the strapping pins from the circuit too. Until
@@ -335,12 +335,20 @@ impl SocBus {
             return self.mmu[cpu][n];
         }
         let a = Self::ahb_to_apb(addr & !3).unwrap_or(addr & !3);
+        // A read of a UART FIFO can drop RXFIFO_FULL (it follows the FIFO level), which changes the source's level:
+        // tell the CPU interrupt presentation, or the old level would stay latched on the CPU line.
+        // Every FIFO is at offset 0 of its block, so one mask test keeps this off other reads.
+        let uart_fifo = if a & 0xfff == 0 { [0x3ff4_0000, 0x3ff5_0000, 0x3ff6_e000].iter().position(|&base| a == base) } else { None };
+        let uart_level = uart_fifo.map(|i| self.periph.uart[i].irq_sources());
         let w = if a == WDEV_RND {
             self.rng.now = self.cycles as u32;
             self.rng.read(0)
         } else {
             self.periph.read32(a)
         };
+        if let (Some(i), Some(before)) = (uart_fifo, uart_level) {
+            if self.periph.uart[i].irq_sources() != before { self.irq_dirty = true; }
+        }
         match size {
             1 => (w >> ((addr & 3) * 8)) & 0xff,
             2 => (w >> ((addr & 2) * 8)) & 0xffff,
@@ -357,7 +365,10 @@ impl SocBus {
         if a == WDEV_RND {
             return;
         }
-        let v = if size == 4 { value } else { merge(self.periph.read32(a), value, addr, size) };
+        // A byte/halfword store merges into the register's current value, but reading a UART FIFO pops a received byte:
+        // TX FIFO writes merge into 0 instead.
+        let fifo = matches!(a, 0x3ff4_0000 | 0x3ff5_0000 | 0x3ff6_e000);
+        let v = if size == 4 { value } else { merge(if fifo { 0 } else { self.periph.read32(a) }, value, addr, size) };
         let old_enable = self.periph.gpio.gpio.enable;
         // Configuration-only bookkeeping; no new work in ordinary ticks.
         // Only physical DVP routing bits matter (IDF v4.4.7 gpio_reg.h,
@@ -769,6 +780,7 @@ impl Bus for SocBus {
         }
         let irq_changed = self.periph.tick(elapsed);
         self.irq_dirty |= irq_changed;
+        if self.deep_sleep { self.timer_wake(); }
         self.i2s_step(elapsed);
         self.flush_rmt();
         self.flush_gpio();
@@ -830,21 +842,31 @@ mod tests {
     }
 
     #[test]
-    fn irq_events_uart_fifo_reads_stay_sticky_until_clear_on_all_aliases() {
+    fn irq_events_uart_fifo_interrupt_follows_the_fifo_level_on_all_aliases() {
+        // RXFIFO_FULL is a level: it stays raised while the FIFO holds at least the threshold and falls on the read that
+        // drains it below, without INT_CLR. The mask ROM's UART interrupt handler depends on that: for the other UART of
+        // the pair it only reads the FIFO and never clears the interrupt, so a latched bit would make the ROM's
+        // dispatcher re-enter the handler forever (the esptool download-mode hang).
         for (base, alias, port) in [(0x3ff4_0000, 0x6000_0000, 0), (0x3ff5_0000, 0x6001_0000, 1), (0x3ff6_e000, 0x6002_e000, 2)] {
             for addr in [base, alias] {
                 let mut b = SocBus::new(0, [0; 6]);
                 b.write32(base + 0x24, 1).unwrap();
                 b.write32(base + 0xc, 1).unwrap();
-                esp_soc::SocBus::uart_input(&mut b, port, b"x");
+                esp_soc::SocBus::uart_input(&mut b, port, b"xy");
                 assert_ne!(b.periph.uart[port].irq_sources(), 0);
                 b.irq_dirty = false;
                 assert_eq!(b.read8(addr), Ok(b'x'));
-                assert_ne!(b.periph.uart[port].irq_sources(), 0, "FIFO interrupt is sticky");
-                assert!(!b.irq_dirty, "FIFO read does not change source level");
+                assert_ne!(b.periph.uart[port].irq_sources(), 0, "one byte is still waiting: the level holds");
+                assert!(!b.irq_dirty, "a read that leaves the level unchanged does not invalidate presentation");
+                assert_eq!(b.read8(addr), Ok(b'y'));
+                assert_eq!(b.periph.uart[port].irq_sources(), 0, "drained below the threshold: the interrupt falls by itself");
+                assert!(b.irq_dirty, "the falling edge must reach the CPU presentation");
+                esp_soc::SocBus::uart_input(&mut b, port, b"z");
+                assert_ne!(b.periph.uart[port].irq_sources(), 0, "and it re-raises on the next arrival");
                 b.write32(base + 0x10, 1).unwrap();
-                assert_eq!(b.periph.uart[port].irq_sources(), 0);
-                assert!(b.irq_dirty, "clear write must invalidate presentation");
+                assert_ne!(b.periph.uart[port].irq_sources(), 0, "INT_CLR with a byte still waiting re-raises the level");
+                assert_eq!(b.read8(addr), Ok(b'z'));
+                assert_eq!(b.periph.uart[port].irq_sources(), 0, "and the read that drains it lowers it");
             }
         }
     }
@@ -1606,8 +1628,8 @@ mod tests {
         assert_eq!(b.periph.gpio.gpio.strap, 0x13, "running: the latched strap stays");
     }
 
-    /// Jumperly patch J28: a deep sleep with a timer wake enabled is noted once; one with only EXT0
-    /// is not, and a floated pin wakes it like a driven one.
+    /// Jumperly patch J28: a deep sleep with an EXT1 wake enabled is noted once; one with only EXT0
+    /// or the RTC timer is not, and a floated pin wakes it like a driven one.
     #[test]
     fn a_deep_sleep_with_an_unmodelled_wake_is_noted_once() {
         use esp_soc::SocBus as _;
@@ -1620,11 +1642,14 @@ mod tests {
         assert!(!b.take_unmodelled_wake());
         sleep(&mut b, 1 << 3);                                              // RTC_TIMER_TRIG_EN
         assert!(b.deep_sleep);
+        assert!(!b.take_unmodelled_wake(), "the RTC timer is modelled");
+        b.reboot([0; 6]);
+        sleep(&mut b, 1 << 1);                                              // EXT1
         assert!(b.take_unmodelled_wake());
         assert!(!b.take_unmodelled_wake(), "once per sleep");
         b.reboot([0; 6]);
         assert!(!b.take_unmodelled_wake());
-        sleep(&mut b, 1 << 3 | 1);
+        sleep(&mut b, 1 << 1 | 1);
         assert!(b.take_unmodelled_wake(), "the next sleep notes it again");
         b.reboot([0; 6]);
         assert!(!b.take_unmodelled_wake());

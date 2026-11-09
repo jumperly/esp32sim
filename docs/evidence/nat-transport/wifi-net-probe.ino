@@ -1,12 +1,12 @@
-// Wi-Fi in the simulator: scan, join the board's network (DHCP), a DNS lookup, SNTP time and an
-// HTTP GET to the outside, which is refused (the simulated network has no internet yet). The
-// network is the board's default: SSID "Jumperly", open (attributes wifiSsid / wifiPassword).
+// The NAT receipt's probe: scan, join the open network "esp32sim" (DHCP), a DNS lookup, SNTP from
+// pool.ntp.org and an HTTP GET, each of which the user-mode NAT relays to the host's network.
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <time.h>
 
-const char *NET_SSID = "Jumperly";
+const char *NET_SSID = "esp32sim";
 const char *NET_PASSWORD = "";  // open network
+const char *HOST = "example.org";
 
 void printTime() {
   struct tm tm;
@@ -40,10 +40,10 @@ void setup() {
   Serial.printf("ip=%s gw=%s dns=%s\n", WiFi.localIP().toString().c_str(),
                 WiFi.gatewayIP().toString().c_str(), WiFi.dnsIP().toString().c_str());
   IPAddress addr;
-  if (WiFi.hostByName("example.com", addr))
-    Serial.printf("dns: example.com -> %s\n", addr.toString().c_str());
+  if (WiFi.hostByName(HOST, addr))
+    Serial.printf("dns: %s -> %s\n", HOST, addr.toString().c_str());
   else
-    Serial.println("dns: example.com failed");
+    Serial.printf("dns: %s failed\n", HOST);
   configTime(0, 0, "pool.ntp.org");
   struct tm tm;
   if (getLocalTime(&tm, 15000))
@@ -51,12 +51,13 @@ void setup() {
   else
     Serial.println("time: no answer");
   HTTPClient http;
-  http.begin("http://example.com/");
+  String url = String("http://") + HOST + "/";
+  http.begin(url);
   int code = http.GET();
   if (code > 0)
-    Serial.printf("http GET http://example.com/ -> %d\n", code);
+    Serial.printf("http GET %s -> %d, %d bytes\n", url.c_str(), code, http.getString().length());
   else
-    Serial.printf("http GET http://example.com/ -> %d (%s)\n", code, http.errorToString(code).c_str());
+    Serial.printf("http GET %s -> %d (%s)\n", url.c_str(), code, http.errorToString(code).c_str());
   http.end();
 }
 

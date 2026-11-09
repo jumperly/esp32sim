@@ -1,6 +1,3 @@
-// Jumperly patch J12: upstream's #288 tests on the fork's transport split. A flow holds its
-// `FlowState`, its socket lives in the transport: the scripted `Mock` for admission and connect
-// results, `StdTransport` (`std_nat`) where the test needs a real host socket.
 use super::*;
 
 fn counts(nat: &Nat, active: usize, time_wait: usize) {

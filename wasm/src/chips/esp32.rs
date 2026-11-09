@@ -11,7 +11,7 @@ const UARTS: u32 = 3;
 const ALL_PINS: u64 = (1u64 << PINS) - 1;
 /// The host log line for a guest that starts deep sleep with a wake source the model lacks (no
 /// "reset" in it: the adapter takes a warning with that word for a chip reset).
-pub(crate) const DEEP_SLEEP_NOTE: &str = "[emu] deep sleep: only an EXT0 pin wake is modelled, other wake sources never fire";
+pub(crate) const DEEP_SLEEP_NOTE: &str = "[emu] deep sleep: only an EXT0 pin or RTC timer wake is modelled, other wake sources never fire";
 
 impl JumperlyChip for ::esp32::Machine {
     fn pins(&self) -> u32 { PINS as u32 }

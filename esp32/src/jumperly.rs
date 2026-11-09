@@ -186,23 +186,28 @@ mod tests {
         assert_eq!(pin_state(&p, 39) >> state::SIGNAL_SHIFT, state::PLAIN_GPIO);
     }
 
-    /// As on the S3: a pad on the GPIO function (MCU_SEL 2) reports the drive
-    /// `PinRoutes::software_output` resolves, OUT_INV_SEL bit 9 and OEN_INV_SEL bit 11 (IDF v5.5.4
-    /// components/soc/esp32/register/soc/gpio_reg.h:7065-7092); off the GPIO function the raw latch.
+    /// As on the S3: a pad on the GPIO function (MCU_SEL 2, or 0 where the header makes function 0
+    /// GPIO too, upstream #332) reports the drive `PinRoutes::software_output` resolves, OUT_INV_SEL
+    /// bit 9 and OEN_INV_SEL bit 11 (IDF v5.5.4 components/soc/esp32/register/soc/gpio_reg.h:7065-7092);
+    /// off the GPIO function the raw latch. GPIO13's function 0 is MTCK (io_mux_reg.h), GPIO2's is GPIO.
     #[test]
     fn a_gpio_function_pad_reports_the_inverted_drive() {
         let mut p = periph();
-        p.write32(GPIO + 0x24, 1 << 2);                                  // ENABLE_W1TS
-        p.write32(GPIO + 0x08, 1 << 2);                                  // OUT_W1TS
-        p.write32(GPIO + 0x530 + 4 * 2, 256 | (1 << 9));                 // GPIO2: plain GPIO, OUT_INV_SEL
-        assert_eq!(pin_state(&p, 2) & 0xffff, state::OUT | state::ENABLE, "MCU_SEL 0: the raw latch");
-        p.write32(IO_MUX + 0x40, 2 << 12);                               // GPIO2: MCU_SEL 2 (GPIO)
-        assert_eq!(pin_state(&p, 2) & 0xffff, state::ENABLE, "OUT_INV_SEL: driven low");
-        p.write32(GPIO + 0x530 + 4 * 2, 256 | (1 << 11));                // OEN_INV_SEL
-        assert_eq!(pin_state(&p, 2) & 0xffff, state::OUT, "OEN_INV_SEL with ENABLE: not driven");
-        p.write32(GPIO + 0x28, 1 << 2);                                  // ENABLE_W1TC
-        assert_eq!(pin_state(&p, 2) & 0xffff, state::OUT | state::ENABLE, "OEN_INV_SEL without ENABLE: driven high");
-        assert_eq!(pin_state(&p, 2) >> state::SIGNAL_SHIFT, state::PLAIN_GPIO);
+        p.write32(GPIO + 0x24, 1 << 13);                                 // ENABLE_W1TS
+        p.write32(GPIO + 0x08, 1 << 13);                                 // OUT_W1TS
+        p.write32(GPIO + 0x530 + 4 * 13, 256 | (1 << 9));                // GPIO13: plain GPIO, OUT_INV_SEL
+        assert_eq!(pin_state(&p, 13) & 0xffff, state::OUT | state::ENABLE, "MCU_SEL 0 (MTCK): the raw latch");
+        p.write32(IO_MUX + 0x38, 2 << 12);                               // GPIO13: MCU_SEL 2 (GPIO)
+        assert_eq!(pin_state(&p, 13) & 0xffff, state::ENABLE, "OUT_INV_SEL: driven low");
+        p.write32(GPIO + 0x530 + 4 * 13, 256 | (1 << 11));               // OEN_INV_SEL
+        assert_eq!(pin_state(&p, 13) & 0xffff, state::OUT, "OEN_INV_SEL with ENABLE: not driven");
+        p.write32(GPIO + 0x28, 1 << 13);                                 // ENABLE_W1TC
+        assert_eq!(pin_state(&p, 13) & 0xffff, state::OUT | state::ENABLE, "OEN_INV_SEL without ENABLE: driven high");
+        assert_eq!(pin_state(&p, 13) >> state::SIGNAL_SHIFT, state::PLAIN_GPIO);
+        p.write32(GPIO + 0x24, 1 << 2);                                  // GPIO2 at its reset function 0
+        p.write32(GPIO + 0x08, 1 << 2);
+        p.write32(GPIO + 0x530 + 4 * 2, 256 | (1 << 9));
+        assert_eq!(pin_state(&p, 2) & 0xffff, state::ENABLE, "function 0 is GPIO on GPIO2: driven low");
     }
 
     #[test]

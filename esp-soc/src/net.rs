@@ -26,7 +26,7 @@ pub struct VirtualNet {
     pub log: bool,
     /// user-mode NAT to the host's network; None keeps everything inside the emulated subnet
     pub nat: Option<crate::nat::Nat>,
-    /// Jumperly patch J12: answer SNTP here even with a NAT (the host's clock), instead of relaying it
+    /// answer SNTP here even with a NAT (the host's clock), instead of relaying it
     pub local_ntp: bool,
     /// Jumperly patch J14: the other boards of the same network, reached at the IP level
     pub lan: Option<Lan>,
@@ -149,7 +149,7 @@ impl VirtualNet {
             17 if body.len() >= 8 && self.nat.is_some() => {
                 let (sport, dport) = (be16(&body[0..2]), be16(&body[2..4]));
                 let now = self.now_us;
-                // Jumperly patch J12: a transport that resolves names itself answers DNS
+                // a transport that resolves names itself answers DNS
                 if dport == 53 && self.nat.as_mut().unwrap().dns_query(src, &sip, sport, &dip, &body[8..], now) { return Vec::new(); }
                 // Jumperly patch J20: a reply to a multicast flow comes from the gateway's unicast address
                 // (lwIP drops a packet whose source is a group address)
