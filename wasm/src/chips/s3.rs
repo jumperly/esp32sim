@@ -128,8 +128,6 @@ impl JumperlyChip for esp32s3::Machine {
     }
 
     fn ble(&mut self) -> &mut esp_soc::ble::vhci::Ble { &mut self.bus.ble }
-    fn ble_command(&mut self, command: &str) -> Result<(), String> { self.bus.ble_command(command) }
-    fn enable_ble(&mut self, elf: &esp_soc::elf::Elf) -> Result<(), String> { self.bus.enable_ble(elf) }
 
     /// Jumperly patch J16: ESP32-S3-WROOM-2's octal flash.
     fn flash_octal(&mut self, on: bool) -> bool {

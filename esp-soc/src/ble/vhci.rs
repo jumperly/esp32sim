@@ -87,14 +87,9 @@ pub struct Ble {
     yield_to_host: bool,
     pub task_created: bool,
     pub original_flash: Option<(usize, Vec<u8>)>,
-    /// Jumperly patch J23: the log lines kept for the host (`take_line`) instead of stderr, which
-    /// a browser does not have; at most `CAPTURE_MAX`, older ones dropped (`dropped`).
-    pub capture: Option<std::collections::VecDeque<String>>,
-    pub dropped: u64,
+    /// `[ble]` lines: stderr, or kept for the browser build (`BleLog::keep`)
+    pub lines: crate::ble::log::BleLog,
 }
-
-/// Jumperly patch J23: the most log lines `Ble::capture` keeps.
-pub const CAPTURE_MAX: usize = 1024;
 
 impl Ble {
     pub fn restore_flash(&mut self, flash: &mut [u8]) {
@@ -143,7 +138,7 @@ impl Ble {
         next.kinds.insert(init + POLL, Hook::Poll);
         next.kinds.insert(init + CREATED, Hook::Created);
         next.hooks = next.kinds.keys().copied().collect();
-        next.capture = self.capture.take();
+        next.lines = std::mem::take(&mut self.lines);
         *self = next;
         Ok(())
     }
@@ -165,17 +160,17 @@ impl Ble {
         result
     }
 
-    pub fn log(&mut self, cycles: u64, hz: u64) {
-        for line in self.session.drain_log() { self.note(format!("t={:.6}s {line}", cycles as f64 / hz as f64)); }
-    }
-
-    /// Jumperly patch J25: the devices around the user for the guest's scans.
+    /// The devices around the station (`--ble-nearby`), replacing the ones there were.
     pub fn set_nearby(&mut self, list: Vec<crate::ble::peer::Nearby>, cycles: u64, hz: u64) -> Result<(), String> {
         if self.hooks.is_empty() { return Err("BLE requires --ble and the application ELF".into()); }
         self.session.advance_to(cycles);
         self.session.set_nearby(list);
         self.log(cycles, hz);
         Ok(())
+    }
+
+    fn log(&mut self, cycles: u64, hz: u64) {
+        for line in self.session.drain_log() { self.lines.note(format!("t={:.6}s {line}", cycles as f64 / hz as f64)); }
     }
 
     /// Jumperly patch J26: the air between the boards of a project, with this board's address.
@@ -198,19 +193,6 @@ impl Ble {
         out
     }
 
-    /// Jumperly patch J23: one log line — kept for the host when it captures, else to stderr.
-    pub fn note(&mut self, line: String) {
-        match self.capture.as_mut() {
-            Some(q) => {
-                if q.len() >= CAPTURE_MAX { q.pop_front(); self.dropped += 1; }
-                q.push_back(line);
-            }
-            None => eprintln!("[ble] {line}"),
-        }
-    }
-
-    /// Jumperly patch J23: the oldest captured log line, if any.
-    pub fn take_line(&mut self) -> Option<String> { self.capture.as_mut()?.pop_front() }
 }
 
 pub fn install<B: VhciBus>(bus: &mut B) -> Result<(), String> {
@@ -282,7 +264,7 @@ pub fn intercept<C: Core, B: VhciBus>(cpu: &mut C, bus: &mut B, redirect: impl F
                         return true;
                     }
                     Err(error) => {
-                        bus.ble().note(error);
+                        bus.ble().lines.note(error);
                         result = u32::MAX;
                     }
                 }
@@ -293,7 +275,7 @@ pub fn intercept<C: Core, B: VhciBus>(cpu: &mut C, bus: &mut B, redirect: impl F
                 bus.ble().task_created = true;
                 bus.ble().status = 1;
             } else {
-                bus.ble().note(format!("controller task creation failed: {arg:#x}"));
+                bus.ble().lines.note(format!("controller task creation failed: {arg:#x}"));
                 result = u32::MAX;
             }
         }
@@ -307,7 +289,7 @@ pub fn intercept<C: Core, B: VhciBus>(cpu: &mut C, bus: &mut B, redirect: impl F
             } else {
                 // BR/EDR only, so nothing the firmware does reaches this controller: say why
                 if arg == 2 {
-                    eprintln!("[ble] the virtual controller is LE-only: enabled in mode 2 (BR/EDR), its commands get Unknown HCI Command");
+                    bus.ble().lines.note("the virtual controller is LE-only: enabled in mode 2 (BR/EDR), its commands get Unknown HCI Command".into());
                 }
                 bus.ble().status = 2;
             }
@@ -352,7 +334,7 @@ pub fn intercept<C: Core, B: VhciBus>(cpu: &mut C, bus: &mut B, redirect: impl F
                 || len > (BUFFER_SIZE - 16) as usize
                 || !bus.valid_packet_range(arg, len)
             {
-                bus.ble().note("rejected invalid VHCI packet pointer, length or controller state".into());
+                bus.ble().lines.note("rejected invalid VHCI packet pointer, length or controller state".into());
             } else {
                 let packet: Result<Vec<u8>, _> = (0..len).map(|i| bus.read8_unpriced(arg + i as u32)).collect();
                 if let Ok(packet) = packet {
@@ -381,7 +363,7 @@ pub fn intercept<C: Core, B: VhciBus>(cpu: &mut C, bus: &mut B, redirect: impl F
                         if bus.ble_debug() { eprintln!("[ble] rx {:02x?}", packet); }
                         bus.ble().yield_to_host = true;
                         result = bus.ble().callbacks[1];
-                    } else { bus.ble().note("rejected oversized or unmapped controller packet".into()); }
+                    } else { bus.ble().lines.note("rejected oversized or unmapped controller packet".into()); }
                 } else if bus.ble().send_ready {
                     bus.ble().send_ready = false;
                     result = bus.ble().callbacks[0];

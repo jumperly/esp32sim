@@ -157,8 +157,6 @@ impl JumperlyChip for ::esp32::Machine {
     }
 
     fn ble(&mut self) -> &mut esp_soc::ble::vhci::Ble { &mut self.bus.ble }
-    fn ble_command(&mut self, command: &str) -> Result<(), String> { SocBus::ble_command(&mut self.bus, command) }
-    fn enable_ble(&mut self, elf: &esp_soc::elf::Elf) -> Result<(), String> { SocBus::enable_ble(&mut self.bus, elf) }
 
     fn take_dac(&mut self) -> Vec<(u8, u32)> { self.bus.periph.adc.take_dac_changes() }
 

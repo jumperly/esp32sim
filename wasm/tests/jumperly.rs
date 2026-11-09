@@ -1134,13 +1134,13 @@ fn i2s_host_is_refused_on_the_c3_and_bad_ports_need_nothing() {
     unsafe { esp32sim_delete(c3) };
 }
 
-/// Jumperly patch J23: the virtual BLE controller's log lines since the last call.
+/// The virtual BLE controller's log lines since the last call.
 fn ble_log(e: &mut Emu) -> Vec<String> {
     let mut out = Vec::new();
     loop {
-        let n = unsafe { esp32sim_ble_log_take(e.0) } as usize;
+        let n = unsafe { esp32sim_ble_virtual_take(e.0) };
         if n == 0 { return out }
-        out.push(String::from_utf8(e.buf(n)).unwrap());
+        out.push(String::from_utf8(unsafe { std::slice::from_raw_parts(esp32sim_ble_ptr(e.0), n) }.to_vec()).unwrap());
     }
 }
 fn ble_command(e: &mut Emu, cmd: &str) -> u32 { unsafe { esp32sim_ble_virtual_command(e.0, cmd.as_ptr(), cmd.len()) } }
@@ -1185,7 +1185,8 @@ fn ble_server_through_the_virtual_peer(chip: &str, mhz: u64) {
     log.extend(ble_log(&mut e));
     assert_eq!(ble_command(&mut e, "read nothing"), 1);
     let last = ble_log(&mut e);
-    assert!(last.iter().any(|l| l.starts_with("error ")), "{last:?}");
+    assert!(last.iter().all(|l| l.starts_with("t=")), "the reason goes to host_log, not the log: {last:?}");
+    log.extend(last);
     let has = |s: &str| log.iter().any(|l| l.contains(s));
     assert!(has("connected handle=0x0001 guest=peripheral"), "{log:?}");
     assert!(has(&format!("characteristic declaration={declaration} handle={value} properties=0x1a uuid=beb5483e-36e1-4688-b7f5-ea07361b26a8")), "{log:?}");

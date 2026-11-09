@@ -63,10 +63,6 @@ pub(crate) trait JumperlyChip {
     fn set_mac(&mut self, mac: [u8; 6]) -> bool { let _ = mac; false }
     /// The virtual BLE controller.
     fn ble(&mut self) -> &mut esp_soc::ble::vhci::Ble;
-    /// A command for the virtual BLE peer.
-    fn ble_command(&mut self, command: &str) -> Result<(), String>;
-    /// Enable the virtual BLE controller from the application ELF.
-    fn enable_ble(&mut self, elf: &esp_soc::elf::Elf) -> Result<(), String>;
     /// Octal SPI flash (J16) when `on`; false when the chip has no octal flash.
     fn flash_octal(&mut self, on: bool) -> bool { let _ = on; false }
     /// The DAC output changes since the last call: (GPIO, mV) for an enabled output, (GPIO,

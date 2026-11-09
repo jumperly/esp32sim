@@ -274,17 +274,11 @@ The receiver copies the message before returning and applies it at the next run
 boundary. Sensor SCCB settings select output format and geometry. A board without
 a camera emits `{"t":"camera-error","message":"no camera on this board"}`.
 
-### Virtual BLE controller (Jumperly patch J23)
+### Virtual BLE controller: the fork's additions
 
-The CLI's `--ble` in the browser, on the S3, the C3 and the classic ESP32. `esp32sim_ble_virtual(e, elf, len)` before
-boot: the application ELF (its symbols; debug info is not needed) — 0, or 1 for another chip, after
-boot, or an ELF without the controller symbols (logged). `esp32sim_ble_virtual_command(e, cmd, len)`: a
-command for the virtual peer now — `connect`, `disconnect`, `discover`, `read HANDLE`, `write HANDLE
-HEX` (at most 512 bytes; long values as prepared writes, J24), `subscribe CCC_HANDLE`; 0, or 1 (no virtual controller, a bad command: the reason is the
-next log line, `error …`). `esp32sim_ble_log_take(e)`: the oldest log line into the buffer (its
-length, 0 = none) — `t=<seconds>s <text>`, the lines the CLI prints as `[ble]` (advertising, the
-connection and its MTU (`mtu N`, J24), discovered services / characteristics / attributes, reads, writes, notifications, ATT
-errors, unsupported HCI opcodes); at most 1024 wait, older ones are dropped.
+The exports are upstream's ([below](#virtual-ble-controller-and-its-peer)). Jumperly patch J24
+widens the peer's commands: `disconnect`, and `write HANDLE HEX` up to 512 bytes (long values as
+prepared writes); the connection's MTU comes as an `mtu N` line.
 
 `esp32sim_ble_nearby(e, ptr, len)` (Jumperly patch J25): the Bluetooth devices around the user,
 heard by the guest's scans, replacing the ones there were. Entries of `[addr 6,
@@ -580,3 +574,20 @@ frame on GPIO4, the I2C scan and the VSPI transfer through the host bridges, the
 on a −26 dBFS host sine, the Wi-Fi scan and join, the BLE server through the virtual peer, the
 DAC, touch, the host reset and download mode with IO0 held, floating strapping pins at a host
 reset, IO0 low before the first run, the DAC off after a host reset and the deep-sleep line.
+
+### Virtual BLE controller and its peer
+
+The CLI's `--ble` (the VHCI controller and its virtual central, [cli.md](cli.md)) on the S3, C3,
+C6 and classic ESP32. Load the images, then call `esp32sim_ble_virtual(emu, elf_ptr, elf_len)`
+with the application ELF before boot: its symbols locate the guest's controller functions. It
+returns 0, or 1 after boot, for a bad ELF, a chip without the controller or an ELF it cannot use;
+the reason goes to `host_log`. `esp32sim_ble_virtual_command(emu, ptr, len)` gives the peer one of
+the CLI script's `ble` commands (`connect`, `discover`, `read HANDLE`, `write HANDLE HEX`,
+`subscribe CCC_HANDLE`) at the current emulated time; 0, or 1 with the reason on `host_log`.
+The controller's `[ble]` lines (`t=<s>s ...`: advertising, discovery, reads, writes,
+notifications) are kept rather than printed: after each run slice call
+`esp32sim_ble_virtual_take(emu)` until it returns zero. Each nonzero return is the UTF-8 byte
+length at `esp32sim_ble_ptr(emu)`, valid until the next take or emulator deletion. At most 1024
+lines wait; lines lost to the bound come first as `dropped=N`. A line's time is when the
+controller hands it over, so it can differ by microseconds from the CLI's, which slices
+differently; the lines and their order are the same ([EX264](evidence/ble-wasm-api/README.md)).

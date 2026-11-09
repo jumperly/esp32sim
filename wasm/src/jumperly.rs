@@ -481,60 +481,6 @@ pub unsafe extern "C" fn esp32sim_wifi_beacons(e: *mut Emu, data: *const u8, len
     0
 }
 
-/// Jumperly patch J23: the virtual BLE controller (`--ble` of the CLI) on the S3, the C3 or (J28)
-/// the classic ESP32. `elf`
-/// is the application ELF with its symbols (the guest's controller functions are found by name);
-/// before boot. Its log lines (`t=<s>s <line>`, the CLI's `[ble]` output) are kept for
-/// `esp32sim_ble_log_take`. Returns 0, or 1 (another chip, after boot, a bad or unsuitable ELF;
-/// logged).
-///
-/// # Safety
-/// `e` must point to a live emulator to which the caller has exclusive access; for a nonzero `len`,
-/// `elf` must be readable for `len` bytes throughout this call.
-#[no_mangle]
-pub unsafe extern "C" fn esp32sim_ble_virtual(e: *mut Emu, elf: *const u8, len: usize) -> u32 {
-    // SAFETY: the caller provides exclusive access to a live emulator.
-    let e = unsafe { &mut *e };
-    if e.booted { log("[emu] ble: the virtual controller is enabled before boot"); return 1; }
-    // SAFETY: the caller provides a readable buffer for this call.
-    let data = unsafe { bytes(elf, len) };
-    let elf = match esp_soc::elf::parse(data) {
-        Ok(elf) => elf,
-        Err(reason) => { log(&format!("[emu] ble: {reason}")); return 1; }
-    };
-    let result = match e.m.chip_mut() {
-        Some(c) => {
-            c.ble().capture = Some(Default::default());
-            c.enable_ble(&elf)
-        }
-        None => Err("the virtual BLE controller needs an ESP32-S3, ESP32-C3 or ESP32".into()),
-    };
-    match result {
-        Ok(()) => 0,
-        Err(reason) => { log(&format!("[emu] ble: {reason}")); 1 }
-    }
-}
-
-/// Jumperly patch J23: a command for the virtual peer, now: `connect`, `discover`, `read HANDLE`,
-/// `write HANDLE HEX` (at most 20 bytes), `subscribe CCC_HANDLE` (the CLI's script `ble` commands).
-/// Returns 0, or 1 (no virtual controller, a bad command; the reason is the next log line).
-///
-/// # Safety
-/// `e` must point to a live emulator to which the caller has exclusive access; for a nonzero `len`,
-/// `cmd` must be readable for `len` bytes throughout this call.
-#[no_mangle]
-pub unsafe extern "C" fn esp32sim_ble_virtual_command(e: *mut Emu, cmd: *const u8, len: usize) -> u32 {
-    // SAFETY: the caller provides exclusive access to a live emulator.
-    let e = unsafe { &mut *e };
-    // SAFETY: the caller provides a readable buffer for this call.
-    let Ok(cmd) = std::str::from_utf8(unsafe { bytes(cmd, len) }) else { return 1 };
-    let Some(c) = e.m.chip_mut() else { return 1 };
-    match c.ble_command(cmd) {
-        Ok(()) => 0,
-        Err(reason) => { c.ble().note(format!("error {reason}")); 1 }
-    }
-}
-
 /// Jumperly patch J25: the Bluetooth devices around the user (the web page found them), heard by
 /// the guest's scans and not connectable, replacing the ones there were. `data`: entries of
 /// `[addr 6][addr_type u8 (0 public, 1 random)][rssi i8][adv_len u8][adv][rsp_len u8][rsp]`, the
@@ -638,21 +584,6 @@ pub unsafe extern "C" fn esp32sim_ble_air_put(e: *mut Emu, ptr: *const u8, len: 
     let hz = c.cpu_hz();
     c.ble().air_in(frame, cycles, hz);
     0
-}
-
-/// Jumperly patch J23: the oldest log line of the virtual BLE controller, into the buffer: its
-/// length, 0 when there is none.
-///
-/// # Safety
-/// `e` must point to a live emulator to which the caller has exclusive access.
-#[no_mangle]
-pub unsafe extern "C" fn esp32sim_ble_log_take(e: *mut Emu) -> u32 {
-    // SAFETY: the caller provides exclusive access to a live emulator.
-    let e = unsafe { &mut *e };
-    e.buf.clear();
-    let Some(line) = e.m.chip_mut().and_then(|c| c.ble().take_line()) else { return 0 };
-    e.buf.extend_from_slice(line.as_bytes());
-    line.len() as u32
 }
 
 /// Jumperly patch J11: the SSID of the last directed probe request for a network other than the
