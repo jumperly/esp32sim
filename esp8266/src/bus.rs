@@ -45,6 +45,9 @@ enum At { Dram(usize), Iram(usize), Rtc(usize), Flash(usize), Rom, Mmio, Unmappe
 
 /// SPI1's CMD register (esp8266_peri.h:337 SPI1CMD).
 const SPI1_CMD: u32 = PERIPH_BASE + 0x100;
+/// FRC1's LOAD and CTRL (esp8266_peri.h:147,149 T1L, T1C): a write starts the count from now.
+const FRC1_LOAD: u32 = PERIPH_BASE + 0x600;
+const FRC1_CTRL: u32 = PERIPH_BASE + 0x608;
 
 /// Code pages (`Bus::page_versions`): `1 << VPAGE_SHIFT` bytes of IRAM, then of the flash window,
 /// then one page for every other address, which holds no code (`fetch` refuses it).
@@ -123,6 +126,12 @@ pub struct SocBus {
     /// the interrupt lines as last derived (`Peripherals::refresh_lines`)
     pub lines: u32,
     pub debug: esp_soc::DebugFlags,
+    /// A core runs in the current scheduling round (`Soc::select_core` sets it, `tick` clears
+    /// it): device time is the round's start until the round's `tick`, not the instruction's.
+    pub in_round: bool,
+    /// FRC1 was loaded or started inside the round: it counts from the round's `tick`, which the
+    /// machine moves up to the write (`esp_soc::SocBus::round_cut`), not from the round's start.
+    pub frc1_rearmed: bool,
     /// write versions of the code pages (`Bus::page_versions`): a store to IRAM, a change of the
     /// flash under the window or a remap of the window moves them, and the core's decoded blocks
     /// with them. Code that changes `iram` or `flash.bytes` directly, while the core runs, must
@@ -138,7 +147,7 @@ impl SocBus {
             periph: Peripherals::new(mac), rom: RomState::default(), board: Box::new(esp_soc::NoBoard),
             cycles: 0, irq_dirty: true, last_fault: None, rom_data_reads: 0, reset_cause: crate::rom::boot::RST_POWERON,
             sw_reset: false, reset_kind: ResetKind::Jump, strap: None, strap_kept: false, spi_host: false, host_event: false, clock_half: 0, lines: 0,
-            debug: Default::default(), code_ver: vec![0; CODE_PAGES],
+            debug: Default::default(), in_round: false, frc1_rearmed: false, code_ver: vec![0; CODE_PAGES],
         }
     }
 
@@ -282,6 +291,7 @@ impl SocBus {
         };
         self.periph.write32(a, w);
         self.irq_dirty = true;
+        if self.in_round && (a == FRC1_LOAD || a == FRC1_CTRL) { self.frc1_rearmed = true; }
         if a == SPI0_CMD && w != 0 { self.spi0_command(w); }
         if a == SPI1_CMD { self.spi1_transfer(); }
         if let Some(cause) = self.periph.reset.take() { self.chip_reset(cause); }
@@ -465,6 +475,10 @@ impl Bus for SocBus {
         Ok(b)
     }
     fn note_pc(&mut self, pc: u32) { self.periph.misc.cur_pc = pc; }
+    /// The core ends its dispatch after a store that re-armed FRC1, so the machine can close the
+    /// round on it (`esp_soc::SocBus::round_cut`).
+    #[inline(always)]
+    fn block_break(&self) -> bool { self.frc1_rearmed }
     /// Device time moves on by `cycles` CPU cycles: as many APB cycles, or half as many with
     /// CPU2X (the timers, the UARTs and WDEV keep the 80 MHz APB clock; Arduino ESP8266 3.1.2
     /// core_esp8266_waveform_pwm.cpp:664 halves its CPU-cycle counts for FRC1 at 160 MHz). A timer
@@ -475,6 +489,17 @@ impl Bus for SocBus {
         self.clock_half = half & 1;
         self.cycles += half >> 1;
         self.periph.now = self.cycles;
+        self.in_round = false;
+        // FRC1 re-armed by an instruction of this round counts from here: the round ended right
+        // after that instruction (`round_cut`), or later on a path that does not cut rounds,
+        // where it then counts late, never early. Counted from the round's start it could run
+        // out up to a round early. The SDK's NMI wrapper routes FRC1 away from the NMI while it
+        // runs (NONOS SDK 2.2.x libmain: `NMI_Handler` clears DPORT 0x3ff00000 bit 0 on entry,
+        // `_NMILevelVector` writes 15 there just before its `rfi 3`), 49 instructions after the
+        // Arduino waveform generator's last FRC1 load (core_esp8266_waveform_pwm.cpp:664), whose
+        // shortest interval is 140 cycles (:654-662, MINIRQTIME - DELTAIRQ at 80 MHz). An edge
+        // in that window goes to interrupt 9, which nothing serves: the generator never runs again.
+        if std::mem::take(&mut self.frc1_rearmed) { self.periph.frc1.rebase(self.cycles); }
         if self.cycles < self.periph.next_event() { return 0; }
         self.periph.advance(self.cycles);
         if let Some(cause) = self.periph.reset.take() { self.chip_reset(cause); }

@@ -5,7 +5,8 @@
 use emu_core::{Bus, Core};
 use esp8266::bus::{SocBus, DRAM_LOW, FLASH_WIN_LOW, IRAM_LOW};
 use esp8266::periph::{self, DPORT_TEIE, PERIPH_BASE};
-use esp8266::{rom, Machine};
+use esp8266::{rom, Esp8266, Machine};
+use esp_soc::observe::{Observer, Wants};
 use esp_soc::{RunUntil, SocBus as _};
 use std::path::PathBuf;
 use xtensa_lx7::state::{ps, sr};
@@ -285,5 +286,79 @@ fn an_frc1_edge_is_taken_in_front_of_the_same_instruction_with_decoded_blocks() 
             assert_eq!(cached, run(false, cpi, load), "CPI {cpi}, FRC1 at {load}");
             assert!((MAIN..MAIN + 138).contains(&cached.0), "EPC1 {:#x} in the main loop", cached.0);
         }
+    }
+}
+
+/// A per-instruction observer: the machine then runs the core one `step` at a time.
+struct EveryInsn;
+impl Observer<Esp8266> for EveryInsn {
+    fn name(&self) -> &'static str { "every-insn" }
+    fn wants(&self) -> Wants { Wants::INSN }
+}
+
+/// FRC1 loaded by an instruction counts from that instruction (esp8266_peri.h:147 T1L), not from
+/// the start of the scheduling round it ran in. The main code runs 40 NOPs, reads CCOUNT and
+/// loads FRC1; the FRC1 edge interrupt's handler reads CCOUNT again: the interval is the load,
+/// plus the store and the interrupt's entry (a few instructions), on every run path and CPI, with
+/// decoded blocks, without them and one step at a time. Before, device time inside a round was
+/// the round's start, so the timer ran out up to a round early: 41 instructions here (960, 984
+/// and 920 cycles instead of 1000 in the three runs below; the SDK's NMI wrapper then lost the
+/// waveform generator's NMI, `esp8266-pwm` at CPI 2 in tests/periph.rs).
+#[test]
+fn an_frc1_load_counts_from_the_instruction_that_wrote_it() {
+    const VECBASE: u32 = IRAM_LOW;
+    const MAIN: u32 = VECBASE + 0x100;
+    const OUT: u32 = DRAM_LOW;
+    const LOAD: u32 = 1000;
+    // dispatch 0: decoded blocks, 1: the uncached loop, 2: one step at a time
+    let run = |dispatch: u8, cpi: u32, slices: bool| {
+        let mut m = esp8266::machine(MAC, 4 << 20);
+        if cpi > 1 { m.set_approximate_jit_timing(cpi, 128).unwrap(); }
+        m.cores[0].set_block_cache(dispatch == 0);
+        if dispatch == 2 { m.add_observer(Box::new(EveryInsn)); }
+        // handler: rsr.ccount a8 / s32i a8, a9, 0 / j .
+        m.bus.load_bytes(VECBASE + 0x50, &[0x80, 0xea, 0x03, 0x82, 0x69, 0x00, 0x06, 0xff, 0xff]).unwrap();
+        // main: 40 NOPs / rsr.ccount a8 / s32i a10, a11, 0 (FRC1 LOAD) / s32i a8, a9, 4 / j .
+        let mut main: Vec<u8> = (0..40).flat_map(|_| [0xf0, 0x20, 0x00]).collect();
+        main.extend([0x80, 0xea, 0x03, 0xa2, 0x6b, 0x00, 0x82, 0x69, 0x01, 0x06, 0xff, 0xff]);
+        m.bus.load_bytes(MAIN, &main).unwrap();
+        let c = &mut m.cores[0];
+        c.set_pc(MAIN);
+        c.write_sr(sr::VECBASE, VECBASE).unwrap();
+        c.write_sr(sr::PS, ps::UM).unwrap();
+        c.write_sr(sr::INTENABLE, 1 << periph::INUM_FRC1).unwrap();
+        c.set_ar(9, OUT);
+        c.set_ar(10, LOAD);
+        c.set_ar(11, PERIPH_BASE + 0x600);
+        m.bus.rom.boot_pending = false;
+        m.bus.write32(DPORT_TEIE, 1 << 1).unwrap();
+        m.bus.write32(PERIPH_BASE + 0x608, 1 << 7).unwrap();     // CTRL: enabled, edge, divider 1
+        m.sync_irq();
+        let target = m.bus.cycles + u64::from(LOAD) + 2000;
+        if slices {
+            // as the browser runs it: `Machine::run` up to a cycle ceiling
+            m.max_cycles = target;
+            assert!(matches!(m.run(u64::MAX), esp8266::Stop::Halted));
+        } else {
+            while m.bus.cycles < target {
+                if let RunUntil::Stop(s) = m.run_until_cycle(target) { panic!("{s:?}") }
+            }
+        }
+        assert_eq!(m.interrupts, 1);
+        let (at_irq, at_store) = (m.bus.read32(OUT).unwrap(), m.bus.read32(OUT + 4).unwrap());
+        (at_irq.wrapping_sub(at_store), m.quantum as u32)
+    };
+    // `run_until_cycle` charges device time per instruction, without the approximate CPI
+    for (cpi, slices) in [(1, false), (1, true), (2, true)] {
+        let (cached, quantum) = run(0, cpi, slices);
+        for dispatch in [1, 2] {
+            assert_eq!(cached, run(dispatch, cpi, slices).0, "CPI {cpi}, slices {slices}: dispatch {dispatch} against decoded blocks");
+        }
+        // the store's cycles, the load, then the interrupt is taken in front of the next
+        // instruction (its step charges device time, not CCOUNT). `Machine::run` without a
+        // timing model ends its rounds at whole quanta, not at device deadlines: there the
+        // interrupt comes up to a quantum late, never early.
+        let late = if slices && cpi == 1 { quantum } else { 0 };
+        assert!((LOAD + cpi..=LOAD + 3 * cpi + late).contains(&cached), "CPI {cpi}, slices {slices}: {cached} cycles from the load to the interrupt");
     }
 }

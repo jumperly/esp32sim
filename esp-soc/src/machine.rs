@@ -692,7 +692,7 @@ impl<S: Soc> Machine<S> {
                     } else { self.bb_stats[6] += 1; }
                 }
             }
-            let quantum = if APPROXIMATE {
+            let mut quantum = if APPROXIMATE {
                 // An instruction can overrun the deadline by at most CPI-1 cycles.
                 self.idle_budget(u64::from(max_quantum) * u64::from(cpi), &on)
                     .min(self.bus.cpu_cycles_for_bus(self.max_cycles - self.bus.cycles())).div_ceil(u64::from(cpi)).max(1)
@@ -707,7 +707,7 @@ impl<S: Soc> Machine<S> {
                     .fold(self.quantum, |limit, wake| limit.min(wake.max(1)));
                 if self.max_cycles != u64::MAX { quantum.min(self.bus.cpu_cycles_for_bus(self.max_cycles - self.bus.cycles())) } else { quantum }
             };
-            let elapsed = quantum * u64::from(cpi);
+            let mut elapsed = quantum * u64::from(cpi);
             let mut stalls = [0u64; 4];
             let mut round_elapsed = 0;
             for i in 0..S::CORES {
@@ -737,9 +737,16 @@ impl<S: Soc> Machine<S> {
                             if i == 0 { self.run_steps += u64::from(budget - left); }
                             return self.finish_reset(round_elapsed.max((quantum - u64::from(left)) * u64::from(cpi) + stalls[i]));
                         }
+                        // the round ends after the instruction that asked for it (single-core only)
+                        if S::CORES == 1 && self.bus.round_cut() {
+                            quantum -= u64::from(left);
+                            elapsed = quantum * u64::from(cpi);
+                            break;
+                        }
                     }
-                    if i == 0 { self.run_steps += u64::from(budget); }
+                    if i == 0 { self.run_steps += u64::from(budget - left); }
                 } else {
+                    let mut cut = None;
                     for used in 1..=quantum {
                         let stop = self.step_core(i);
                         if let Some(stop) = stop {
@@ -756,7 +763,9 @@ impl<S: Soc> Machine<S> {
                             if i == 0 { self.run_steps += used; }
                             return self.finish_reset(round_elapsed.max(used * u64::from(cpi) + stalls[i]));
                         }
+                        if S::CORES == 1 && self.bus.round_cut() { cut = Some(used); break; }
                     }
+                    if let Some(used) = cut { quantum = used; elapsed = quantum * u64::from(cpi); }
                     if i == 0 { self.run_steps += quantum; }
                 }
                 round_elapsed = round_elapsed.max(elapsed + stalls[i]);
@@ -984,6 +993,7 @@ impl<S: Soc> Machine<S> {
                     if s.is_some() { stop = s; break; }
                     if self.bus.sw_reset() { return RunUntil::Stop(self.finish_reset(used_total)); }
                     if self.bus.take_host_event() { yielded = true; break; }
+                    if self.bus.round_cut() { break; }
                 }
                 let script_stopped = self.after_round(used_total);
                 if let Some(s) = stop { self.drain_console(); return RunUntil::Stop(s); }

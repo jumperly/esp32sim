@@ -183,6 +183,15 @@ pub trait SocBus: Bus {
     /// transmission starting): `Machine::run_until_cycle` stops its round there and returns
     /// `RunUntil::Yield`. Reading it clears it.
     fn take_host_event(&mut self) -> bool { false }
+    /// The last instruction wrote a device register whose effect counts from that instruction's
+    /// device time (a timer loaded with an interval, such as the ESP8266's FRC1). Device time
+    /// inside a round is the round's start, so such a write would count from up to a round
+    /// early. On a single-core chip the machine closes the round right after the instruction
+    /// (the core ends its dispatch there through `Bus::block_break`), and the next `tick` lands
+    /// on it; the bus clears the flag in that `tick`. The default never cuts, and the checks
+    /// compile away for a bus that keeps it.
+    #[inline(always)]
+    fn round_cut(&self) -> bool { false }
     fn misc(&mut self) -> &mut Misc;
     /// A stop a function hook asked for (a modelled ROM met an entry it does not implement): the
     /// run ends with it right after the hook. Reading it clears it.
