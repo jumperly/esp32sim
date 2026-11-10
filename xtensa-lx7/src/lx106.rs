@@ -287,6 +287,8 @@ impl Lx106 {
             };
             self.retire(1);
             if let Err(t) = r { return (i + 1, Some(t)); }
+            // a register write the machine must see at its own time ends the run (`Bus::block_break`)
+            if bus.block_break() { return (i + 1, None); }
         }
         (budget, None)
     }
@@ -309,7 +311,7 @@ impl Lx106 {
             };
             let (done, trap) = self.run_block(bus, ei, k, end, budget - i);
             i += done;
-            if trap.is_some() { return (i, trap); }
+            if trap.is_some() || bus.block_break() { return (i, trap); }
         }
         (budget, None)
     }
@@ -346,8 +348,12 @@ impl Lx106 {
                 }
             };
             if let Err(t) = r { trap = Some(t); break; }
-            // a store that changed code ends the run; the next lookup decodes the new bytes
-            if kind & STORE != 0 && !self.blocks.still_valid(ei, bus.page_versions()) { stopped = true; break; }
+            if kind & STORE != 0 {
+                // a store that changed code ends the run; the next lookup decodes the new bytes
+                if !self.blocks.still_valid(ei, bus.page_versions()) { stopped = true; break; }
+                // so does a register write the machine must see at its own time
+                if bus.block_break() { break; }
+            }
         }
         self.retire(done - retired);
         if trap.is_none() && !stopped && k < end { self.blocks.cut(self.cpu.pc, ei, k); }
@@ -357,8 +363,12 @@ impl Lx106 {
 
 impl Core for Lx106 {
     type Irq = u32;
+    /// The core's state as the reset leaves it. The approximate CPI is the host's timing setting,
+    /// not core state: it stays, as `Cpu::reset` keeps it for the LX6/LX7 profiles.
     fn reset(&mut self) {
+        let cpi = self.cpu.approximate_cpi;
         self.cpu = Cpu::new(0);
+        self.cpu.approximate_cpi = cpi;
         self.cpu.pc = 0x4000_0080;
         self.cpu.configid = [0xc28c_dafa, 0x1082_b6f6];
         self.cpu.memctl = 0;

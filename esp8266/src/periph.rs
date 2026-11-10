@@ -204,6 +204,12 @@ impl Frc1 {
             _ => 0,
         }
     }
+    /// The last write's count starts at `now` instead of where the write was stamped (the bus
+    /// stamps a write inside a scheduling round with the round's start; `SocBus::tick`).
+    pub fn rebase(&mut self, now: u64) {
+        if self.next != u64::MAX { self.next = now + (self.next - self.t0); }
+        self.t0 = now;
+    }
     /// The zero crossings up to `now`; whether one happened.
     fn advance(&mut self, now: u64) -> bool {
         let mut fired = false;

@@ -186,6 +186,15 @@ pub trait SocBus: Bus {
     /// Jumperly patch J1: the bus asks `Machine::run` to end the current slice at the next round
     /// boundary, so the host sees a pin change before the guest runs on. Reading it clears it.
     fn take_slice_yield(&mut self) -> bool { false }
+    /// The last instruction wrote a device register whose effect counts from that instruction's
+    /// device time (a timer loaded with an interval, such as the ESP8266's FRC1). Device time
+    /// inside a round is the round's start, so such a write would count from up to a round
+    /// early. On a single-core chip the machine closes the round right after the instruction
+    /// (the core ends its dispatch there through `Bus::block_break`), and the next `tick` lands
+    /// on it; the bus clears the flag in that `tick`. The default never cuts, and the checks
+    /// compile away for a bus that keeps it.
+    #[inline(always)]
+    fn round_cut(&self) -> bool { false }
     fn misc(&mut self) -> &mut Misc;
     /// A stop a function hook asked for (a modelled ROM met an entry it does not implement): the
     /// run ends with it right after the hook. Reading it clears it.
