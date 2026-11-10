@@ -115,6 +115,15 @@ pub struct SocBus {
     /// the interrupt lines as last derived (`Peripherals::refresh_lines`)
     pub lines: u32,
     pub debug: esp_soc::DebugFlags,
+    /// Jumperly patch J29: pin states with cycles for the host (`crate::jumperly`), the PWM
+    /// detector on the output edges (`crate::pwm`), the soft I2C decoders on the circuit's pin
+    /// pairs (`crate::soft_i2c`), the request to end the slice (`SocBus::take_slice_yield`) and
+    /// the rest of the host side (`jumperly::HostState`).
+    pub pin_watch: Option<crate::jumperly::PinWatch>,
+    pub pwm_tap: Option<crate::pwm::PwmDetector>,
+    pub soft_i2c: Option<crate::soft_i2c::SoftI2c>,
+    pub(crate) slice_yield: bool,
+    pub jumperly: crate::jumperly::HostState,
 }
 
 impl SocBus {
@@ -126,6 +135,7 @@ impl SocBus {
             cycles: 0, irq_dirty: true, last_fault: None, rom_data_reads: 0, reset_cause: crate::rom::boot::RST_POWERON,
             sw_reset: false, reset_kind: ResetKind::Jump, strap: None, strap_kept: false, spi_host: false, host_event: false, clock_half: 0, lines: 0,
             debug: Default::default(),
+            pin_watch: None, pwm_tap: None, soft_i2c: None, slice_yield: false, jumperly: Default::default(),   // Jumperly patch J29
         }
     }
 
@@ -211,6 +221,7 @@ impl SocBus {
         self.irq_dirty = true;
         if a == SPI0_CMD && w != 0 { self.spi0_command(w); }
         if a == SPI1_CMD { self.spi1_transfer(); }
+        if self.jumperly_hooks() { self.note_pin_write(a, w); }   // Jumperly patch J29
         if let Some(cause) = self.periph.reset.take() { self.chip_reset(cause); }
     }
 
@@ -221,6 +232,7 @@ impl SocBus {
         if self.spi_host {
             self.periph.spi1.host_wait = Some(t);
             self.host_event = true;
+            self.slice_yield = true;   // Jumperly patch J29: the host serves it between slices
         } else {
             let rx = self.board.spi_transfer(1, &t.tx, t.rx_len);
             self.periph.spi1.finish_transfer(t, &rx);
@@ -395,7 +407,10 @@ impl Bus for SocBus {
         self.cycles += half >> 1;
         self.periph.now = self.cycles;
         if self.cycles < self.periph.next_event() { return 0; }
+        let frc1 = self.periph.frc1.next;
         self.periph.advance(self.cycles);
+        if frc1 <= self.cycles { self.jumperly.frc1_fired = frc1; }   // Jumperly patch J29: the waveform's timer
+        if self.pin_watch.is_some() && self.periph.rtc.sleep.is_some() { self.pins_changed(); }   // Jumperly patch J29: GPIO16 in deep sleep
         if let Some(cause) = self.periph.reset.take() { self.chip_reset(cause); }
         self.irq_dirty = true;
         1

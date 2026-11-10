@@ -92,6 +92,7 @@ impl esp_soc::SocBus for SocBus {
     }
     /// An SPI1 transaction waits for the host (`Hspi::host_wait`).
     fn take_host_event(&mut self) -> bool { std::mem::take(&mut self.host_event) }
+    fn take_slice_yield(&mut self) -> bool { std::mem::take(&mut self.slice_yield) }   // Jumperly patch J1/J29
     fn misc(&mut self) -> &mut Misc { &mut self.periph.misc }
     fn take_stop(&mut self) -> Option<Stop> { self.rom.take_stop() }
     fn load_bytes(&mut self, addr: u32, data: &[u8]) -> Result<(), String> { SocBus::load_bytes(self, addr, data) }
@@ -150,6 +151,7 @@ impl esp_soc::SocBus for SocBus {
         self.cache_enabled = false;
         self.sw_reset = false;
         self.irq_dirty = true;
+        self.jumperly_after_reboot();   // Jumperly patch J29
         self.reset_cause
     }
     fn sw_reset(&self) -> bool { self.sw_reset }

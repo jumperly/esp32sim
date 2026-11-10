@@ -4,9 +4,12 @@
 pub mod board;
 pub mod bus;
 pub mod flash;
+pub mod jumperly;   // Jumperly patch J29
 pub mod periph;
+pub mod pwm;        // Jumperly patch J29
 pub mod rom;
 pub mod soc;
+pub mod soft_i2c;   // Jumperly patch J29
 
 pub use esp_soc::Stop;
 pub use soc::{machine, Esp8266, Machine};

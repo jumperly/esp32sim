@@ -24,6 +24,9 @@ pub(super) trait MachineApi {
     fn reports(&mut self) -> String;
     fn set_jit(&mut self, enabled: bool);
     fn approximate_jit_timing(&mut self, cpi: u32, quantum: u32) -> u32;
+    /// Whether a ROM boot needs the chip's mask ROM ELF (`esp32sim_load` kind 0); the ESP8266's
+    /// ROM is modelled in Rust (`Soc::ROM_ELF` is None).
+    fn needs_rom_elf(&self) -> bool { true }
     /// The virtual access point, on the chip with the radio.
     fn attach_wifi(&mut self, cfg: esp_soc::wifi::ApConfig) -> Result<(), String> { self.bus().attach_wifi(cfg, None) }
 }
@@ -82,6 +85,7 @@ impl<S: Soc> MachineApi for Machine<S> {
         match self.set_approximate_jit_timing(cpi, quantum) { Ok(()) => 0, Err(reason) => { log(&reason); 1 } }
     }
     fn set_jit(&mut self, enabled: bool) { for core in &mut self.cores { xtensa_lx7::Core::set_jit(core, enabled); } }
+    fn needs_rom_elf(&self) -> bool { S::ROM_ELF.is_some() }
 }
 
 /// A load kind or flash offset with this bit set goes to the co-processor (`esp32sim_load`,
@@ -155,6 +159,8 @@ pub(super) enum MachineKind {
     P4Rev3(Box<esp_soc::Machine<esp32p4::P4Rev3>>),
     P4C6(Box<esp32p4::coproc::CoSim<esp32p4::RevLt3>>),
     P4Rev3C6(Box<esp32p4::coproc::CoSim<esp32p4::RevGe3>>),
+    /// Jumperly patch J29: the ESP8266 (ESP-12F)
+    Esp8266(Box<esp8266::Machine>),
 }
 
 impl MachineKind {
@@ -168,6 +174,7 @@ impl MachineKind {
             Self::S3(m) => Some(m.as_mut()),
             Self::C3(m) => Some(m.as_mut()),
             Self::Esp32(m) => Some(m.as_mut()),
+            Self::Esp8266(m) => Some(m.as_mut()),   // Jumperly patch J29
             Self::C6(_) | Self::P4(_) | Self::P4Rev3(_) | Self::P4C6(_) | Self::P4Rev3C6(_) => None,
         }
     }
@@ -177,14 +184,14 @@ impl std::ops::Deref for MachineKind {
     type Target = dyn MachineApi;
     fn deref(&self) -> &Self::Target {
         match self { Self::S3(m) => m.as_ref(), Self::C3(m) => m.as_ref(), Self::C6(m) => m.as_ref(), Self::Esp32(m) => m.as_ref(), Self::P4(m) => m.as_ref(),
-            Self::P4Rev3(m) => m.as_ref(), Self::P4C6(m) => m.as_ref(), Self::P4Rev3C6(m) => m.as_ref() }
+            Self::P4Rev3(m) => m.as_ref(), Self::P4C6(m) => m.as_ref(), Self::P4Rev3C6(m) => m.as_ref(), Self::Esp8266(m) => m.as_ref() }
     }
 }
 
 impl std::ops::DerefMut for MachineKind {
     fn deref_mut(&mut self) -> &mut Self::Target {
         match self { Self::S3(m) => m.as_mut(), Self::C3(m) => m.as_mut(), Self::C6(m) => m.as_mut(), Self::Esp32(m) => m.as_mut(), Self::P4(m) => m.as_mut(),
-            Self::P4Rev3(m) => m.as_mut(), Self::P4C6(m) => m.as_mut(), Self::P4Rev3C6(m) => m.as_mut() }
+            Self::P4Rev3(m) => m.as_mut(), Self::P4C6(m) => m.as_mut(), Self::P4Rev3C6(m) => m.as_mut(), Self::Esp8266(m) => m.as_mut() }
     }
 }
 

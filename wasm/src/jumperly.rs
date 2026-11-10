@@ -11,6 +11,9 @@ pub use crate::chip::set_native_bus_host;
 /// USB-Serial/JTAG as a fourth console "port" after UART0..2.
 pub(crate) const USB_PORT: u32 = 3;
 
+/// Why a BLE export refuses: the chip has no virtual controller (J28), or no Bluetooth (J29).
+fn no_ble() -> String { "BLE needs an ESP32-S3, ESP32-C3 or ESP32".into() }
+
 /// Switch an emulator to Jumperly mode before boot: no JSON outbox, raw console bytes, every pin
 /// watched, RMT frames and PWM changes recorded, the linear ADC. ESP32-S3, ESP32-C3 and (J28) the
 /// classic ESP32; returns 1 for other chips or after boot.
@@ -22,7 +25,7 @@ pub unsafe extern "C" fn esp32sim_jumperly_mode(e: *mut Emu) -> u32 {
     // SAFETY: the caller provides exclusive access to a live emulator.
     let e = unsafe { &mut *e };
     if e.booted { return 1; }
-    let Some(c) = e.m.chip_mut() else { log("[emu] jumperly mode: ESP32-S3, ESP32-C3 and ESP32 only"); return 1; };
+    let Some(c) = e.m.chip_mut() else { log("[emu] jumperly mode: ESP32-S3, ESP32-C3, ESP32 and ESP8266 only"); return 1; };
     c.jumperly_mode();
     0
 }
@@ -142,7 +145,7 @@ pub unsafe extern "C" fn esp32sim_uart_in(e: *mut Emu, port: u32, ptr: *const u8
     let e = unsafe { &mut *e };
     // SAFETY: the caller provides a readable input buffer for this call.
     let data = unsafe { bytes(ptr, len) };
-    let Some(c) = e.m.chip_mut() else { log("[emu] uart in: ESP32-S3, ESP32-C3 and ESP32 only"); return 0 };
+    let Some(c) = e.m.chip_mut() else { log("[emu] uart in: ESP32-S3, ESP32-C3, ESP32 and ESP8266 only"); return 0 };
     match c.uart_in(port, data) {
         Some(n) => n,
         None => { log(&format!("[emu] uart in: no console port {port}")); 0 }
@@ -205,7 +208,7 @@ pub unsafe extern "C" fn esp32sim_reset(e: *mut Emu) -> u32 {
     // SAFETY: the caller provides exclusive access to a live emulator.
     let e = unsafe { &mut *e };
     if !e.booted { return 1; }
-    let Some(c) = e.m.chip_mut() else { log("[emu] reset: ESP32-S3, ESP32-C3 and ESP32 only"); return 1 };
+    let Some(c) = e.m.chip_mut() else { log("[emu] reset: ESP32-S3, ESP32-C3, ESP32 and ESP8266 only"); return 1 };
     c.reset();
     0
 }
@@ -352,6 +355,25 @@ pub unsafe extern "C" fn esp32sim_uart_baud(e: *mut Emu, port: u32) -> u32 {
     e.m.chip_mut().and_then(|c| c.uart_baud(port)).unwrap_or(0)
 }
 
+/// Jumperly patch J29: the ESP8266 has no I2C controller; `Wire` bit-bangs GPIO pins. Decode a
+/// software I2C master on `sda` / `scl` (GPIO0..15; a pair of pins on the nets of the circuit's
+/// I2C targets) when `on` is nonzero, or stop. While the I2C bridge is on (`esp32sim_bus_host`),
+/// the emulator plays the targets during the run: it calls `host_i2c(bus, op, arg)` with `bus` =
+/// `sda | scl << 8` at the START (address), each byte and the STOP, as the hardware bridge does,
+/// and drives SDA low for their ACKs and read bits until the next SCL falling edge, without
+/// ending the slice per edge. No clock stretching. Survives a chip reset. Returns 0, or 1 (another
+/// chip, a pin above 15, `sda == scl`, a pin of another pair).
+/// # Safety
+/// `e` must point to a live emulator to which the caller has exclusive access.
+#[no_mangle]
+pub unsafe extern "C" fn esp32sim_soft_i2c(e: *mut Emu, sda: u32, scl: u32, on: u32) -> u32 {
+    // SAFETY: the caller provides exclusive access to a live emulator.
+    let e = unsafe { &mut *e };
+    let (Ok(sda), Ok(scl)) = (u8::try_from(sda), u8::try_from(scl)) else { return 1 };
+    let Some(c) = e.m.chip_mut() else { return 1 };
+    u32::from(!c.soft_i2c(sda, scl, on != 0))
+}
+
 // ------------------------------------------------------------------ Jumperly patch J17: I2S RX
 
 /// Bytes `esp32sim_i2s_rx_need` writes to the buffer: eight u32.
@@ -473,7 +495,7 @@ pub unsafe extern "C" fn esp32sim_wifi_beacons(e: *mut Emu, data: *const u8, len
         if first { seen.push(b.bssid); } else { log(&format!("[emu] wifi: network around '{}' left out: its BSSID {} is listed already", b.ssid, esp_soc::wifi::mac_str(&b.bssid))); }
         first
     }).collect();
-    let Some(left_out) = e.m.chip_mut().and_then(|c| c.wifi_link().set_beacons(list)) else {
+    let Some(left_out) = e.m.chip_mut().and_then(|c| c.wifi_link()?.set_beacons(list)) else {
         log("[emu] wifi: beacons need the virtual access point (esp32sim_wifi_ap)");
         return 1;
     };
@@ -504,9 +526,9 @@ pub unsafe extern "C" fn esp32sim_ble_nearby(e: *mut Emu, data: *const u8, len: 
         Some(c) => {
             let cycles = c.flush_ticks();
             let hz = c.cpu_hz();
-            c.ble().set_nearby(list, cycles, hz)
+            match c.ble() { Some(b) => b.set_nearby(list, cycles, hz), None => Err(no_ble()) }
         }
-        None => Err("BLE needs an ESP32-S3, ESP32-C3 or ESP32".into()),
+        None => Err(no_ble()),
     };
     match result {
         Ok(()) => 0,
@@ -529,8 +551,8 @@ pub unsafe extern "C" fn esp32sim_ble_air(e: *mut Emu, addr: *const u8) -> u32 {
     // SAFETY: the caller provides 6 readable bytes for this call.
     let Ok(address) = <[u8; 6]>::try_from(unsafe { bytes(addr, 6) }) else { return 1 };
     let result = match e.m.chip_mut() {
-        Some(c) => c.ble().enable_air(address),
-        None => Err("BLE needs an ESP32-S3, ESP32-C3 or ESP32".into()),
+        Some(c) => c.ble().ok_or_else(no_ble).and_then(|b| b.enable_air(address)),
+        None => Err(no_ble()),
     };
     match result {
         Ok(()) => 0,
@@ -551,7 +573,7 @@ pub unsafe extern "C" fn esp32sim_ble_air_take(e: *mut Emu) -> u32 {
         Some(c) => {
             let cycles = c.flush_ticks();
             let hz = c.cpu_hz();
-            c.ble().take_air(cycles, hz)
+            c.ble().map(|b| b.take_air(cycles, hz)).unwrap_or_default()
         }
         None => Vec::new(),
     };
@@ -582,7 +604,8 @@ pub unsafe extern "C" fn esp32sim_ble_air_put(e: *mut Emu, ptr: *const u8, len: 
     let Some(c) = e.m.chip_mut() else { return 1 };
     let cycles = c.flush_ticks();
     let hz = c.cpu_hz();
-    c.ble().air_in(frame, cycles, hz);
+    let Some(ble) = c.ble() else { log(&format!("[emu] ble air: {}", no_ble())); return 1 };
+    ble.air_in(frame, cycles, hz);
     0
 }
 
@@ -597,7 +620,7 @@ pub unsafe extern "C" fn esp32sim_wifi_probe_take(e: *mut Emu) -> u32 {
     // SAFETY: the caller provides exclusive access to a live emulator.
     let e = unsafe { &mut *e };
     e.buf.clear();
-    let Some(ssid) = e.m.chip_mut().and_then(|c| c.wifi_link().take_probed_ssid()) else { return 0 };
+    let Some(ssid) = e.m.chip_mut().and_then(|c| c.wifi_link()?.take_probed_ssid()) else { return 0 };
     e.buf.extend_from_slice(&ssid);
     ssid.len() as u32
 }

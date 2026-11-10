@@ -99,6 +99,7 @@ dependencies = [
  "esp32p4",
  "esp32s3",
  "esp32sim-wasm-jit",
+ "esp8266",
  "xtensa-lx7",
 ]
 

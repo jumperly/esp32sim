@@ -591,3 +591,65 @@ length at `esp32sim_ble_ptr(emu)`, valid until the next take or emulator deletio
 lines wait; lines lost to the bound come first as `dropped=N`. A line's time is when the
 controller hands it over, so it can differ by microseconds from the CLI's, which slices
 differently; the lines and their order are the same ([EX264](evidence/ble-wasm-api/README.md)).
+
+## ESP8266 in the browser
+
+Jumperly patch J29. `esp32sim_new("esp8266", ...)` (also `esp12f`, `esp-12f`) builds the ESP8266
+of an ESP-12F module: one LX106 core at 80 MHz (160 with CPU2X), always 4 MB of flash (a larger
+`flash_mb` is logged and ignored), the default MAC 5c:cf:7f:00:11:22 (Espressif's OUI). The whole
+image loads at 0x0 (`esp32sim_load` kind 5: eboot at 0, the app at 0x1000) and `esp32sim_boot(e, 0)`
+boots it through the ROM, which is modelled in Rust: there is no ROM ELF to load and no "no mask
+ROM loaded" warning. The ROM model is not strict in Jumperly mode: an unknown ROM entry logs once
+and returns 0. Cycles (`esp32sim_cycles`, every event stamp) are 80 MHz APB cycles also with
+CPU2X, so `esp32sim_cpu_hz` stays 80 MHz.
+
+The Jumperly ABI (`wasm/src/chips/esp8266.rs`, `esp8266/src/jumperly.rs`):
+
+- Pins 0..16 (GPIO16 through its RTC registers) and **pin 17 = the TOUT pad** for `esp32sim_adc_set`
+  only: 0..1000 mV reads 0..1023 in `analogRead(A0)`, saturating above (the model writes the SAR
+  result registers 0x60000D80..0x60000D9C that libphy's `read_sar_dout` reads, so `system_adc_read`
+  computes it). The state word has the S3 layout; INPUT_ENABLE is always set (the pads have no input
+  enable), PULL_UP comes from IO_MUX bit 7, PULL_DOWN only on GPIO16 (GP16F bit 3), OPEN_DRAIN from
+  GPIO_PINn bit 2. The signal field is 0x100 for a pad on its GPIO function, else the pad's function:
+  1 U0TXD (GPIO1, GPIO2 function 4, GPIO15 after `Serial.swap()`), 2 U0RXD (GPIO3, GPIO13 after the
+  swap), 3 U1TXD (GPIO2), 4..7 HSPI MISO / MOSI / CLK / CS (GPIO12..15), 8 U0RTS, 9 U0CTS, 0x80 | f
+  for any other function f. `esp32sim_gpio_in_pin` is always 255 (no matrix).
+- Console ports 0 (UART0) and 1 (UART1, transmit only: `esp32sim_uart_in` on port 1 takes nothing);
+  `esp32sim_uart_pins` follows the IO_MUX functions (0: 1 / 3, or 15 / 13 swapped; 1: 2 / none);
+  `esp32sim_uart_baud` is 80 MHz over the divider the sketch wrote, and 74880 for UART0 before that
+  (the ROM's banner rate).
+- **PWM from the software waveform.** The chip has no PWM block: `analogWrite`, `tone` and `Servo`
+  toggle pins from the FRC1 NMI. An output whose edges follow the timer (within 20 us of FRC1 running
+  out) and repeat for 4 periods within 1 % in length and duty, between 40 Hz and 100 kHz, becomes a
+  PWM output: `esp32sim_pwm_take` reports it with the GPIO number as the signal, and the pin's edges
+  stop going to the pin events. A new duty or frequency is reported after 2 periods at it; no edge
+  for 2 periods, or an edge the sketch writes itself, turns it off (`enabled` 0, the level in the
+  idle-high flag) and the pin's edges come back. Edges the sketch writes (`digitalWrite`, `shiftOut`,
+  OneWire, NeoPixel bit-banging) are never PWM. A steady timer-driven square in the band that a
+  circuit counts as edges (a 1 kHz clock for a counter) arrives as PWM.
+- **Soft I2C.** `Wire` bit-bangs the pins, so there is no controller to bridge.
+  `esp32sim_soft_i2c(e, sda, scl, on)` registers a pin pair (GPIO0..15) whose nets carry I2C
+  targets; with the I2C bridge on (`esp32sim_bus_host(e, 1, ...)`), the emulator decodes the sketch's
+  START, bytes and STOP on those pins during the run and calls `host_i2c(bus, op, arg)` as the
+  hardware bridge does, with `bus = sda | scl << 8`; it drives SDA low in the chip's input for the
+  targets' ACKs and read bits until the next SCL falling edge, combined with the level the circuit
+  gives the pin. The pair's pin events do not end the slice. No clock stretching. Returns 1 for
+  another chip, a pin above 15, `sda == scl` or a pin of another pair.
+- **HSPI** is host **1** of `host_spi_bus`: with the SPI bridge on, a transaction (`SPI.transfer`
+  on GPIO12..15, function 2) waits until `esp32sim_bus_service`; `shiftOut` on the same pins stays
+  pin events.
+- `esp32sim_reset` is the RST pad: ROM cause 2 (`rst cause:2`, the SDK's "External System"), RTC
+  memory kept, the RTC registers cleared; during deep sleep it is the wake-up (cause 5). The
+  strapping (GPIO15, GPIO0, GPIO2) is read from the circuit at every hardware reset: GPIO0 held low
+  before boot gives `boot mode:(1,6)` and the ROM waits in UART download mode.
+- No radio: the Wi-Fi and BLE exports answer as for a chip without them (no access point, no virtual
+  controller). When the sketch starts Wi-Fi (its first transmit-queue write), the host log gets
+  `[emu] wifi: ESP8266 Wi-Fi is not modelled: ...` once; the sketch keeps running and `WiFi.status()`
+  never connects. Entering deep sleep logs `[emu] deep sleep: ...` (wake it by wiring GPIO16 to RST).
+- `esp32sim_set_mac` writes the OTP words with their CRC.
+
+`wasm/tests/jumperly.rs` (`esp8266_*`) runs the `esp8266-*` fixtures (`esp8266:esp8266:generic`, core
+3.1.2): blink on GPIO2, the console ports and pin ranges, the ROM's 74880 baud, `analogWrite` at 25 %
+then 75 % and `tone` as PWM events, the servo at 50 Hz, HSPI to the host beside `shiftOut` edges, the
+BME280 chip id through soft I2C, `analogRead(A0)` at 500 mV, the host reset with RTC memory kept,
+`WiFi.begin` with its note, deep sleep with its note and GPIO16, and IO0 held low at boot.

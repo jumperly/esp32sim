@@ -147,7 +147,7 @@ impl JumperlyChip for ::esp32::Machine {
         self.bus.cycles
     }
 
-    fn wifi_link(&mut self) -> &mut esp_soc::wifi::StationLink { &mut self.bus.periph.wifi.link }
+    fn wifi_link(&mut self) -> Option<&mut esp_soc::wifi::StationLink> { Some(&mut self.bus.periph.wifi.link) }
 
     /// The classic keeps the MAC in eFuse BLK0 with its CRC8 (not the S3/C3 BLK1 layout).
     fn set_mac(&mut self, mac: [u8; 6]) -> bool {
@@ -156,7 +156,7 @@ impl JumperlyChip for ::esp32::Machine {
         true
     }
 
-    fn ble(&mut self) -> &mut esp_soc::ble::vhci::Ble { &mut self.bus.ble }
+    fn ble(&mut self) -> Option<&mut esp_soc::ble::vhci::Ble> { Some(&mut self.bus.ble) }
 
     fn take_dac(&mut self) -> Vec<(u8, u32)> { self.bus.periph.adc.take_dac_changes() }
 

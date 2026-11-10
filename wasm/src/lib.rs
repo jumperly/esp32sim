@@ -116,7 +116,9 @@ unsafe fn text<'a>(ptr: *const u8, len: usize) -> &'a str {
 /// board such as `ttgo-tdisplay` for the classic ESP32, `esp32c6`, `waveshare-c6-lcd147` or
 /// `xiao-esp32c6` for the C6, `esp32c3` for the C3, or `esp32p4` (rev < 3) or `esp32p4-rev3` for the
 /// P4, with `+c6` for its C6 co-processor, which are console-only and take no board, or
-/// `waveshare-p4-lcd35` for that P4 rev >= 3 board (its panel, touch and codec). Null on failure.
+/// `waveshare-p4-lcd35` for that P4 rev >= 3 board (its panel, touch and codec), or `esp8266` /
+/// `esp12f` for the ESP8266 on an ESP-12F (Jumperly patch J29: 4 MB of flash whatever `flash_mb`
+/// asks, the whole image at 0x0, a ROM boot without a ROM ELF). Null on failure.
 /// Flash and PSRAM are each limited to 32 MiB, matching the browser configuration form.
 /// Classic ESP32 enables PSRAM only at 4 MiB; other sizes within the cap start without
 /// PSRAM (0 is the default), preserving existing callers' configurations.
@@ -155,7 +157,15 @@ pub unsafe extern "C" fn esp32sim_new(board: *const u8, board_len: usize, flash_
     } else {
         esp32::board::make_board(&board)
     };
-    let m = if let Some(b) = classic_board {
+    // Jumperly patch J29: the ESP8266 on the ESP-12F module (4 MB of flash, an Espressif-OUI MAC).
+    let m = if matches!(board.as_str(), "esp8266" | "esp12f" | "esp-12f") {
+        if flash_mb > 4 { log(&format!("[emu] esp8266: the ESP-12F has 4 MB of flash, not {flash_mb} MB")); }
+        let mut m = esp8266::machine([0x5c, 0xcf, 0x7f, 0x00, 0x11, 0x22], 4 << 20);
+        m.bus.board = esp8266::board::make_board("esp12f").expect("the ESP-12F board");
+        m.console.mask = 2;                                  // UART0; UART1 is console port 1 in Jumperly mode
+        prepare(&mut m);
+        MachineKind::Esp8266(Box::new(m))
+    } else if let Some(b) = classic_board {
         // Jumperly patch J28: the classic's module (ESP32-WROOM-32 on the NodeMCU-32S) has 4 MB of
         // flash; a bigger request is accepted and gets the module's 4 MB.
         if flash_mb > 4 { log(&format!("[emu] esp32: the module has 4 MB of flash, not {flash_mb} MB")); }
@@ -367,7 +377,7 @@ pub unsafe extern "C" fn esp32sim_boot(e: *mut Emu, app_direct: u32) -> u32 {
     let e = unsafe { &mut *e };
     // a ROM boot without a ROM runs from empty memory and prints nothing: say so (the page refuses it
     // earlier; the ABI stays permissive for callers that drive the machine another way)
-    if app_direct == 0 && !e.rom_loaded { log("[emu] boot: no mask ROM loaded: the run will print nothing (pick the chip's ROM ELF, or boot the app directly)"); }
+    if app_direct == 0 && !e.rom_loaded && e.m.needs_rom_elf() { log("[emu] boot: no mask ROM loaded: the run will print nothing (pick the chip's ROM ELF, or boot the app directly)"); }
     if let Err(msg) = e.m.boot(app_direct != 0) { log(&format!("[emu] boot: {}", msg)); return 1; }
     // the WebSocket server announces the board in its per-client hello; here there is one client
     let name = e.m.board_name();
