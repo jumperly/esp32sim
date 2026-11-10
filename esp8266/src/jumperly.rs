@@ -222,6 +222,8 @@ impl SocBus {
         match addr {
             // GPIO, the RTC block (GPIO16's registers; deep sleep drives GPIO16), IO_MUX
             0x6000_0300..0x6000_0370 | 0x6000_0700..0x6000_0800 | 0x6000_0800..0x6000_0900 => self.pins_changed(),
+            // DPORT IOSWAP: Serial.swap() moves UART0 to GPIO15/13, which changes the pins' functions
+            IOSWAP => self.pins_changed(),
             0x6000_0014 => self.jumperly.uart_div[0] = Some(v & UART_CLKDIV_MASK),
             0x6000_0F14 => self.jumperly.uart_div[1] = Some(v & UART_CLKDIV_MASK),
             WDEV_TX_START if v & 1 << 31 != 0 && !self.jumperly.wifi_noted => {
@@ -303,6 +305,12 @@ impl SocBus {
     pub fn set_soft_i2c_host(&mut self, host: Option<HostFn>) {
         let low = driven_low(&self.periph);
         let i2c = self.soft_i2c.get_or_insert_with(SoftI2c::default);
+        // The bridge flag is set again by every host call; the decoders restart only when the
+        // presence of the host changes, so a repeat keeps a transaction and its ACK pull.
+        if i2c.host.is_some() == host.is_some() {
+            if host.is_some() { i2c.host = host; }
+            return;
+        }
         let pulled = i2c.pulled();
         i2c.host = host;
         i2c.reset(low);
@@ -387,6 +395,7 @@ impl SocBus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use emu_core::Bus;
 
     fn periph() -> Peripherals { Peripherals::new([0; 6]) }
     const GPIO: u32 = PERIPH_BASE + 0x300;
@@ -421,6 +430,52 @@ mod tests {
         p.write32(PERIPH_BASE + 0x7A0, GP16_PULLDOWN);
         assert_eq!(pin_state(&p, 16), state::OUT | state::ENABLE | state::PULL_DOWN | state::INPUT_ENABLE | PLAIN);
         assert_eq!(pin_state(&p, 17), 0);
+    }
+
+    #[test]
+    fn ioswap_write_updates_the_pin_view() {
+        // Serial.swap() writes IOSWAP (DPORT 0x28, bit IOSWAPU0): GPIO15's function 4 turns from
+        // U0RTS into U0TXD, and the pin watch reports it
+        let mut b = SocBus::new(4 << 20, [0; 6]);
+        b.pin_watch = Some(PinWatch::new(&b.periph, (1 << PINS) - 1));
+        b.write32(MUX + IO_MUX_OFFSET[15], 1 << 8).unwrap();
+        let w = b.pin_watch.as_mut().unwrap();
+        assert_eq!(w.events.last().map(|e| (e.1, e.2 >> state::SIGNAL_SHIFT)), Some((15, state::SIG_U0RTS)));
+        w.events.clear();
+        b.write32(IOSWAP, IOSWAPU0).unwrap();
+        let w = b.pin_watch.as_mut().unwrap();
+        assert_eq!(w.events.len(), 1, "{:?}", w.events);
+        assert_eq!((w.events[0].1, w.events[0].2 >> state::SIGNAL_SHIFT), (15, state::SIG_U0TXD));
+    }
+
+    #[test]
+    fn a_repeated_host_keeps_the_decoder_state() {
+        let host = || -> Option<HostFn> { Some(Box::new(|_, op, _| u32::from(op < 2))) };
+        let mut b = SocBus::new(4 << 20, [0; 6]);
+        assert!(b.set_soft_i2c(4, 5, true));
+        b.set_soft_i2c_host(host());
+        let (sda, scl) = (1u32 << 4, 1u32 << 5);
+        let drive = |b: &mut SocBus, low: u32| b.soft_i2c.as_mut().unwrap().update(low);
+        // START, then the address byte 0xEC; the target pulls SDA for the ACK slot
+        drive(&mut b, 0);
+        drive(&mut b, sda);
+        drive(&mut b, sda | scl);
+        for i in (0..8).rev() {
+            let bit = 0xecu8 >> i & 1 != 0;
+            drive(&mut b, scl);
+            drive(&mut b, if bit { scl } else { scl | sda });
+            drive(&mut b, if bit { 0 } else { sda });
+        }
+        drive(&mut b, scl);
+        assert_ne!(b.soft_i2c.as_ref().unwrap().pulled() & sda, 0, "the ACK slot is pulled");
+        // the host flag set again does not restart the decoders
+        b.set_soft_i2c_host(host());
+        assert_ne!(b.soft_i2c.as_ref().unwrap().pulled() & sda, 0, "a repeat keeps the ACK pull");
+        // the host going away and back does
+        b.set_soft_i2c_host(None);
+        assert_eq!(b.soft_i2c.as_ref().unwrap().pulled(), 0);
+        b.set_soft_i2c_host(host());
+        assert_eq!(b.soft_i2c.as_ref().unwrap().pulled(), 0);
     }
 
     #[test]

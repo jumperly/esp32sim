@@ -12,7 +12,8 @@
 //! - a pin becomes `pwm` after `STABLE` (4) matching periods in a row whose frequency is within
 //!   40 Hz ..= 100 kHz: one `PwmOut { enabled: true }` with the average of those periods;
 //! - in `pwm` mode a waveform that changes (duty or frequency) is reported again after `CHANGE`
-//!   (2) matching periods at the new values; `LOST` (4) periods in a row that settle on nothing,
+//!   (2) matching periods at the new values; `LOST` (4) periods in a row that do not match the
+//!   running waveform and settle on nothing,
 //!   or a new frequency outside the band, end `pwm` mode;
 //! - no edge for more than 2 periods ends `pwm` mode (`poll`): `PwmOut { enabled: false }` with
 //!   the pin's level in `idle_high`, stamped where the silence began counting as such;
@@ -158,8 +159,14 @@ impl PwmDetector {
         any
     }
 
-    /// The changes since the last call.
-    pub fn take(&mut self) -> Vec<(u64, PwmOut)> { std::mem::take(&mut self.events) }
+    /// The changes since the last call, in cycle order within this take (a silence-off event is
+    /// stamped where the silence began counting, but pushed when `poll` runs, so the pushes of
+    /// different pins can be out of order; the sort is stable: equal cycles keep push order).
+    pub fn take(&mut self) -> Vec<(u64, PwmOut)> {
+        let mut events = std::mem::take(&mut self.events);
+        events.sort_by_key(|e| e.0);
+        events
+    }
 
     fn index(&self, pin: u8) -> Option<usize> { (usize::from(pin) < PINS).then_some(usize::from(pin)) }
 
@@ -207,7 +214,7 @@ impl PwmDetector {
                 let settled = run.n >= CHANGE && !run.first.matches(&on);
                 if settled && run.mean().in_band() {
                     self.report(i, run.mean(), cycle);
-                } else if settled || p.misses > LOST {
+                } else if settled || p.misses >= LOST {
                     self.leave(i, cycle);
                 }
             }
@@ -333,6 +340,41 @@ mod tests {
     /// 55 us high, a 0 is 65 us low then 5 us high; read slots release the pin, so their
     /// `GPIO_OUT & GPIO_ENABLE` stays low): reset, skip ROM 0xCC, convert 0x44. The slot pattern
     /// never repeats four periods, even fed as timer edges.
+    #[test]
+    fn lost_ends_pwm_after_exactly_lost_misses() {
+        // 1 kHz 25 %; then rising edges 1.5 ms apart (inside the silence limit, never two periods
+        // alike): the LOST-th period that matches nothing ends pwm mode, not the one after it
+        let mut d = PwmDetector::new();
+        let t = square(&mut d, 4, 0, 1000 * US, 250 * US, 6);
+        assert_eq!(d.take().len(), 1);
+        d.note_edge(4, true, t);
+        let mut now = t;
+        for k in 1..=LOST {
+            now += (1000 + 300 * u64::from(k)) * US;
+            d.note_edge(4, true, now);
+            let left = d.pwm_pins() == 0;
+            assert_eq!(left, k == LOST, "miss {k}");
+        }
+        let ev = d.take();
+        assert!(ev.iter().any(|e| !e.1.enabled), "{ev:?}");
+    }
+
+    #[test]
+    fn take_orders_events_by_cycle_across_pins() {
+        let mut d = PwmDetector::new();
+        // pin 5 stops first; `poll` visits pin 4 first, so its later event is pushed first
+        let t5 = square(&mut d, 5, 0, 1000 * US, 500 * US, 6);
+        d.take();
+        let t4 = square(&mut d, 4, 1000 * US, 1000 * US, 500 * US, 6);
+        d.take();
+        assert!(t4 > t5);
+        assert!(d.poll(t4 + 20_000 * US));
+        let ev = d.take();
+        assert_eq!(ev.len(), 2, "{ev:?}");
+        assert!(ev[0].0 <= ev[1].0, "{ev:?}");
+        assert_eq!(ev[0].1.signal, 5, "pin 5 went silent first: {ev:?}");
+    }
+
     #[test]
     fn irregular_onewire_edges_are_not_pwm() {
         fn slot_bits(d: &mut PwmDetector, t: &mut u64, byte: u8, direct: bool) {

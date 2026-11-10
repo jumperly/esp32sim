@@ -369,9 +369,16 @@ pub unsafe extern "C" fn esp32sim_uart_baud(e: *mut Emu, port: u32) -> u32 {
 pub unsafe extern "C" fn esp32sim_soft_i2c(e: *mut Emu, sda: u32, scl: u32, on: u32) -> u32 {
     // SAFETY: the caller provides exclusive access to a live emulator.
     let e = unsafe { &mut *e };
-    let (Ok(sda), Ok(scl)) = (u8::try_from(sda), u8::try_from(scl)) else { return 1 };
-    let Some(c) = e.m.chip_mut() else { return 1 };
-    u32::from(!c.soft_i2c(sda, scl, on != 0))
+    let (Ok(sda), Ok(scl)) = (u8::try_from(sda), u8::try_from(scl)) else {
+        log(&format!("[emu] soft i2c: pins {sda}/{scl} out of range"));
+        return 1;
+    };
+    let Some(c) = e.m.chip_mut() else { log("[emu] soft i2c: ESP8266 only"); return 1 };
+    if !c.soft_i2c(sda, scl, on != 0) {
+        log(&format!("[emu] soft i2c: pins SDA {sda} / SCL {scl} refused"));
+        return 1;
+    }
+    0
 }
 
 // ------------------------------------------------------------------ Jumperly patch J17: I2S RX

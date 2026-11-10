@@ -119,6 +119,11 @@ it. Each is cited in the source next to the code.
 
 ## Limits
 
+- Boot modes other than flash (strapping `(GPI >> 16) & 0xf` != 3, e.g. GPIO0 low = UART download,
+  mode (1,x)): the ROM waits for the download tool (Arduino ESP8266 `doc/boards.rst` "Boot
+  Messages and Modes"; esp8266/Arduino issue #1722). Its protocols are not modelled, so the core
+  parks with every interrupt masked and waits for a reset instead of stopping the run; a reset
+  with GPIO0 released boots from flash.
 - Reset reasons: a software restart reports `Power On` and the banner `rst cause:1` again
   (cause 4 and the WDT come with the next step's RTC/WDT model).
 - No CPU-time comparison on the hello demos: the shared crates change only by
