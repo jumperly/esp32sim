@@ -76,7 +76,11 @@ pub(crate) trait JumperlyChip {
     /// Whether the finger is on touch pad `gpio`; false for another pin or a chip without touch pads.
     fn touch_set(&mut self, gpio: u32, touched: bool) -> bool { let _ = (gpio, touched); false }
     /// The `[emu]` lines the chip has for the host log since the last call (after each slice).
-    fn take_notes(&mut self) -> Vec<&'static str> { Vec::new() }
+    /// Jumperly patch J29: owned lines (the ESP8266's ROM model formats its own).
+    fn take_notes(&mut self) -> Vec<String> { Vec::new() }
+    /// Jumperly patch J29: the chip stopped and stays stopped until a reset (the ESP8266's
+    /// modelled ROM stopped it): `esp32sim_run` returns stop code 8 instead of 0.
+    fn halted(&self) -> bool { false }
     /// Jumperly patch J29: decode a software I2C master on GPIO `sda` / `scl` (`on`) or stop; the
     /// chip plays the circuit's targets through `host_i2c` itself. False for a chip with I2C
     /// controllers (their bridge is `bus_host`) or pins it cannot take.
@@ -208,6 +212,7 @@ mod tests {
         assert_eq!((c.uart_in(1, b"x"), c.uart_in(2, b"x")), (Some(0), None));
         assert_eq!(c.gpio_in_pin(0), 255);
         assert!(c.soft_i2c(4, 5, true) && !c.soft_i2c(16, 5, true));
+        assert!(!c.soft_i2c(36, 5, true) && !c.soft_i2c(36, 5, false), "refused, no panic");
         assert!(!c.adc_set(17, 500), "outside Jumperly mode");
         unsafe { esp32sim_delete(esp8266) };
         for name in ["esp12f", "esp-12f"] {

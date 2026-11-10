@@ -387,8 +387,11 @@ pub unsafe extern "C" fn esp32sim_boot(e: *mut Emu, app_direct: u32) -> u32 {
 }
 
 /// Run for `cycles` more emulated cycles. Returns 0 while the machine can go on; otherwise a stop
-/// code: 2 unimplemented instruction, 3 breakpoint/ebreak, 4 exception limit, 5 semihosting call.
-/// A chip reset (esp_restart, watchdog) reboots through the ROM and keeps going, like the CLI.
+/// code: 2 unimplemented instruction, 3 breakpoint/ebreak, 4 exception limit, 5 semihosting call,
+/// 6 watch, 7 cost model, 8 the chip stopped and stays stopped until a reset (Jumperly patch J29:
+/// the ESP8266's modelled ROM stopped it; its reason went to the host log as `[emu] rom: ...`),
+/// 9 not booted. A chip reset (esp_restart, watchdog) reboots through the ROM and keeps going,
+/// like the CLI.
 ///
 /// # Safety
 /// `e` must point to a live emulator to which the caller has exclusive access.
@@ -399,8 +402,11 @@ pub unsafe extern "C" fn esp32sim_run(e: *mut Emu, cycles: u32, unix_ms: f64) ->
     if !e.booted { return 9; }
     #[cfg(target_arch = "wasm32")] esp_soc::host::set_unix_time_ms(unix_ms as u64);
     let _ = unix_ms;
-    let stop = e.m.run_slice(cycles);
-    if let Some(c) = e.m.chip_mut() { for note in c.take_notes() { log(note); } }   // Jumperly patch J28
+    let mut stop = e.m.run_slice(cycles);
+    if let Some(c) = e.m.chip_mut() {
+        for note in c.take_notes() { log(&note); }   // Jumperly patch J28
+        if stop == 0 && c.halted() { stop = 8; }      // Jumperly patch J29
+    }
     stop
 }
 
