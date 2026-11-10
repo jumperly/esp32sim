@@ -11,6 +11,22 @@
 //! An entry without a model logs `[emu] rom: unimplemented <name> (<addr>) from <call site>` once
 //! and returns 0; with `RomState::strict` it stops the run there instead (`SocBus::take_stop`).
 //!
+//! Diagnostics: every `[emu] rom: ...` line goes to stderr and into `RomState::take_notes`, for a
+//! front end without stderr (the browser). A stop the ROM asks for (`RomState::halt`: the boot
+//! image failed to load or returned, a pc in the ROM that is no entry, an exception without a
+//! handler, a strict stop) ends the run with `Stop::Halted` and stays (`RomState::halted`): the
+//! core stands at that ROM pc and every later run ends there at once, silently, until a reset.
+//!
+//! Faults: a modelled function that walks guest memory does it through `load8`, `store8`,
+//! `load32` and `store32`; an address the chip's own load or store would fault on ends the
+//! function there with that exception (`fault`): LoadProhibited (28) / StoreProhibited (29),
+//! EXCVADDR the address, EPC1 the function's entry (the ROM's code is not available, so the pc of
+//! the faulting instruction inside it is not known; the entry is in the same function). What the
+//! function wrote before the fault stays written; it may differ from what the ROM's loop had
+//! written by then, which is not known either. A byte access to IRAM or the flash window, which is
+//! a LoadStoreError (3) for the guest's own `l8ui` / `s8i`, works here: whether the ROM's code
+//! makes byte or word accesses there is not known.
+//!
 //! 0x4000_F000..0x4000_FF00 holds no ROM symbol; this model keeps it for addresses of its own:
 //! the PHY function stubs (`phy::STUBS`, 0x4000_F000..), the return points of calls into the
 //! guest (`xtos::GUEST_RET`, 0x4000_FD00..), `ENTRY_RETURN`, `DELAY_LOOP` and the scheduler's
@@ -31,11 +47,11 @@ pub mod table;
 pub mod xtos;
 
 use crate::bus::{SocBus, ROM_HIGH, ROM_LOW};
-use emu_core::Core;
+use emu_core::{Bus, Core, Fault};
 use esp_soc::Stop;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::OnceLock;
-use xtensa_lx7::Lx106;
+use xtensa_lx7::{state::exc, Lx106};
 
 pub use table::ENTRIES;
 pub use xtos::GuestCall;
@@ -86,9 +102,16 @@ pub struct RomState {
     /// PHY table slots already logged
     pub phy_seen: HashSet<u32>,
     stop: Option<Stop>,
+    /// `halt`: the reason of the stop the ROM asked for; cleared by a reset
+    halted: Option<String>,
     /// one-time log lines already written
     logged: Vec<&'static str>,
+    /// the diagnostic lines not yet taken (`take_notes`), oldest first, at most `NOTES_CAP`
+    notes: VecDeque<String>,
 }
+
+/// The diagnostic lines a front end without stderr can still take: the newest this many.
+pub const NOTES_CAP: usize = 64;
 
 impl Default for RomState {
     fn default() -> Self {
@@ -97,22 +120,97 @@ impl Default for RomState {
             isr: [(0, 0); 16], tasks: [sched::Task::default(); sched::PRIORITIES], idle: (0, 0), idle_called: false, run_sp: 0,
             // Model choice: the CPU runs at 80 MHz from reset here, so the ROM counts 80 cycles per
             // microsecond until the SDK says otherwise
-            cpu_mhz: (crate::periph::CPU_HZ / 1_000_000) as u32, i2c: HashMap::new(), phy_seen: HashSet::new(), stop: None, logged: Vec::new(),
+            cpu_mhz: (crate::periph::CPU_HZ / 1_000_000) as u32, i2c: HashMap::new(), phy_seen: HashSet::new(), stop: None, halted: None,
+            logged: Vec::new(), notes: VecDeque::new(),
         }
     }
 }
 
 impl RomState {
-    /// A chip reset: the ROM starts over (the strict setting is the host's and stays).
-    pub fn reset(&mut self) { *self = RomState { strict: self.strict, unknown: std::mem::take(&mut self.unknown), ..Default::default() }; }
+    /// A chip reset: the ROM starts over (the strict setting is the host's and stays, so do the
+    /// diagnostic lines not yet taken).
+    pub fn reset(&mut self) {
+        *self = RomState { strict: self.strict, unknown: std::mem::take(&mut self.unknown), notes: std::mem::take(&mut self.notes), ..Default::default() };
+    }
     /// The stop a ROM function asked for; reading it clears it.
     pub fn take_stop(&mut self) -> Option<Stop> { self.stop.take() }
-    /// End the run after this call (`SocBus::take_stop`).
-    pub fn request_stop(&mut self) { self.stop = Some(Stop::Halted); }
+    /// End the run after this call (`SocBus::take_stop`) and stay stopped until a reset: write
+    /// `msg` (`note`) and keep it as the reason (`halted`).
+    pub fn halt(&mut self, msg: String) {
+        self.note(msg.clone());
+        self.halted = Some(msg);
+        self.stop = Some(Stop::Halted);
+    }
+    /// Why the ROM stopped the chip (`halt`), until the next reset: a front end tells this stop
+    /// from the end of a run's budget by it.
+    pub fn halted(&self) -> Option<&str> { self.halted.as_deref() }
+    /// Write `[emu] rom: <msg>` to stderr and keep the line for `take_notes`.
+    pub fn note(&mut self, msg: String) { self.push_note(format!("[emu] rom: {msg}")); }
+    /// Write `line` as it is to stderr and keep it for `take_notes` (the newest `NOTES_CAP`).
+    pub fn push_note(&mut self, line: String) {
+        eprintln!("{line}");
+        if self.notes.len() == NOTES_CAP { self.notes.pop_front(); }
+        self.notes.push_back(line);
+    }
+    /// The diagnostic lines since the last call, oldest first: for front ends without stderr.
+    pub fn take_notes(&mut self) -> Vec<String> { self.notes.drain(..).collect() }
     /// Write `msg` once per `key`.
     pub fn log_once(&mut self, key: &'static str, msg: impl FnOnce() -> String) {
-        if !self.logged.contains(&key) { self.logged.push(key); eprintln!("[emu] rom: {}", msg()); }
+        if !self.logged.contains(&key) { self.logged.push(key); self.note(msg()); }
     }
+}
+
+// ------------------------------------------------------------------ guest memory
+
+/// A load or store of a modelled ROM function that faults on the chip: the exception cause
+/// (`xtensa_lx7::state::exc`) and the address, EXCVADDR.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MemFault { pub cause: u32, pub addr: u32 }
+
+/// What a guest memory access of a ROM function gives: the value or the fault.
+pub type Mem<T> = Result<T, MemFault>;
+
+/// The exception the chip raises for a bus fault of a load (`write` false) or store at `addr`:
+/// LoadStoreError for a narrow access to word-only memory, else Load/StoreProhibited, as
+/// `xtensa_lx7`'s executor maps `Fault`s.
+fn mem_fault(f: Fault, write: bool, addr: u32) -> MemFault {
+    let cause = if f == Fault::LoadStoreError { exc::LOAD_STORE_ERROR } else if write { exc::STORE_PROHIBITED } else { exc::LOAD_PROHIBITED };
+    MemFault { cause, addr }
+}
+
+/// A byte as the ROM's code reads it (`SocBus::peek8`: DRAM, IRAM, RTC memory, the flash window,
+/// registers); the mask ROM's own bytes read 0, as a data load there does (`SocBus`); elsewhere
+/// LoadProhibited.
+#[inline]
+pub fn load8(bus: &mut SocBus, addr: u32) -> Mem<u8> {
+    match bus.peek8(addr) {
+        Some(b) => Ok(b),
+        None => bus.read8(addr).map_err(|f| mem_fault(f, false, addr)),
+    }
+}
+
+/// A byte store as the ROM's code makes it (`SocBus::poke8`: RAM and registers); the mask ROM, the
+/// flash window and unmapped space are StoreProhibited.
+#[inline]
+pub fn store8(bus: &mut SocBus, addr: u32, v: u8) -> Mem<()> {
+    if bus.poke8(addr, v) { return Ok(()); }
+    bus.last_fault = Some((addr, true));
+    Err(MemFault { cause: exc::STORE_PROHIBITED, addr })
+}
+
+/// A word load (`l32i`): the bus's own access, its faults as the core takes them.
+pub fn load32(bus: &mut SocBus, addr: u32) -> Mem<u32> { bus.read32(addr).map_err(|f| mem_fault(f, false, addr)) }
+
+/// A word store (`s32i`).
+pub fn store32(bus: &mut SocBus, addr: u32, v: u32) -> Mem<()> { bus.write32(addr, v).map_err(|f| mem_fault(f, true, addr)) }
+
+/// End the ROM function at the core's pc (its entry) with the exception `f`: the guest's vector
+/// takes it as one of its own instructions' (`Lx106::raise_from_hook`).
+pub fn fault(core: &mut Lx106, f: MemFault) { let pc = core.pc(); core.raise_from_hook(pc, f.cause, Some(f.addr)); }
+
+/// Return `r`'s value to the caller, or end the function with its fault.
+pub fn done(core: &mut Lx106, bus: &mut SocBus, r: Mem<u32>) {
+    match r { Ok(v) => ret(core, bus, v), Err(f) => fault(core, f) }
 }
 
 /// The ROM symbol at `addr`, if any.
@@ -153,16 +251,19 @@ pub fn hooks() -> &'static [u32] {
 /// The ROM function at the core's pc, in a dispatch that may retire up to `budget` (at least 1)
 /// iterations. Returns the iterations it took: 1 for a call, more for a busy-wait, 0 for a pc
 /// outside the ROM (the guest's own code) or a busy-wait an interrupt is about to cut into.
+///
+/// A function that faults (`fault`) also returns 0: the core takes the exception it left at that
+/// pc. A chip the ROM stopped (`RomState::halt`) stays stopped: the run ends here again at once.
 pub fn dispatch(core: &mut Lx106, bus: &mut SocBus, budget: u32) -> u32 {
     let pc = core.pc();
-    if !(ROM_LOW..ROM_HIGH).contains(&pc) { return 0; }
+    if !(ROM_LOW..ROM_HIGH).contains(&pc) || core.hook_exception_pending() { return 0; }
+    if bus.rom.halted.is_some() { bus.rom.stop = Some(Stop::Halted); return 1; }
     if pc == DELAY_LOOP { return delay_loop(core, budget); }
     if pc == sched::RUN_LOOP { return sched::run_loop(core, bus); }
     if (xtos::GUEST_RET..xtos::GUEST_RET_END).contains(&pc) { xtos::returned(core, bus, pc); return 1; }
     if (phy::STUBS..phy::STUBS + 4 * phy::SLOTS).contains(&pc) { phy::slot(core, bus, pc); return 1; }
     if pc == ENTRY_RETURN {
-        eprintln!("[emu] rom: the boot image's entry returned to the ROM (a2={:#x})", core.get_ar(2));
-        bus.rom.request_stop();
+        bus.rom.halt(format!("the boot image's entry returned to the ROM (a2={:#x}): stopping", core.get_ar(2)));
         return 1;
     }
     match index(pc) {
@@ -172,12 +273,11 @@ pub fn dispatch(core: &mut Lx106, bus: &mut SocBus, budget: u32) -> u32 {
         },
         _ => {
             let from = call_site(core);
-            eprintln!("[emu] rom: execution at {pc:#010x}, which is no ROM entry (from {from:#010x}): stopping");
             if !bus.rom.unknown.iter().any(|&(a, _)| a == pc) { bus.rom.unknown.push((pc, from)); }
-            bus.rom.request_stop();
+            bus.rom.halt(format!("execution at {pc:#010x}, which is no ROM entry (from {from:#010x}): stopping"));
         }
     }
-    1
+    u32::from(!core.hook_exception_pending())
 }
 
 /// Where the call came from: a call0/callx0 is 3 bytes before its return address.
@@ -188,11 +288,10 @@ fn unimplemented(core: &mut Lx106, bus: &mut SocBus, pc: u32, name: &str) {
     let first = !bus.rom.unknown.iter().any(|&(a, _)| a == pc);
     if first { bus.rom.unknown.push((pc, from)); }
     if bus.rom.strict {
-        eprintln!("[emu] rom: unimplemented {name} ({pc:#010x}) from {from:#010x}: stopping (strict ROM)");
-        bus.rom.request_stop();
+        bus.rom.halt(format!("unimplemented {name} ({pc:#010x}) from {from:#010x}: stopping (strict ROM)"));
         return;
     }
-    if first { eprintln!("[emu] rom: unimplemented {name} ({pc:#010x}) from {from:#010x}: returns 0"); }
+    if first { bus.rom.note(format!("unimplemented {name} ({pc:#010x}) from {from:#010x}: returns 0")); }
     ret(core, bus, 0);
 }
 

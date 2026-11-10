@@ -2,8 +2,8 @@
 //! ROM's UART set-up calls. Semantics: Arduino ESP8266 3.1.2 tools/sdk/include/ets_sys.h:30-45,
 //! 221-254 and cores/esp8266/esp8266_undocumented.h:36-78. Characters go into the UART model's
 //! transmit FIFO register, which is where the host console reads them.
-use super::{arg, ret, SocBus};
-use emu_core::{Bus, Core};
+use super::{arg, fault, load32, load8, ret, Mem, SocBus};
+use emu_core::Core;
 use xtensa_lx7::Lx106;
 
 /// ets_uart_putc1: the "cooked" character function, which `ets_install_uart_printf` installs as
@@ -20,6 +20,11 @@ const UART_CONF0: u32 = 0x20;
 const RXFIFO_RST: u32 = 1 << 17;
 /// The longest format or `%s` string read before giving up on its terminator.
 const MAX_STR: u32 = 4096;
+/// The widest field a conversion pads to, and the most text one call formats: limits of this
+/// model (the ROM streams the characters out), so a guest's runaway width (`%2000000000d`) or
+/// output cannot exhaust the host's memory.
+const MAX_WIDTH: usize = 4096;
+const MAX_OUT: usize = 1 << 16;
 
 /// One byte into UART `n`'s transmit FIFO.
 fn uart_raw(bus: &mut SocBus, n: usize, b: u8) { bus.periph.uart[n & 1].write(0, b as u32); }
@@ -58,41 +63,43 @@ fn emit(core: &mut Lx106, bus: &mut SocBus, f: u32, text: Vec<u8>, v: u32) {
     ret(core, bus, v);
 }
 
-/// A NUL-terminated string at `addr`, at most `MAX_STR` bytes.
-fn c_string(bus: &mut SocBus, addr: u32) -> Vec<u8> {
+/// A NUL-terminated string at `addr`, at most `MAX_STR` bytes; an address the ROM's load faults on
+/// is that fault (`super::load8`).
+fn c_string(bus: &mut SocBus, addr: u32) -> Mem<Vec<u8>> {
     let mut s = Vec::new();
     for a in addr..addr.saturating_add(MAX_STR) {
-        match bus.peek8(a) { Some(0) | None => break, Some(b) => s.push(b) }
+        match load8(bus, a)? { 0 => break, b => s.push(b) }
     }
-    s
+    Ok(s)
 }
 
 /// The subset of printf the ROM's callers use: `%d %i %u %x %X %c %s %p %%`, with the flags `-`
-/// and `0`, a width, and `l`/`h` length modifiers (all arguments are 32-bit). `%p` prints like
-/// `%x`. A NULL `%s` prints "(null)". Anything else is copied as written.
-pub fn format(bus: &mut SocBus, fmt: u32, mut next: impl FnMut(&mut SocBus) -> u32) -> Vec<u8> {
-    let f = c_string(bus, fmt);
+/// and `0`, a width (at most `MAX_WIDTH`), and `l`/`h` length modifiers (all arguments are
+/// 32-bit). `%p` prints like `%x`. A NULL `%s` prints "(null)". Anything else is copied as written.
+/// At most `MAX_OUT` bytes. A format or `%s` string where the ROM's load faults is that fault.
+pub fn format(bus: &mut SocBus, fmt: u32, mut next: impl FnMut(&mut SocBus) -> Mem<u32>) -> Mem<Vec<u8>> {
+    let f = c_string(bus, fmt)?;
     let mut out = Vec::new();
     let mut i = 0;
-    while i < f.len() {
+    while i < f.len() && out.len() < MAX_OUT {
         let c = f[i];
         i += 1;
         if c != b'%' { out.push(c); continue; }
         let start = i - 1;
         let (mut left, mut zero, mut width) = (false, false, 0usize);
         while i < f.len() && matches!(f[i], b'-' | b'0') { if f[i] == b'-' { left = true } else { zero = true } i += 1; }
-        while i < f.len() && f[i].is_ascii_digit() { width = width * 10 + (f[i] - b'0') as usize; i += 1; }
+        while i < f.len() && f[i].is_ascii_digit() { width = (width * 10 + (f[i] - b'0') as usize).min(MAX_WIDTH); i += 1; }
         while i < f.len() && matches!(f[i], b'l' | b'h') { i += 1; }
         let Some(&conv) = f.get(i) else { out.extend_from_slice(&f[start..]); break };
         i += 1;
         let body: Vec<u8> = match conv {
             b'%' => { out.push(b'%'); continue; }
-            b'd' | b'i' => (next(bus) as i32).to_string().into_bytes(),
-            b'u' => next(bus).to_string().into_bytes(),
-            b'x' | b'p' => format!("{:x}", next(bus)).into_bytes(),
-            b'X' => format!("{:X}", next(bus)).into_bytes(),
-            b'c' => vec![next(bus) as u8],
-            b's' => match next(bus) { 0 => b"(null)".to_vec(), p => c_string(bus, p) },
+            b'd' | b'i' => (next(bus)? as i32).to_string().into_bytes(),
+            b'u' => next(bus)?.to_string().into_bytes(),
+            b'x' | b'p' => format!("{:x}", next(bus)?).into_bytes(),
+            b'X' => format!("{:X}", next(bus)?).into_bytes(),
+            b'c' => vec![next(bus)? as u8],
+            b's' => match next(bus)? { 0 => b"(null)".to_vec(), p => c_string(bus, p)? },
             _ => { out.extend_from_slice(&f[start..i]); continue; }
         };
         let pad = width.saturating_sub(body.len());
@@ -103,13 +110,14 @@ pub fn format(bus: &mut SocBus, fmt: u32, mut next: impl FnMut(&mut SocBus) -> u
             out.extend_from_slice(sign); out.resize(out.len() + pad, b'0'); out.extend_from_slice(digits);
         } else { out.resize(out.len() + pad, b' '); out.extend_from_slice(&body); }
     }
-    out
+    out.truncate(MAX_OUT);
+    Ok(out)
 }
 
 /// `ets_printf(fmt, ...)`: through the installed character function; returns the length.
 pub fn ets_printf(core: &mut Lx106, bus: &mut SocBus) {
     let (fmt, mut n) = (arg(core, bus, 0), 0);
-    let text = format(bus, fmt, |bus| { n += 1; core.arg(bus, n) });
+    let text = match format(bus, fmt, |bus| { n += 1; Ok(core.arg(bus, n)) }) { Ok(t) => t, Err(e) => { fault(core, e); return; } };
     let (f, n) = (bus.rom.putc1, text.len() as u32);
     emit(core, bus, f, text, n);
 }
@@ -118,7 +126,7 @@ pub fn ets_printf(core: &mut Lx106, bus: &mut SocBus) {
 /// (esp8266_undocumented.h:62-71).
 pub fn ets_uart_printf(core: &mut Lx106, bus: &mut SocBus) {
     let (fmt, mut n) = (arg(core, bus, 0), 0);
-    let text = format(bus, fmt, |bus| { n += 1; core.arg(bus, n) });
+    let text = match format(bus, fmt, |bus| { n += 1; Ok(core.arg(bus, n)) }) { Ok(t) => t, Err(e) => { fault(core, e); return; } };
     let uart = bus.rom.uart_sel;
     for &b in &text { uart_cooked(bus, uart, b); }
     ret(core, bus, text.len() as u32);
@@ -138,8 +146,9 @@ pub fn ets_vprintf(core: &mut Lx106, bus: &mut SocBus) {
             if orig <= 24 { ndx = 36; }
             stk.wrapping_add(ndx - 4)
         };
-        bus.read32(at).unwrap_or(0)
+        load32(bus, at)
     });
+    let text = match text { Ok(t) => t, Err(e) => { fault(core, e); return; } };
     let n = text.len() as u32;
     emit(core, bus, putc, text, n);
 }
@@ -211,8 +220,28 @@ mod tests {
         put(&mut bus, DRAM_LOW, b"v%08x %d|%5u|%-4x|%c%s%% %p %q %05d");
         put(&mut bus, DRAM_LOW + 0x100, b"ok");
         let mut args = [0x1234, -42i32 as u32, 7, 0xab, b'!' as u32, DRAM_LOW + 0x100, 0x3ffe8000, -5i32 as u32].into_iter();
-        let out = format(&mut bus, DRAM_LOW, |_| args.next().unwrap());
+        let out = format(&mut bus, DRAM_LOW, |_| Ok(args.next().unwrap())).unwrap();
         assert_eq!(String::from_utf8(out).unwrap(), "v00001234 -42|    7|ab  |!ok% 3ffe8000 %q -0005");
+    }
+
+    /// A guest's huge field width pads to `MAX_WIDTH` (before, `%2000000000d` asked the host for
+    /// 2 GB and aborted the wasm module), a width past `usize` does not overflow, and one call
+    /// formats at most `MAX_OUT` bytes.
+    #[test]
+    fn field_widths_and_the_output_are_bounded() {
+        let mut bus = SocBus::new(1 << 20, [0; 6]);
+        put(&mut bus, DRAM_LOW, b"%2000000000d|%-99999999999999999999999x|");
+        let out = format(&mut bus, DRAM_LOW, |_| Ok(7)).unwrap();
+        assert_eq!(out.len(), 2 * MAX_WIDTH + 2);
+        assert!(out.starts_with(b"    ") && out.ends_with(b"     |"));
+        assert_eq!((out[MAX_WIDTH - 1], out[MAX_WIDTH], out[MAX_WIDTH + 1]), (b'7', b'|', b'7'));
+        let many: Vec<u8> = b"%4000d".repeat(200);
+        put(&mut bus, DRAM_LOW, &many);
+        assert_eq!(format(&mut bus, DRAM_LOW, |_| Ok(1)).unwrap().len(), MAX_OUT);
+        // a `%s` or format string where the ROM's load faults
+        put(&mut bus, DRAM_LOW, b"%s");
+        assert_eq!(format(&mut bus, DRAM_LOW, |_| Ok(0x2000_0000)), Err(super::super::MemFault { cause: 28, addr: 0x2000_0000 }));
+        assert_eq!(format(&mut bus, 0, |_| Ok(0)).unwrap_err().addr, 0);
     }
 
     #[test]

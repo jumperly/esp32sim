@@ -8,8 +8,8 @@
 //! `ets_run`'s loop lives at the private address `RUN_LOOP`: a task is called with a0 =
 //! `RUN_LOOP`, so its return comes back to the loop, and the wait is the core's own WAITI at
 //! `RUN_LOOP`, so an interrupt returns there too and the machine skips idle time.
-use super::{arg, ret, Lx106, SocBus};
-use emu_core::{Bus, Core};
+use super::{arg, done, ret, store32, Lx106, SocBus};
+use emu_core::Core;
 use xtensa_lx7::state::{ps, sr};
 
 /// The scheduler's loop.
@@ -37,20 +37,20 @@ pub fn ets_task(core: &mut Lx106, bus: &mut SocBus) {
 }
 
 /// `ets_post_rom(prio, sig, par)` (`ets_post` in the SDK headers): queue an event for the task
-/// at `prio`; 0 when queued, 1 when the task is missing or its queue is full.
+/// at `prio`; 0 when queued, 1 when the task is missing or its queue is full. A queue the ROM's
+/// store faults on is that exception (`super::store32`), and nothing is queued.
 pub fn ets_post(core: &mut Lx106, bus: &mut SocBus) {
     let (prio, sig, par) = (arg(core, bus, 0) as usize, arg(core, bus, 1), arg(core, bus, 2));
     let r = match bus.rom.tasks.get(prio).copied() {
         Some(t) if t.func != 0 && t.count < t.len => {
             let at = t.queue.wrapping_add((t.head + t.count) % t.len * EVENT_SIZE);
-            let _ = bus.write32(at, sig);
-            let _ = bus.write32(at + 4, par);
-            bus.rom.tasks[prio].count += 1;
-            0
+            let stored = store32(bus, at, sig).and_then(|()| store32(bus, at.wrapping_add(4), par));
+            if stored.is_ok() { bus.rom.tasks[prio].count += 1; }
+            stored.map(|()| 0)
         }
-        _ => 1,
+        _ => Ok(1),
     };
-    ret(core, bus, r);
+    done(core, bus, r);
 }
 
 /// `ets_set_idle_cb(fn, arg)`.

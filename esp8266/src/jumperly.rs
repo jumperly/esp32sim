@@ -290,8 +290,10 @@ impl SocBus {
         self.apply_input(pin);
     }
 
-    /// Register (`on`) or drop the soft I2C pair `sda`/`scl` (`SoftI2c::set_pair`).
+    /// Register (`on`) or drop the soft I2C pair `sda`/`scl` (`SoftI2c::set_pair`). Two different
+    /// pads of GPIO0..15 or nothing: false, and nothing touched, for any other pair (on or off).
     pub fn set_soft_i2c(&mut self, sda: u8, scl: u8, on: bool) -> bool {
+        if sda > 15 || scl > 15 || sda == scl { return false; }
         let low = driven_low(&self.periph);
         let i2c = self.soft_i2c.get_or_insert_with(SoftI2c::default);
         let pulled = i2c.pulled();
@@ -365,12 +367,16 @@ impl SocBus {
         d.take()
     }
 
-    /// The host log lines since the last call: the radio note once, a note at each deep sleep.
-    pub fn take_notes(&mut self) -> Vec<&'static str> {
+    /// The host log lines since the last call: the modelled ROM's diagnostics as it wrote them
+    /// (`[emu] rom: ...`, `rom::RomState::take_notes`: an unmodelled ROM entry, a ROM stop and its
+    /// reason, ...), then the radio note once and a note at each deep sleep.
+    pub fn take_notes(&mut self) -> Vec<String> {
         let sleeping = self.deep_sleep();
         if sleeping && !self.jumperly.sleep_noted { self.jumperly.notes.push(SLEEP_NOTE); }
         self.jumperly.sleep_noted = sleeping;
-        std::mem::take(&mut self.jumperly.notes)
+        let mut lines = self.rom.take_notes();
+        lines.extend(self.jumperly.notes.drain(..).map(String::from));
+        lines
     }
 
     /// After a chip reset (`Soc::reboot`): the PWM outputs are off, the I2C decoders idle, the
@@ -388,8 +394,16 @@ impl SocBus {
     }
 
     /// The host's word on the chip's ROM: the strict mode stops at an unknown ROM entry; the host
-    /// keeps it off and reads the one-time log lines instead.
+    /// keeps it off, so such an entry returns 0 and the host log gets its line once
+    /// (`[emu] rom: unimplemented <name> (<addr>) from <call site>: returns 0`, `take_notes`). The
+    /// stops the ROM still makes (the image at flash 0 fails to load or returns, a pc in the ROM
+    /// that is no entry, an exception without a handler) reach the host as its line and as
+    /// `esp32sim_run`'s stop code 8 until a reset (`rom_halted`).
     pub fn set_rom_strict(&mut self, on: bool) { self.rom.strict = on; }
+
+    /// Whether the modelled ROM stopped the chip (`rom::RomState::halted`): it stands still until
+    /// a reset.
+    pub fn rom_halted(&self) -> bool { self.rom.halted().is_some() }
 }
 
 #[cfg(test)]
@@ -446,6 +460,19 @@ mod tests {
         let w = b.pin_watch.as_mut().unwrap();
         assert_eq!(w.events.len(), 1, "{:?}", w.events);
         assert_eq!((w.events[0].1, w.events[0].2 >> state::SIGNAL_SHIFT), (15, state::SIG_U0TXD));
+    }
+
+    /// Jumperly patch J29: a pair outside GPIO0..15 or of one pad is refused before anything is
+    /// touched, on or off (before, `esp32sim_soft_i2c(e, 36, ...)` indexed past the pins and
+    /// panicked); the soft I2C state stays as it was.
+    #[test]
+    fn soft_i2c_refuses_pads_outside_gpio0_15_before_touching_them() {
+        let mut b = SocBus::new(4 << 20, [0; 6]);
+        for (sda, scl) in [(36, 5), (4, 36), (16, 5), (255, 255), (4, 4)] {
+            for on in [true, false] { assert!(!b.set_soft_i2c(sda, scl, on), "{sda}/{scl} {on}"); }
+        }
+        assert!(b.soft_i2c.is_none(), "nothing set up");
+        assert!(b.set_soft_i2c(4, 5, true) && b.set_soft_i2c(4, 5, false));
     }
 
     #[test]

@@ -2129,3 +2129,72 @@ fn esp8266_strap_from_circuit_io0_low_waits_in_uart_mode() {
     assert!(text.contains("boot mode:(1,6)"), "{text}");
     assert!(!text.contains("Ready"), "{text}");
 }
+
+/// Jumperly patch J29: a one-segment ESP8266 image at flash 0 (`0xE9` header, the segment, the
+/// checksum in the last byte of its 16-byte block, as elf2bin.py writes it), entered at `entry`.
+fn esp8266_image(addr: u32, entry: u32, data: &[u8], good_checksum: bool) -> Vec<u8> {
+    let mut v = vec![0xe9, 1, 3, 0x20];
+    v.extend(entry.to_le_bytes());
+    v.extend(addr.to_le_bytes());
+    v.extend((data.len() as u32).to_le_bytes());
+    v.extend(data);
+    while (v.len() + 1) % 16 != 0 { v.push(0); }
+    let sum = data.iter().fold(0xefu8, |c, b| c ^ b);
+    v.push(if good_checksum { sum } else { !sum });
+    v
+}
+
+/// An image that calls the ROM entry at `rom` (callx0 through a literal) and then stays (`j .`).
+fn esp8266_call_image(rom: u32, good_checksum: bool) -> Vec<u8> {
+    let mut code = rom.to_le_bytes().to_vec();
+    code.extend([0x31, 0xff, 0xff, /* l32r a3, 0x40100000 */ 0xc0, 0x03, 0x00, /* callx0 a3 */ 0x06, 0xff, 0xff /* j . */]);
+    code.resize(16, 0);
+    esp8266_image(0x4010_0000, 0x4010_0004, &code, good_checksum)
+}
+
+/// Boot `flash` (the whole flash at 0) in Jumperly mode.
+fn boot_esp8266_flash(flash: &[u8]) -> Emu {
+    let board = "esp8266";
+    // SAFETY: the board name is readable for the call; the pointer is checked for null.
+    let e = unsafe { esp32sim_new(board.as_ptr(), board.len(), 4, 0) };
+    assert!(!e.is_null());
+    // SAFETY: `e` is live and exclusively ours; the buffer is readable for the call.
+    unsafe {
+        assert_eq!(esp32sim_jumperly_mode(e), 0);
+        assert_eq!(esp32sim_load(e, 5, flash.as_ptr(), flash.len()), 0);
+        assert_eq!(esp32sim_boot(e, 0), 0);
+    }
+    Emu(e)
+}
+
+/// Jumperly patch J29: a stop of the modelled ROM is stop code 8 for every slice until a reset,
+/// and its `[emu] rom:` line reaches the host log once.
+#[test]
+fn esp8266_rom_stop_returns_code_8_and_logs_its_line() {
+    take_native_log();
+    let mut e = boot_esp8266_flash(&esp8266_call_image(0x4000_2cc4, false));
+    assert_eq!(e.run(80_000), 8, "the image's checksum is wrong: the ROM stops the chip");
+    let log = take_native_log();
+    let fail: Vec<_> = log.iter().filter(|l| l.starts_with("[emu] rom: flash boot failed: image checksum")).collect();
+    assert_eq!(fail.len(), 1, "{log:?}");
+    assert!(e.uart(0).contains("csum "), "the ROM's loader lines come first");
+    for _ in 0..3 { assert_eq!(e.run(80_000), 8, "it stays stopped"); }
+    assert!(take_native_log().is_empty(), "no line again");
+    // a host reset boots again from the ROM: the same failure, one line
+    unsafe { assert_eq!(esp32sim_reset(e.0), 0) };
+    assert_eq!(e.run(80_000), 8);
+    assert_eq!(take_native_log().iter().filter(|l| l.contains("flash boot failed")).count(), 1);
+}
+
+/// Jumperly patch J29: a ROM entry the model lacks returns 0 in Jumperly mode (not strict); the
+/// host log names it, once, and the run goes on (code 0).
+#[test]
+fn esp8266_unmodelled_rom_entry_logs_a_note_naming_it() {
+    take_native_log();
+    let mut e = boot_esp8266_flash(&esp8266_call_image(0x4000_2cc4, true));
+    for _ in 0..3 { assert_eq!(e.run(80_000), 0); }
+    let log = take_native_log();
+    let lines: Vec<_> = log.iter().filter(|l| l.contains("unimplemented")).collect();
+    assert_eq!(lines.len(), 1, "{log:?}");
+    assert_eq!(lines[0], "[emu] rom: unimplemented ets_timer_arm (0x40002cc4) from 0x40100007: returns 0");
+}

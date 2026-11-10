@@ -1,5 +1,16 @@
 # ESP8266: SDK start-up through the HLE ROM
 
+> Receipt of the boot step (2026-11-10): what was true when the SDK first started here. Later
+> steps changed four of its statements; [docs/esp8266.md](../../esp8266.md) is the current state.
+> Speed: the LX106 interpreter's predecoded blocks took `esp8266-serial` from about 59 to about
+> 155 Minsn/s (native release CLI, `--max-seconds 4`). CPU2X is modelled (DPORT 0x14 bit 0: two
+> CPU cycles per APB cycle). Reset causes: the ROM's causes and the SDK's reasons are modelled end
+> to end (power-on, RST pin, `ESP.restart()` and exceptions through `_ResetVector`, watchdogs,
+> deep-sleep wake). Shared crates: `Lx106` (`waiti`, `spin`, `raise_from_hook`, its predecoded
+> blocks), `emu_core::Fault::LoadStoreError`, `Core::set_boundary_range`,
+> `Soc::FUNCTION_HOOK_RANGE`, `function_hook_steps`, `rom_boot`, `reset_cause_name`, `ROM_ELF`,
+> `APP_OFFSET`, `SocBus::take_stop` and `round_cut`.
+
 The `esp8266` machine boots unmodified Arduino ESP8266 3.1.2 images (NONOS SDK 2.2.2-dev,
 `generic`, 4M1M) from its modelled mask ROM: the ROM loader starts eboot, eboot loads the app,
 the SDK initialises (PHY, RTC, Wi-Fi in station mode) and the sketch's `setup()` and `loop()`

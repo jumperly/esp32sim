@@ -153,7 +153,12 @@ impl JumperlyChip for ::esp8266::Machine {
 
     fn ble(&mut self) -> Option<&mut esp_soc::ble::vhci::Ble> { None }
 
-    fn take_notes(&mut self) -> Vec<&'static str> { self.bus.take_notes() }
+    /// The ROM model's `[emu] rom: ...` lines (an unmodelled ROM entry, a ROM stop) and the
+    /// Jumperly notes (Wi-Fi, deep sleep).
+    fn take_notes(&mut self) -> Vec<String> { self.bus.take_notes() }
+
+    /// The modelled ROM stopped the chip (`esp32sim_run` code 8).
+    fn halted(&self) -> bool { self.bus.rom_halted() }
 
     fn soft_i2c(&mut self, sda: u8, scl: u8, on: bool) -> bool { self.bus.set_soft_i2c(sda, scl, on) }
 }

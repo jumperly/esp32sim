@@ -166,8 +166,8 @@ impl JumperlyChip for ::esp32::Machine {
     }
 
     /// Only an EXT0 wake ends deep sleep: once per sleep, a line when the guest enables another.
-    fn take_notes(&mut self) -> Vec<&'static str> {
-        if self.bus.take_unmodelled_wake() { vec![DEEP_SLEEP_NOTE] } else { Vec::new() }
+    fn take_notes(&mut self) -> Vec<String> {
+        if self.bus.take_unmodelled_wake() { vec![DEEP_SLEEP_NOTE.into()] } else { Vec::new() }
     }
 }
 

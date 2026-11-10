@@ -599,8 +599,17 @@ of an ESP-12F module: one LX106 core at 80 MHz (160 with CPU2X), always 4 MB of 
 `flash_mb` is logged and ignored), the default MAC 5c:cf:7f:00:11:22 (Espressif's OUI). The whole
 image loads at 0x0 (`esp32sim_load` kind 5: eboot at 0, the app at 0x1000) and `esp32sim_boot(e, 0)`
 boots it through the ROM, which is modelled in Rust: there is no ROM ELF to load and no "no mask
-ROM loaded" warning. The ROM model is not strict in Jumperly mode: an unknown ROM entry logs once
-and returns 0. Cycles (`esp32sim_cycles`, every event stamp) are 80 MHz APB cycles also with
+ROM loaded" warning. The ROM model is not strict in Jumperly mode: a ROM entry it lacks returns 0,
+and the host log gets `[emu] rom: unimplemented <name> (<address>) from <call site>: returns 0`
+once per entry. Every other `[emu] rom: ...` line of the model (the PHY note, a jump to the reset
+vector, ...) reaches the host log too, after the slice that wrote it (at most the newest 64 per
+slice). A stop the ROM makes (the image at flash 0 fails its checksum or does not load, its entry
+returns, a pc in the ROM that is no entry, an exception without a handler) logs its reason once
+(`[emu] rom: flash boot failed: image checksum 0x.., stored 0x..; stopping`, ...) and makes
+`esp32sim_run` return **8** from that slice on: the chip stands still until `esp32sim_reset` or
+`esp32sim_reset_cause` boots it again. A fault inside a modelled ROM function is the chip's own
+(`strlen(NULL)`: the sketch's `Exception (28)` postmortem and a restart; a division by zero:
+`Exception (6)`), so it is no stop. Cycles (`esp32sim_cycles`, every event stamp) are 80 MHz APB cycles also with
 CPU2X, so `esp32sim_cpu_hz` stays 80 MHz.
 
 The Jumperly ABI (`wasm/src/chips/esp8266.rs`, `esp8266/src/jumperly.rs`):
@@ -608,7 +617,9 @@ The Jumperly ABI (`wasm/src/chips/esp8266.rs`, `esp8266/src/jumperly.rs`):
 - Pins 0..16 (GPIO16 through its RTC registers) and **pin 17 = the TOUT pad** for `esp32sim_adc_set`
   only: 0..1000 mV reads 0..1023 in `analogRead(A0)`, saturating above (the model writes the SAR
   result registers 0x60000D80..0x60000D9C that libphy's `read_sar_dout` reads, so `system_adc_read`
-  computes it). The state word has the S3 layout; INPUT_ENABLE is always set (the pads have no input
+  computes it). `ESP.getVcc()` (`ADC_MODE(ADC_VCC)`) reads the same SAR result registers, so it
+  follows this TOUT level, not the circuit's supply net: the host cannot set the VCC the chip
+  measures. The state word has the S3 layout; INPUT_ENABLE is always set (the pads have no input
   enable), PULL_UP comes from IO_MUX bit 7, PULL_DOWN only on GPIO16 (GP16F bit 3), OPEN_DRAIN from
   GPIO_PINn bit 2. The signal field is 0x100 for a pad on its GPIO function, else the pad's function:
   1 U0TXD (GPIO1, GPIO2 function 4, GPIO15 after `Serial.swap()`), 2 U0RXD (GPIO3, GPIO13 after the
@@ -658,4 +669,5 @@ The Jumperly ABI (`wasm/src/chips/esp8266.rs`, `esp8266/src/jumperly.rs`):
 then 75 % and `tone` as PWM events, the servo at 50 Hz, HSPI to the host beside `shiftOut` edges, the
 BME280 chip id through soft I2C, `analogRead(A0)` at 500 mV, the host reset with RTC memory kept,
 the host's power-on reset clearing it (and a C3 refusing the cause), `WiFi.begin` with its note,
-deep sleep with its note and GPIO16, and IO0 held low at boot.
+deep sleep with its note and GPIO16, IO0 held low at boot, an image with a bad checksum (code 8 and
+its line, once, until a reset) and an unmodelled ROM entry's line.
