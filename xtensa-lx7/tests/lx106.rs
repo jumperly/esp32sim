@@ -384,6 +384,24 @@ fn spin_retires_steps_at_the_approximate_cpi_and_raises_the_timer_on_its_match()
     assert_eq!(c.state().interrupt & 0x40, 0x40, "the CCOMPARE0 match raises the timer");
 }
 
+/// The approximate CPI is the host's timing setting: a core reset (the ROM boot, every chip
+/// reset) keeps it, as the LX6/LX7 `Cpu::reset` does. Before, the reset rebuilt the state with
+/// CPI 1, so after the ROM boot CCOUNT advanced 1 per instruction while the machine charged the
+/// device clock `cpi` per instruction.
+#[test]
+fn a_reset_keeps_the_approximate_cpi() {
+    let (mut c, mut b) = machine(BASE);
+    for i in 0..4 { b.mem[i * 3..i * 3 + 3].copy_from_slice(&[0xf0, 0x20, 0x00]); }
+    c.set_approximate_cpi(2);
+    c.reset();
+    assert_eq!(c.cycles_per_step(), 2);
+    c.set_pc(BASE);
+    c.write_sr(sr::PS, 0).unwrap();
+    let t0 = c.state().ccount;
+    assert_eq!(c.run(&mut b, 4), (4, None));
+    assert_eq!(c.state().ccount.wrapping_sub(t0), 8, "4 NOPs at CPI 2");
+}
+
 #[test]
 fn waiti_sleeps_at_the_pc_until_an_interrupt_and_returns_there() {
     let (mut c, mut b) = machine(BASE + 0x100);

@@ -52,6 +52,9 @@ impl Soc for Esp8266 {
             for c in cores { c.waiti(15); c.write_sr(sr::INTENABLE, 0).unwrap(); }
         }
     }
+    /// Device time stands at the round's start while the core runs (`SocBus::in_round`).
+    #[inline(always)]
+    fn select_core(bus: &mut SocBus, _core: usize) { bus.in_round = true; }
     fn function_hooks(_bus: &SocBus) -> &[u32] { rom::hooks() }
     fn function_hook(core: &mut Lx106, bus: &mut SocBus) -> bool { rom::dispatch(core, bus, 1) > 0 }
     fn function_hook_steps(core: &mut Lx106, bus: &mut SocBus, budget: u32) -> u32 { rom::dispatch(core, bus, budget) }
@@ -152,11 +155,14 @@ impl esp_soc::SocBus for SocBus {
         // RAM may have been cleared and the window moved under the decoded code
         self.code_changed();
         self.sw_reset = false;
+        self.frc1_rearmed = false;
         self.irq_dirty = true;
         self.jumperly_after_reboot();   // Jumperly patch J29
         self.reset_cause
     }
     fn sw_reset(&self) -> bool { self.sw_reset }
+    #[inline(always)]
+    fn round_cut(&self) -> bool { self.frc1_rearmed }
     /// A reset from outside with the ROM's `cause` (`rom::boot::RST_*`: 1 power-on, 2 external,
     /// 3 software, 4 hardware watchdog, 5 deep-sleep wake; others are taken as 2): RST_EXT is the
     /// RST pin, and in deep sleep that is the wake-up (`SocBus::chip_reset`).

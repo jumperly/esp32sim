@@ -2046,6 +2046,48 @@ fn esp8266_host_reset_reboots_and_keeps_rtc_memory() {
     assert!(take_native_log().iter().any(|l| l.contains("chip reset") && l.contains("EXT_RESET")));
 }
 
+/// `esp32sim_reset_cause`: 1 is the power-on reset, which clears RTC memory, 2 the RST pad, which
+/// keeps it. `esp8266-strap` restarts itself once after a power-on that finds no word of its own
+/// in RTC memory, so a second self-restart after the host's power-on shows the word gone.
+#[test]
+fn esp8266_host_power_on_clears_rtc_memory_and_rst_keeps_it() {
+    take_native_log();
+    let mut e = Emu::boot_esp8266("strap");
+    let mut text = e.run_esp8266_until("reset=Software/System restart", 2_500_000);
+    text += &e.run_esp8266(200_000).2;
+    assert!(text.contains("reset=Power On") && text.contains("reset=Software/System restart"), "{text}");
+    // the chip's own causes are not the host's to give
+    for cause in [0, 3, 4, 5, 6] { assert_eq!(unsafe { esp32sim_reset_cause(e.0, cause) }, 1, "cause {cause}"); }
+    assert!(take_native_log().iter().any(|l| l.contains("[emu] reset cause 3: not taken")));
+    let before = e.cycles();
+    assert_eq!(unsafe { esp32sim_reset_cause(e.0, 1) }, 0);
+    let mut text = e.run_esp8266_until("reset=Software/System restart", 2_500_000);
+    text += &e.run_esp8266(200_000).2;
+    assert!(text.contains("rst cause:1, boot mode:(3,6)") && text.contains("reset=Power On"), "{text}");
+    assert!(text.contains("reset=Software/System restart"), "the word in RTC memory is gone: {text}");
+    assert!(e.cycles() > before, "the clock keeps going");
+    assert!(take_native_log().iter().any(|l| l.contains("chip reset") && l.contains("POWERON")));
+    assert_eq!(unsafe { esp32sim_reset_cause(e.0, 2) }, 0);
+    let (_, _, text) = e.run_esp8266(1_500_000);
+    assert!(text.contains("rst cause:2, boot mode:(3,6)") && text.contains("reset=External System"), "{text}");
+    assert!(!text.contains("reset=Software/System restart"), "{text}");
+    assert!(take_native_log().iter().any(|l| l.contains("chip reset") && l.contains("EXT_RESET")));
+}
+
+/// A chip with one host reset refuses `esp32sim_reset_cause` (and says so); `esp32sim_reset` stays.
+#[test]
+fn c3_refuses_a_host_reset_cause() {
+    take_native_log();
+    let mut e = Emu::boot_c3("c3-blink");
+    e.run_c3(300_000);
+    let before = e.cycles();
+    assert_eq!(unsafe { esp32sim_reset_cause(e.0, 1) }, 1);
+    assert!(take_native_log().iter().any(|l| l.contains("[emu] reset cause 1: not taken")));
+    let (_, _, text) = e.run_c3(300_000);
+    assert!(!text.contains("ESP-ROM"), "no reboot: {text}");
+    assert!(e.cycles() >= before + 300_000 * C3_MHZ);
+}
+
 #[test]
 fn esp8266_wifi_begin_logs_a_note_and_stays_alive() {
     take_native_log();

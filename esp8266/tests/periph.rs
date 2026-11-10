@@ -96,6 +96,81 @@ fn pwm_fixture_toggles_gpio4_at_1khz_25_then_75_percent_and_a_440_hz_tone_on_gpi
     assert!(m.irq_hist[0][periph::INUM_NMI as usize] > 1000, "the waveform runs in the NMI");
 }
 
+/// Periods and high times of a square wave, in cycles, from its rising edges.
+fn wave_cycles(e: &[(u64, bool)]) -> Vec<(u64, u64)> {
+    let start = e.iter().position(|x| x.1).expect("a rising edge");
+    e[start..].windows(3).step_by(2).map(|w| (w[2].0 - w[0].0, w[1].0 - w[0].0)).collect()
+}
+
+/// `esp8266-pwm` under the CPU limiter at 40 MHz (approximate CPI 2, quantum 128, run through
+/// `Machine::run` in 10 ms slices as the browser runs it), with and without decoded blocks.
+/// The waveform generator loads FRC1 at the end of its NMI with intervals as short as 140 cycles
+/// (core_esp8266_waveform_pwm.cpp:654-664: MINIRQTIME 4 us less DELTAIRQ 2.25 us at 80 MHz),
+/// and the SDK's NMI wrapper keeps FRC1 routed away from the NMI for 49 more instructions (98
+/// cycles here). Counted from the round's start instead of the load (a round is up to 256
+/// cycles), the timer ran out inside that window, the edge went to interrupt 9 and the generator
+/// never ran again; `tone()` then waited for it in a busy loop that took the whole CPU, and
+/// `pwm=768` never came. And the ROM boot's core reset dropped the CPI: CCOUNT, which the
+/// generator times its edges with, then ran at half the device clock (edges off by 1000 cycles
+/// and more, and many more short FRC1 loads).
+///
+/// The tolerance is the generator's own window: it returns from the NMI only when its next edge
+/// is more than MINIRQTIME (4 us, 320 cycles) away and serves closer edges in the same interrupt,
+/// one waveform after the other (:526-649), so an edge of GPIO4 near one of GPIO5 can move by up
+/// to that window. Observed while the tone runs, in cycles from nominal: GPIO4 periods -201..+187
+/// (80000), high times -165..+156 and -226..-39 (20020 and 60059: 256 and 768 of 1023); GPIO5
+/// periods -210..+209 and high times -216..+185 (181818 and 90909: Tone.cpp:54-56).
+#[test]
+fn pwm_fixture_at_cpi_2_keeps_1khz_under_the_440_hz_tone_and_leaves_the_cpu_idle() {
+    const WINDOW: u64 = 320;
+    let run = |cached: bool| {
+        let mut m = esp8266::machine(MAC, 4 << 20);
+        m.console.capture = true;
+        m.bus.rom.strict = true;
+        // before the ROM boot, as the browser sets it: the boot's core reset keeps it
+        m.set_approximate_jit_timing(2, 128).unwrap();
+        m.cores[0].set_block_cache(cached);
+        m.write_flash(0, &fixture("esp8266-pwm")).unwrap();
+        m.boot_rom();
+        m.bus.observe_gpio(true);
+        let mut events = Vec::new();
+        let mut insns_at = [0u64; 2];
+        let end = 5 * periph::CPU_HZ;
+        while m.bus.cycles < end {
+            m.max_cycles = (m.bus.cycles + periph::CPU_HZ / 100).min(end);
+            match m.run(u64::MAX) {
+                Stop::Halted => {}
+                s => panic!("stop {s:?} at {:.3} s, unknown ROM entries {:?}\nUART0:\n{}", m.seconds(), unknown(&m), uart0(&m)),
+            }
+            events.extend(m.bus.take_gpio_events());
+            for (i, t) in [1, 3].into_iter().enumerate() { if insns_at[i] == 0 && m.bus.cycles >= t * periph::CPU_HZ { insns_at[i] = m.insns(); } }
+        }
+        m.drain_console();
+        (uart0(&m), events, insns_at, m.irq_hist[0][periph::INUM_NMI as usize])
+    };
+    let (text, events, insns_at, nmis) = run(true);
+    assert!(text.contains("pwm=256\n") && text.contains("pwm=768\n") && text.contains("pwm=0\n"), "{text}");
+    assert!(nmis > 5000, "the waveform runs in the NMI to the end: {nmis}");
+    // the sketch sleeps in delay() while the tone runs: a few percent of the 80 M instructions
+    // 2 s allow at 40 MHz (the stall took all of them)
+    let busy = insns_at[1] - insns_at[0];
+    assert!(busy < 8_000_000, "{busy} instructions from 1 s to 3 s");
+    let near = |w: &[(u64, u64)], period: u64, high: u64| w.iter().all(|&(p, h)| p.abs_diff(period) <= WINDOW && h.abs_diff(high) <= WINDOW);
+    let quarter = wave_cycles(&edges(&events, 4, 1.2, 1.95));
+    assert!(quarter.len() > 700, "{}", quarter.len());
+    assert!(near(&quarter, 80_000, 20_020), "{quarter:?}");
+    let three = wave_cycles(&edges(&events, 4, 2.05, 2.9));
+    assert!(three.len() > 800, "{}", three.len());
+    assert!(near(&three, 80_000, 60_059), "{three:?}");
+    let tone = wave_cycles(&edges(&events, 5, 1.2, 2.8));
+    assert!(tone.len() > 600, "{}", tone.len());
+    assert!(near(&tone, 181_818, 90_909), "{tone:?}");
+    assert!(edges(&events, 5, 3.1, 5.0).is_empty(), "noTone at 3 s");
+    assert!(edges(&events, 4, 4.02, 5.0).is_empty(), "analogWrite(4, 0): a constant level");
+    let uncached = run(false);
+    assert!(uncached.0 == text && uncached.1 == events && uncached.2 == insns_at, "decoded blocks change the run");
+}
+
 /// `esp8266-servo`: `Servo` on GPIO14 through the same waveform generator: 50 Hz, 1000 us at 0
 /// degrees, 1500 us at 90 (libraries/Servo/src/Servo.h:54-56: 1000..2000 us).
 #[test]
