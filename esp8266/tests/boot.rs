@@ -10,6 +10,7 @@ fn blink() -> Vec<u8> {
     let path = std::env::var_os("ESP8266_BLINK_BIN").map(PathBuf::from)
         .or_else(|| std::env::var_os("JUMPERLY_FIXTURES_DIR").map(|d| PathBuf::from(d).join("bin/esp8266-blink.bin")))
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/bin/esp8266-blink.bin"));
+    println!("fixture: {}", path.display());
     std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e} (an Arduino ESP8266 3.1.2 Blink .bin; set ESP8266_BLINK_BIN)", path.display()))
 }
 

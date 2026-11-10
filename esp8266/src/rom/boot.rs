@@ -50,8 +50,11 @@ const FLASHCHIP: u32 = 0x3fff_c714;
 /// Model choice: where `flashchip` points, the word after it (the real ROM's struct address is not
 /// in the linker script).
 const FLASHCHIP_DATA: u32 = 0x3fff_c718;
-/// EXCCAUSE numbers whose XTOS default handler is not `_xtos_unhandled_exception` (Xtensa XTOS
-/// exc-table: SYSCALL 1, LEVEL1_INTERRUPT 4, ALLOCA 5).
+/// Model choice, not read from the ROM: the EXCCAUSE numbers whose entry in
+/// `_xtos_exc_handler_table` is not `_xtos_unhandled_exception` at reset (SYSCALL 1,
+/// LEVEL1_INTERRUPT 4, ALLOCA 5, each to the ROM handler of that name). The ROM's initial table is
+/// not published; it also exports `_xtos_cause3_handler` (0x40000590, eagle.rom.addr.v6.ld), so
+/// its default for cause 3 (LoadStoreError) may differ from this one.
 const XTOS_DEFAULTS: [(u32, &str); 3] = [(1, "_xtos_syscall_handler"), (4, "_xtos_l1int_handler"), (5, "_xtos_alloca_handler")];
 
 /// What the ROM's reset handler leaves in its DRAM before it loads an image. Model choices where

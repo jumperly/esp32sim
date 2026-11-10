@@ -1,6 +1,8 @@
 //! Every `PROVIDE` of `tools/sdk/ld/eagle.rom.addr.v6.ld` in the Arduino ESP8266 core 3.1.2
 //! (the ESP8266 mask ROM's symbols; the commented-out ones left out), sorted by address.
-//! Generated from that file; do not edit by hand.
+//! Generated from that file by `esp8266/tools/gen_rom_table.py`; do not edit by hand. To
+//! regenerate: `python esp8266/tools/gen_rom_table.py <core>/tools/sdk/ld/eagle.rom.addr.v6.ld
+//! esp8266/src/rom/table.rs`.
 use super::RomEntry;
 
 /// 348 symbols: ROM code at 0x4000_0000..0x4001_0000 and the ROM's data in DRAM.

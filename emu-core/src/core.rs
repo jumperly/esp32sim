@@ -139,6 +139,11 @@ pub trait Core {
     /// pcs the machine intercepts (stubs, probes) as a bloom over `pc_bit`: a fast path must
     /// stop at every one of them so the machine can look.
     fn set_boundaries(&mut self, _bloom: u64) {}
+    /// Every pc in `lo..hi` is a boundary too, tested exactly rather than through the bloom: for a
+    /// SoC whose function hooks fill a whole address range (`Soc::FUNCTION_HOOK_RANGE`), whose
+    /// bloom bits would cover every pc. `lo == hi` (the default) is no range. A core that offers
+    /// such a range must implement this.
+    fn set_boundary_range(&mut self, _lo: u32, _hi: u32) {}
     /// Preserve individual fast-path block callbacks instead of combining repeated blocks.
     fn set_block_observation(&mut self, _enabled: bool) {}
     /// Throw away decoded/compiled code (after loading an image or changing boundaries).

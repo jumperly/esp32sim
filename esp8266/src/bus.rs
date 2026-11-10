@@ -142,7 +142,7 @@ impl SocBus {
     fn mmio_write(&mut self, addr: u32, v: &[u8]) {
         let a = addr & !3;
         let w = if v.len() == 4 { u32::from_le_bytes(v.try_into().unwrap()) } else {
-            let mut w = if a == PERIPH_BASE || a == UART1_BASE { [0; 4] } else { self.periph.read32(a).to_le_bytes() };
+            let mut w = if a == PERIPH_BASE || a == UART1_BASE { [0; 4] } else { self.periph.peek32(a).to_le_bytes() };
             let o = (addr & 3) as usize;
             w[o..o + v.len()].copy_from_slice(v);
             u32::from_le_bytes(w)
@@ -293,6 +293,19 @@ mod tests {
         assert_eq!(b.rom_data_reads, 3);
         assert_eq!(b.write32(ROM_LOW, 1), Err(Fault::Prohibited));
         assert_eq!(b.read32(ROM_LOW), Ok(0));
+    }
+
+    #[test]
+    fn a_narrow_register_store_merges_without_a_read_of_its_own() {
+        let mut b = bus();
+        let r = DPORT_BASE + 0x20;
+        b.write32(r, 0x1122_3344).unwrap();
+        b.periph.misc.mmio_log = Some(Vec::new());
+        b.write8(r + 1, 0xaa).unwrap();
+        // the guest made one store: the log has that write and no read
+        let log = b.periph.misc.mmio_log.take().unwrap();
+        assert_eq!(log.iter().map(|&(_, a, v, w)| (a, v, w)).collect::<Vec<_>>(), [(r, 0x1122_aa44, true)]);
+        assert_eq!(b.read32(r), Ok(0x1122_aa44));
     }
 
     #[test]

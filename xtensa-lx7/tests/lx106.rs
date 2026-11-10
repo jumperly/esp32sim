@@ -348,3 +348,38 @@ fn run_returns_in_front_of_a_boundary_pc() {
     assert_eq!(c.run(&mut b, 1), (1, None));
     assert_eq!(c.pc(), BASE + 9);
 }
+
+#[test]
+fn run_returns_in_front_of_the_boundary_range_and_nowhere_else() {
+    // two NOPs and `j BASE+0x100` at BASE+6 (offset 0x100 - 6 - 4 = 0xf6); the range starts there
+    let (mut c, mut b) = machine(BASE);
+    for i in 0..2 { b.mem[i * 3..i * 3 + 3].copy_from_slice(&[0xf0, 0x20, 0x00]); }
+    b.mem[6..9].copy_from_slice(&[0x86, 0x3d, 0x00]);
+    c.set_boundaries(0);
+    c.set_boundary_range(BASE + 0x100, BASE + 0x200);
+    assert_eq!(c.run(&mut b, 10), (3, None));
+    assert_eq!(c.pc(), BASE + 0x100);
+    // starting in it, the machine has already looked: it runs
+    b.mem[0x100..0x103].copy_from_slice(&[0xf0, 0x20, 0x00]);
+    assert_eq!(c.run(&mut b, 1), (1, None));
+    // an empty range stops nowhere
+    let (mut c, mut b) = machine(BASE);
+    for i in 0..4 { b.mem[i * 3..i * 3 + 3].copy_from_slice(&[0xf0, 0x20, 0x00]); }
+    c.set_boundary_range(0, 0);
+    assert_eq!(c.run(&mut b, 4), (4, None));
+}
+
+#[test]
+fn spin_retires_steps_at_the_approximate_cpi_and_raises_the_timer_on_its_match() {
+    let (mut c, _) = machine(BASE);
+    c.set_approximate_cpi(2);
+    assert_eq!(c.cycles_per_step(), 2);
+    let (n0, t0) = (c.insn_count(), c.state().ccount);
+    c.write_sr(sr::CCOMPARE0, t0.wrapping_add(10)).unwrap();
+    c.spin(4);
+    assert_eq!((c.insn_count() - n0, c.state().ccount.wrapping_sub(t0)), (4, 8));
+    assert_eq!(c.state().interrupt & 0x40, 0);
+    c.spin(1);
+    assert_eq!(c.state().ccount.wrapping_sub(t0), 10);
+    assert_eq!(c.state().interrupt & 0x40, 0x40, "the CCOMPARE0 match raises the timer");
+}

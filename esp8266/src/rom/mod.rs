@@ -5,13 +5,17 @@
 //! and returns through a0 with the result in a2 (call0 ABI). The addresses are facts of the linker
 //! script; the behaviour follows the SDK and core headers cited at each function.
 //!
+//! The machine stops the core in front of every pc in the ROM (`Soc::FUNCTION_HOOK_RANGE`), not
+//! through its pc bloom, so code outside the ROM runs in long stretches.
+//!
 //! An entry without a model logs `[emu] rom: unimplemented <name> (<addr>) from <call site>` once
 //! and returns 0; with `RomState::strict` it stops the run there instead (`SocBus::take_stop`).
 //!
 //! 0x4000_F000..0x4000_FF00 holds no ROM symbol; this model keeps it for addresses of its own
 //! (`ENTRY_RETURN`, and later the PHY function table and the return points of calls into the guest).
-//! Hooking all of it also covers every bucket of the machine's pc bloom, so every pc in the ROM
-//! reaches `dispatch`, including the ones outside the table.
+//! Hooking all of it also covers every bucket of the machine's stub bloom, which it tests when the
+//! core stops in front of the ROM, so every pc there reaches `dispatch`, including the ones outside
+//! the table.
 pub mod boot;
 mod libc;
 mod print;
@@ -38,6 +42,8 @@ pub const PRIVATE_LOW: u32 = 0x4000_F000;
 pub const PRIVATE_HIGH: u32 = 0x4000_FF00;
 /// a0 of the boot image's entry: reaching it means the image returned to the ROM.
 pub const ENTRY_RETURN: u32 = 0x4000_FE04;
+/// The busy-wait of `ets_delay_us`: a3 holds CCOUNT at the call, a4 the cycles to wait.
+pub const DELAY_LOOP: u32 = 0x4000_FE08;
 
 /// What the modelled ROM keeps between calls.
 pub struct RomState {
@@ -51,8 +57,6 @@ pub struct RomState {
     pub putc1: u32,
     /// `uart_buff_switch`: the UART of `ets_putc` and `ets_uart_putc1`
     pub uart_sel: usize,
-    /// cycles an `ets_delay_us` in progress still has to spend
-    delay_left: u64,
     stop: Option<Stop>,
     /// one-time log lines already written
     logged: Vec<&'static str>,
@@ -60,7 +64,7 @@ pub struct RomState {
 
 impl Default for RomState {
     fn default() -> Self {
-        RomState { strict: false, unknown: Vec::new(), boot_pending: true, putc1: print::ETS_UART_PUTC1, uart_sel: 0, delay_left: 0, stop: None, logged: Vec::new() }
+        RomState { strict: false, unknown: Vec::new(), boot_pending: true, putc1: print::ETS_UART_PUTC1, uart_sel: 0, stop: None, logged: Vec::new() }
     }
 }
 
@@ -109,14 +113,17 @@ pub fn hooks() -> &'static [u32] {
     })
 }
 
-/// The ROM function at the core's pc. False for a pc outside the ROM: the guest's own code.
-pub fn dispatch(core: &mut Lx106, bus: &mut SocBus) -> bool {
+/// The ROM function at the core's pc, in a dispatch that may retire up to `budget` (at least 1)
+/// iterations. Returns the iterations it took: 1 for a call, more for a busy-wait, 0 for a pc
+/// outside the ROM (the guest's own code) or a busy-wait an interrupt is about to cut into.
+pub fn dispatch(core: &mut Lx106, bus: &mut SocBus, budget: u32) -> u32 {
     let pc = core.pc();
-    if !(ROM_LOW..ROM_HIGH).contains(&pc) { return false; }
+    if !(ROM_LOW..ROM_HIGH).contains(&pc) { return 0; }
+    if pc == DELAY_LOOP { return delay_loop(core, budget); }
     if pc == ENTRY_RETURN {
         eprintln!("[emu] rom: the boot image's entry returned to the ROM (a2={:#x})", core.get_ar(2));
         bus.rom.request_stop();
-        return true;
+        return 1;
     }
     match index(pc) {
         Some(i) if pc < PRIVATE_LOW => match handlers()[i] {
@@ -130,7 +137,7 @@ pub fn dispatch(core: &mut Lx106, bus: &mut SocBus) -> bool {
             bus.rom.request_stop();
         }
     }
-    true
+    1
 }
 
 /// Where the call came from: a call0/callx0 is 3 bytes before its return address.
@@ -160,13 +167,44 @@ fn ret64(core: &mut Lx106, bus: &mut SocBus, v: u64) { core.set_ar(3, (v >> 32) 
 
 // ------------------------------------------------------------------ small functions
 
-/// `ets_delay_us(us)`: busy-wait. The core spins here one cycle per call until the time has
-/// passed, so device time moves with it as it would under the ROM's loop.
+/// CPU cycles per microsecond. The CPU runs at 80 MHz here (`periph::CPU_HZ`); CPU2X is not
+/// modelled yet.
+const CYCLES_PER_US: u32 = (crate::periph::CPU_HZ / 1_000_000) as u32;
+
+/// `ets_delay_us(us)`: a busy-wait on CCOUNT until `us` microseconds of CPU cycles have passed,
+/// the cycle count computed in 32 bits as a CCOUNT difference is. The call itself is one step; the
+/// wait goes on at `DELAY_LOOP` (`delay_loop`) with its state in a3 and a4, scratch registers of
+/// the call0 ABI (an interrupt handler saves them as it saves any interrupted code's).
 fn ets_delay_us(core: &mut Lx106, bus: &mut SocBus) {
-    if bus.rom.delay_left == 0 { bus.rom.delay_left = u64::from(arg(core, bus, 0)) * (crate::periph::CPU_HZ / 1_000_000); }
-    if bus.rom.delay_left <= 1 { bus.rom.delay_left = 0; ret(core, bus, 0); return; }
-    bus.rom.delay_left -= 1;
-    core.advance_cycles(1);
+    let cycles = arg(core, bus, 0).wrapping_mul(CYCLES_PER_US);
+    let start = core.read_sr(xtensa_lx7::state::sr::CCOUNT).unwrap_or(0);
+    core.set_ar(3, start);
+    core.set_ar(4, cycles);
+    core.set_pc(DELAY_LOOP);
+    core.spin(1);
+}
+
+/// The wait of `ets_delay_us`: spend steps (of `Lx106::cycles_per_step` cycles each, so device
+/// time and CCOUNT move by cycles under an approximate CPI too) until CCOUNT - a3 >= a4, then
+/// return to a0. A chunk ends at the budget and at the next CCOMPARE0 match, so a timer interrupt
+/// that falls inside the wait becomes pending on its cycle; when one is pending this takes no
+/// step, the core takes the interrupt here, and its return (`rfe` to this pc) resumes the wait,
+/// which, being a CCOUNT difference, includes the handler's time as a ROM loop's would.
+fn delay_loop(core: &mut Lx106, budget: u32) -> u32 {
+    use xtensa_lx7::state::sr;
+    if core.irq_pending() { return 0; }
+    let now = core.read_sr(sr::CCOUNT).unwrap_or(0);
+    let (elapsed, total) = (now.wrapping_sub(core.get_ar(3)), core.get_ar(4));
+    if elapsed >= total {
+        core.set_pc(core.get_ar(0));
+        core.spin(1);
+        return 1;
+    }
+    let cpi = core.cycles_per_step();
+    let to_match = match core.read_sr(sr::CCOMPARE0).unwrap_or(0).wrapping_sub(now) { 0 => 1u64 << 32, d => u64::from(d) };
+    let steps = u64::from(total - elapsed).min(to_match).div_ceil(u64::from(cpi)).min(u64::from(budget)).max(1);
+    core.spin(steps as u32);
+    steps as u32
 }
 
 /// `Cache_Read_Enable(map, p, v)` (cores/esp8266/mmu_iram.cpp:61-79; `SocBus::cache_read_enable`).
@@ -227,12 +265,12 @@ mod tests {
         assert!(ENTRIES.windows(2).all(|w| w[0].addr <= w[1].addr));
         assert_eq!(name_at(0x4000_0080), Some("_ResetVector"));
         assert_eq!(name_at(0x4000_4b1c), Some("SPIRead"));
-        // ets_post and ets_post_rom share an address
-        assert_eq!(name_at(0x4000_0e24).map(|n| n.starts_with("ets_post")), Some(true));
+        // `ets_post` at the same address is commented out in the linker script
+        assert_eq!(name_at(0x4000_0e24), Some("ets_post_rom"));
         for (name, _) in IMPLEMENTED { assert!(ENTRIES.iter().any(|e| e.name == *name), "{name} is no ROM symbol"); }
         let hooks = hooks();
         assert!(hooks.contains(&0x4000_0080) && hooks.contains(&ENTRY_RETURN) && !hooks.contains(&0x3fffc000));
-        // the private range alone covers every bucket of the machine's pc bloom
+        // the private range alone covers every bucket of the machine's stub bloom
         assert_eq!((PRIVATE_LOW..PRIVATE_HIGH).step_by(4).fold(0u64, |m, pc| m | emu_core::core::pc_bit(pc)), u64::MAX);
     }
 }

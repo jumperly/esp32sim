@@ -75,6 +75,9 @@ pub struct Lx106 {
     litbase: u32,
     /// `Core::set_boundaries`: pcs (a bloom over `pc_bit`) the machine must see before they run
     boundaries: u64,
+    /// `Core::set_boundary_range`: its start and length (0: none), tested exactly
+    range_lo: u32,
+    range_len: u32,
 }
 
 impl Default for Lx106 {
@@ -83,7 +86,7 @@ impl Default for Lx106 {
 
 impl Lx106 {
     pub fn new() -> Self {
-        let mut c = Self { cpu: Cpu::new(0), litbase: 0, boundaries: 0 };
+        let mut c = Self { cpu: Cpu::new(0), litbase: 0, boundaries: 0, range_lo: 0, range_len: 0 };
         c.reset();
         c
     }
@@ -97,6 +100,22 @@ impl Lx106 {
         if !readable_sr(n) { return None; }
         if n == LITBASE { return Some(self.litbase); }
         self.cpu.read_sr(n)
+    }
+
+    /// Cycles one `step` charges: 1, or the approximate CPI (`Core::set_approximate_cpi`).
+    pub fn cycles_per_step(&self) -> u32 { self.cpu.approximate_cpi }
+
+    /// Retire `steps` instructions that change nothing but time, as a busy-wait loop would: the
+    /// instruction count and CCOUNT (with its CCOMPARE match) move as `step` would move them.
+    /// For a modelled ROM function that stands for such a loop.
+    pub fn spin(&mut self, steps: u32) {
+        self.cpu.insn_count += u64::from(steps);
+        let mut cycles = u64::from(steps) * u64::from(self.cpu.approximate_cpi);
+        while cycles > 0 {
+            let c = cycles.min(u64::from(u32::MAX)) as u32;
+            self.advance_cycles(c);
+            cycles -= u64::from(c);
+        }
     }
 
     pub fn write_sr(&mut self, n: u32, v: u32) -> Option<()> {
@@ -258,16 +277,27 @@ impl Core for Lx106 {
         out.next_pc = self.pc();
         out
     }
-    /// `step` until the budget is spent or a trap, returning in front of a boundary pc (a stub or
-    /// a function hook, such as a SoC's high-level ROM) so the machine intercepts it there.
+    /// `step` until the budget is spent or a trap, returning in front of a boundary pc (a stub, a
+    /// probe, or a pc of the boundary range, such as a SoC's ROM modelled in Rust) so the machine
+    /// intercepts it there. The loop is `step` without the `StepOutcome` facts nobody reads here.
     fn run<B: Bus>(&mut self, bus: &mut B, budget: u32) -> (u32, Option<Trap>) {
         for i in 0..budget {
-            if i > 0 && self.boundaries & pc_bit(self.cpu.pc) != 0 && !self.cpu.waiting { return (i, None); }
-            if let Some(t) = self.step(bus).trap() { return (i + 1, Some(t)); }
+            let pc = self.cpu.pc;
+            if i > 0 && (self.boundaries & pc_bit(pc) != 0 || pc.wrapping_sub(self.range_lo) < self.range_len) && !self.cpu.waiting { return (i, None); }
+            if let Some(t) = self.take_interrupt() { return (i + 1, Some(t)); }
+            if self.cpu.waiting { self.advance_cycles(self.cpu.approximate_cpi); continue; }
+            let r = match bus.fetch(pc) {
+                Err(_) => { self.cpu.excvaddr = pc; return (i + 1, Some(self.raise(exc::IFETCH_ERROR))); }
+                Ok(bytes) => self.execute(bus, decode(pc, bytes)),
+            };
+            self.cpu.insn_count += 1;
+            self.advance_cycles(self.cpu.approximate_cpi);
+            if let Err(t) = r { return (i + 1, Some(t)); }
         }
         (budget, None)
     }
     fn set_boundaries(&mut self, bloom: u64) { self.boundaries = bloom; }
+    fn set_boundary_range(&mut self, lo: u32, hi: u32) { self.range_lo = lo; self.range_len = hi.saturating_sub(lo); }
     fn regs(&self, out: &mut Vec<(&'static str, u32)>) { self.cpu.regs(out); }
     fn arg<B: Bus>(&self, bus: &mut B, n: usize) -> u32 {
         if n < 6 { self.get_ar(2 + n as u8) } else { bus.read32(self.get_ar(1).wrapping_add(((n - 6) * 4) as u32)).unwrap_or(0) }

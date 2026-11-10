@@ -87,6 +87,16 @@ pub trait Soc: 'static {
     /// Run the substitution at the core's pc if there is one; true when it ran instead of the
     /// instruction there. It may ask to end the run (`SocBus::take_stop`).
     fn function_hook(_core: &mut Self::Core, _bus: &mut Self::Bus) -> bool { false }
+    /// `function_hook` in a dispatch that may retire up to `budget` (at least 1) iterations: a
+    /// hook that stands for a busy-wait can spend several of them in one call, each charged on the
+    /// core as `step` would have charged it. Returns the iterations spent; 0 when no hook ran.
+    #[inline(always)]
+    fn function_hook_steps(core: &mut Self::Core, bus: &mut Self::Bus, _budget: u32) -> u32 { u32::from(Self::function_hook(core, bus)) }
+    /// Every pc of `function_hooks` lies in `lo..hi`, and a function hook takes every pc in it: the
+    /// cores then stop in front of that range exactly (`Core::set_boundary_range`) and their
+    /// bloom leaves the hooks out. For a mask ROM modelled in Rust, whose entries would fill
+    /// every bloom bucket and stop the core before each instruction.
+    const FUNCTION_HOOK_RANGE: Option<(u32, u32)> = None;
     fn core_state(_bus: &Self::Bus, _core: usize) -> CoreState { CoreState::Running }
     /// Core `core` took interrupt `irq` (the number its `Trap::Interrupt` carries): the place for
     /// what the interrupt controller does on acceptance, such as clearing an edge-triggered

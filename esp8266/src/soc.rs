@@ -1,6 +1,6 @@
 //! The ESP8266 as a `Soc`: one LX106 core on `bus::SocBus`, a bare module (no board), booted by
 //! the modelled mask ROM (`rom`).
-use crate::bus::{SocBus, IRAM_HIGH, IRAM_LOW};
+use crate::bus::{SocBus, IRAM_HIGH, IRAM_LOW, ROM_HIGH, ROM_LOW};
 use crate::periph::{self, Peripherals};
 use crate::rom::{self, boot};
 use emu_core::Core;
@@ -39,7 +39,10 @@ impl Soc for Esp8266 {
     fn rom_boot(m: &mut Machine) { m.bus.rom.boot_pending = true; }
     fn irqs(_bus: &SocBus, out: &mut [u32]) { out[0] = 0; }
     fn function_hooks(_bus: &SocBus) -> &[u32] { rom::hooks() }
-    fn function_hook(core: &mut Lx106, bus: &mut SocBus) -> bool { rom::dispatch(core, bus) }
+    fn function_hook(core: &mut Lx106, bus: &mut SocBus) -> bool { rom::dispatch(core, bus, 1) > 0 }
+    fn function_hook_steps(core: &mut Lx106, bus: &mut SocBus, budget: u32) -> u32 { rom::dispatch(core, bus, budget) }
+    /// The ROM is reachable only by a control transfer, and every pc in it is `rom::dispatch`'s.
+    const FUNCTION_HOOK_RANGE: Option<(u32, u32)> = Some((ROM_LOW, ROM_HIGH));
     /// An image with the 0xE9 magic must enter in IRAM, where every ESP8266 image (eboot, the
     /// SDK's, the Arduino app) does; an ESP32-family image enters elsewhere (0x4008xxxx,
     /// 0x403xxxxx, 0x408xxxxx) and is refused. Anything else is no image header and passes.

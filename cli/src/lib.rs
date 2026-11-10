@@ -574,6 +574,12 @@ fn setup_esp8266(o: &Opts) -> esp8266::Machine {
     for (flag, on) in [("--board", o.board != "atech14" && o.board != "none"), ("--wifi", o.wifi.is_some()), ("--ble", o.ble || o.ble_full), ("--cam-image", o.cam_image.is_some()), ("--cam-stream", o.cam_stream.is_some()), ("--cam-size", o.cam_size.is_some()), ("--psram-mb", o.psram_mb.is_some()), ("--flash-octal", o.flash_octal), ("--efuse-regs", o.efuse_regs.is_some()), ("--regs-init", o.regs_init.is_some()), ("--regstat", o.regstat.is_some())] {
         if on { eprintln!("{} is not available on the ESP8266", flag); std::process::exit(2); }
     }
+    // The ROM boots the image at flash 0 (eboot on Arduino builds), which starts the app at 0x1000
+    // inside the same image: there is no partition table or app slot at 0x10000, and no app boot.
+    if o.boot.as_deref().is_some_and(|b| b != "rom") { usage_error("--boot app is not available on the ESP8266: the ROM boots the whole flash image (--flash-image)"); }
+    for (flag, on) in [("--bootloader", o.bootloader.is_some()), ("--ptable", o.ptable.is_some()), ("--app", o.app.is_some())] {
+        if on { usage_error(&format!("{flag} is not available on the ESP8266: its app sits at 0x1000 inside the one flash image; give that image with --flash-image")); }
+    }
     m
 }
 

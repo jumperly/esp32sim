@@ -92,6 +92,17 @@ impl Peripherals {
         v
     }
 
+    /// A register's value as a narrower store merges into it: no log line, no `mmio_log` entry and
+    /// no `--log-periph` note, since the guest made no read. (A UART FIFO is not read here: the
+    /// bus takes a narrow store to it as stored.)
+    pub fn peek32(&mut self, addr: u32) -> u32 {
+        match Self::uart_at(addr) {
+            Some((n, off)) => self.uart[n].read(off),
+            None if (DPORT_OTP..DPORT_OTP + 16).contains(&addr) => self.otp[((addr - DPORT_OTP) / 4) as usize],
+            None => self.regs.get(&addr).copied().unwrap_or(0),
+        }
+    }
+
     pub fn write32(&mut self, addr: u32, v: u32) {
         let m = &mut self.misc;
         if m.log_all { eprintln!("[wr] {addr:#010x} <- {v:#010x} pc={:#010x}", m.cur_pc); }

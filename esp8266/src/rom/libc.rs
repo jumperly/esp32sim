@@ -65,10 +65,14 @@ pub fn memcmp(core: &mut Lx106, bus: &mut SocBus) {
 
 pub fn strlen(core: &mut Lx106, bus: &mut SocBus) { let s = arg(core, bus, 0); let n = len(bus, s); ret(core, bus, n); }
 
+/// Copies the string and its NUL; a runaway one stops after `MAX_LEN` bytes, unterminated.
 pub fn strcpy(core: &mut Lx106, bus: &mut SocBus) {
     let (d, s) = (arg(core, bus, 0), arg(core, bus, 1));
-    let mut i = 0;
-    loop { let b = get(bus, s.wrapping_add(i)); set(bus, d.wrapping_add(i), b); if b == 0 { break; } i += 1; }
+    for i in 0..MAX_LEN {
+        let b = get(bus, s.wrapping_add(i));
+        set(bus, d.wrapping_add(i), b);
+        if b == 0 { break; }
+    }
     ret(core, bus, d);
 }
 
@@ -96,7 +100,7 @@ fn compare(bus: &mut SocBus, a: u32, b: u32, n: u32) -> i32 {
 
 pub fn strcmp(core: &mut Lx106, bus: &mut SocBus) {
     let (a, b) = (arg(core, bus, 0), arg(core, bus, 1));
-    let r = compare(bus, a, b, u32::MAX);
+    let r = compare(bus, a, b, MAX_LEN);
     ret(core, bus, r as u32);
 }
 
@@ -109,10 +113,10 @@ pub fn strncmp(core: &mut Lx106, bus: &mut SocBus) {
 /// The first `needle` in `haystack`, or NULL.
 pub fn strstr(core: &mut Lx106, bus: &mut SocBus) {
     let (h, n) = (arg(core, bus, 0), arg(core, bus, 1));
-    let needle: Vec<u8> = (0..len(bus, n)).map(|i| get(bus, n + i)).collect();
-    let hay: Vec<u8> = (0..len(bus, h)).map(|i| get(bus, h + i)).collect();
+    let needle: Vec<u8> = (0..len(bus, n)).map(|i| get(bus, n.wrapping_add(i))).collect();
+    let hay: Vec<u8> = (0..len(bus, h)).map(|i| get(bus, h.wrapping_add(i))).collect();
     let at = if needle.is_empty() { Some(0) } else { hay.windows(needle.len()).position(|w| w == needle.as_slice()) };
-    ret(core, bus, at.map_or(0, |i| h + i as u32));
+    ret(core, bus, at.map_or(0, |i| h.wrapping_add(i as u32)));
 }
 
 /// A division by zero, which libgcc leaves undefined: 0, with one log line.

@@ -410,7 +410,8 @@ impl<S: Soc> Machine<S> {
                 let (args, ret) = (cpu.probe_args(&mut self.bus), cpu.return_address(&mut self.bus));
                 eprintln!("[fn] i={} t={:.4}s c{} {}({}) ret={:#x}", cpu.insn_count(), self.bus.cycles() as f64 / S::CPU_HZ as f64, core, name, args, ret);
             }
-            if S::function_hook(cpu, &mut self.bus) { return (1, self.bus.take_stop()); }
+            let used = S::function_hook_steps(cpu, &mut self.bus, budget);
+            if used > 0 { return (used, self.bus.take_stop()); }
             if let Some(&ret) = self.stubs.get(&pc) { cpu.return_from_stub(&mut self.bus, ret); self.stub_hits += 1; return (1, None); }
         }
         let (used, trap) = cpu.run(&mut self.bus, budget);
@@ -484,7 +485,7 @@ impl<S: Soc> Machine<S> {
             }
         }
         if self.stub_bloom & pc_bit(pc) != 0 && !cpu.waiting() {
-            if S::function_hook(cpu, &mut self.bus) { return self.bus.take_stop(); }
+            if S::function_hook_steps(cpu, &mut self.bus, 1) > 0 { return self.bus.take_stop(); }
             if let Some(&ret) = self.stubs.get(&pc) { cpu.return_from_stub(&mut self.bus, ret); self.stub_hits += 1; return None; }
         }
         {
@@ -559,13 +560,24 @@ impl<S: Soc> Machine<S> {
         None
     }
 
+    /// Rebuild the stub and probe blooms and hand the cores their boundaries. Hooks confined to
+    /// `Soc::FUNCTION_HOOK_RANGE` reach the cores as that range, not as bloom bits.
+    fn arm_boundaries(&mut self) {
+        let stubs = self.stubs.keys().fold(0, |m, &pc| m | pc_bit(pc));
+        self.stub_bloom = S::function_hooks(&self.bus).iter().fold(stubs, |m, &pc| m | pc_bit(pc));
+        self.probe_bloom = self.fn_probes.keys().fold(0, |m, &pc| m | pc_bit(pc));
+        let bloom = if S::FUNCTION_HOOK_RANGE.is_some() { stubs } else { self.stub_bloom } | self.probe_bloom;
+        for c in &mut self.cores {
+            c.set_boundaries(bloom);
+            if let Some((lo, hi)) = S::FUNCTION_HOOK_RANGE { c.set_boundary_range(lo, hi); }
+        }
+    }
+
     fn run_unmodeled<const APPROXIMATE: bool>(&mut self, max_insns: u64) -> Stop {
         assert!(self.quantum != 0, "scheduling quantum must be nonzero");
         let (cpi, max_quantum) = if APPROXIMATE { self.approximate_jit_timing.unwrap() } else { (1, self.quantum as u32) };
-        self.stub_bloom = self.stubs.keys().chain(S::function_hooks(&self.bus)).fold(0, |m, &pc| m | pc_bit(pc));
-        self.probe_bloom = self.fn_probes.keys().fold(0, |m, &pc| m | pc_bit(pc));
+        self.arm_boundaries();
         for c in &mut self.cores {
-            c.set_boundaries(self.stub_bloom | self.probe_bloom);
             c.set_block_observation(self.probes.contains(Wants::BLOCK | Wants::TRAP_PC));
         }
         // Per-instruction observers need the slow hooks; only exact-PC trap observers use bounded fragments.
@@ -938,10 +950,8 @@ impl<S: Soc> Machine<S> {
         } else { self.quantum };
         self.web_poll_input();
         self.refresh_irq();
-        self.stub_bloom = self.stubs.keys().chain(S::function_hooks(&self.bus)).fold(0, |m, &pc| m | pc_bit(pc));
-        self.probe_bloom = self.fn_probes.keys().fold(0, |m, &pc| m | pc_bit(pc));
+        self.arm_boundaries();
         for c in &mut self.cores {
-            c.set_boundaries(self.stub_bloom | self.probe_bloom);
             c.set_block_observation(self.probes.contains(Wants::BLOCK | Wants::TRAP_PC));
         }
         let blocks = !self.probes.contains(Wants::INSN);

@@ -12,7 +12,8 @@ their chip has nothing behind: the C3 board, camera, PSRAM and register presets;
 a board and WiFi, only camera, PSRAM and register presets. The P4 boots from its ROM on UART0 by
 default too, with 16 MB of flash ([esp32p4.md](esp32p4.md)). The ESP8266 (`--chip esp8266`) boots
 its flash image (`--flash-image`, the `.bin` an Arduino build writes for offset 0) from a mask ROM
-modelled in Rust: it needs no ROM ELF.
+modelled in Rust: it needs no ROM ELF. Its app sits at 0x1000 inside that one image, so it refuses
+`--boot app`, `--bootloader`, `--ptable` and `--app`.
 
 ## Images and boot
 | Flag | Meaning |
