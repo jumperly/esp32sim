@@ -77,7 +77,8 @@ fn kind(i: &Insn) -> u8 {
 
 #[derive(Clone, Copy)]
 struct Entry { pc: u32, start: u32, n: u32, vidx: [u32; 2], ver: [u32; 2] }
-/// An empty slot never validates: no bus has a page `u32::MAX`, and a missing page reads 0.
+/// An empty slot never matches: it holds no instructions (every built block holds at least one),
+/// and it would not validate either (no bus has a page `u32::MAX`, and a missing page reads 0).
 impl Entry { const EMPTY: Entry = Entry { pc: 1, start: 0, n: 0, vidx: [u32::MAX; 2], ver: [1; 2] }; }
 
 /// Where a pc may stop a block: the machine's bloom over `pc_bit` and the exact range.
@@ -92,7 +93,8 @@ pub(super) struct Blocks {
     entries: Vec<Entry>,
     pub arena: Vec<Decoded>,
     /// A run cut short inside a block (budget, timer) goes on here: (pc, entry index, arena index).
-    resume: (u32, u32, u32),
+    /// `None` once a lookup at that pc took it, and after a flush: no stale record can match a pc.
+    resume: Option<(u32, u32, u32)>,
     pub enabled: bool,
     pub builds: u64,
     pub flushes: u64,
@@ -100,15 +102,15 @@ pub(super) struct Blocks {
 
 impl Blocks {
     pub fn new(enabled: bool) -> Self {
-        Blocks { entries: Vec::new(), arena: Vec::new(), resume: (1, 0, 0), enabled, builds: 0, flushes: 0 }
+        Blocks { entries: Vec::new(), arena: Vec::new(), resume: None, enabled, builds: 0, flushes: 0 }
     }
 
     /// Forget every decoded block (the table is allocated on first use).
     pub fn flush(&mut self) {
+        self.resume = None;
         if self.arena.is_empty() { return; }
         self.entries.fill(Entry::EMPTY);
         self.arena.clear();
-        self.resume = (1, 0, 0);
         self.flushes += 1;
     }
 
@@ -126,15 +128,14 @@ impl Blocks {
 
     /// Remember that a run stopped at `pc`, arena index `k` of block `ei`.
     #[inline(always)]
-    pub fn cut(&mut self, pc: u32, ei: u32, k: u32) { self.resume = (pc, ei, k); }
+    pub fn cut(&mut self, pc: u32, ei: u32, k: u32) { self.resume = Some((pc, ei, k)); }
 
     /// The block to run at `pc`: (entry index, arena index of the instruction at `pc`, arena end).
     /// `None` when the instruction at `pc` cannot be fetched.
     #[inline(always)]
     pub fn find<B: Bus>(&mut self, bus: &mut B, pc: u32, bounds: Bounds) -> Option<(u32, u32, u32)> {
-        let (rpc, rei, rk) = self.resume;
-        if rpc == pc {
-            self.resume.0 = 1;
+        if let Some((_, rei, rk)) = self.resume.filter(|r| r.0 == pc) {
+            self.resume = None;
             // the arena only grows between flushes, so an entry whose range still holds `rk` is
             // the build the run was cut in, and arena[rk] is the instruction at `pc`
             if let Some(e) = self.entries.get(rei as usize).filter(|e| rk >= e.start && rk < e.start + e.n) {
@@ -143,7 +144,7 @@ impl Blocks {
         }
         let ei = Self::index(pc);
         if let Some(e) = self.entries.get(ei) {
-            if e.pc == pc && Self::valid(e, bus.page_versions()) { return Some((ei as u32, e.start, e.start + e.n)); }
+            if e.pc == pc && e.n != 0 && Self::valid(e, bus.page_versions()) { return Some((ei as u32, e.start, e.start + e.n)); }
         }
         self.build(bus, pc, bounds)
     }
