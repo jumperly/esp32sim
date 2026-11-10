@@ -46,6 +46,13 @@ enum At { Dram(usize), Iram(usize), Rtc(usize), Flash(usize), Rom, Mmio, Unmappe
 /// SPI1's CMD register (esp8266_peri.h:337 SPI1CMD).
 const SPI1_CMD: u32 = PERIPH_BASE + 0x100;
 
+/// Code pages (`Bus::page_versions`): `1 << VPAGE_SHIFT` bytes of IRAM, then of the flash window,
+/// then one page for every other address, which holds no code (`fetch` refuses it).
+const PAGE_SHIFT: u32 = emu_core::bus::VPAGE_SHIFT;
+const IRAM_PAGES: usize = ((IRAM_HIGH - IRAM_LOW) >> PAGE_SHIFT) as usize;
+const WINDOW_PAGES: usize = ((FLASH_WIN_HIGH - FLASH_WIN_LOW) >> PAGE_SHIFT) as usize;
+const CODE_PAGES: usize = IRAM_PAGES + WINDOW_PAGES + 1;
+
 /// What a reset keeps (`SocBus::reboot`). The ROM numbering of the causes is `rom::boot`'s.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ResetKind {
@@ -83,7 +90,8 @@ pub struct SocBus {
     /// RTC memory: kept across a chip reset, lost with power
     pub rtc_mem: Vec<u8>,
     pub flash: Flash,
-    /// flash offset of the window's first byte (`Cache_Read_Enable`)
+    /// flash offset of the window's first byte (`Cache_Read_Enable`; set it through `cache_read_enable`,
+    /// which moves the code pages with it)
     pub cache_base: u32,
     /// `Cache_Read_Enable` / `Cache_Read_Disable`: recorded; the window maps either way
     pub cache_enabled: bool,
@@ -124,6 +132,11 @@ pub struct SocBus {
     pub soft_i2c: Option<crate::soft_i2c::SoftI2c>,
     pub(crate) slice_yield: bool,
     pub jumperly: crate::jumperly::HostState,
+    /// write versions of the code pages (`Bus::page_versions`): a store to IRAM, a change of the
+    /// flash under the window or a remap of the window moves them, and the core's decoded blocks
+    /// with them. Code that changes `iram` or `flash.bytes` directly, while the core runs, must
+    /// call `code_changed`.
+    code_ver: Vec<u32>,
 }
 
 impl SocBus {
@@ -134,7 +147,7 @@ impl SocBus {
             periph: Peripherals::new(mac), rom: RomState::default(), board: Box::new(esp_soc::NoBoard),
             cycles: 0, irq_dirty: true, last_fault: None, rom_data_reads: 0, reset_cause: crate::rom::boot::RST_POWERON,
             sw_reset: false, reset_kind: ResetKind::Jump, strap: None, strap_kept: false, spi_host: false, host_event: false, clock_half: 0, lines: 0,
-            debug: Default::default(),
+            debug: Default::default(), code_ver: vec![0; CODE_PAGES],
             pin_watch: None, pwm_tap: None, soft_i2c: None, slice_yield: false, jumperly: Default::default(),   // Jumperly patch J29
         }
     }
@@ -144,8 +157,68 @@ impl SocBus {
     /// bit 20; "no guesses for a value of 2 or greater", so only bit 0 is used), `p` is bit 21 (or
     /// bits 21-23), `v` the cache size (16/32 KB), which this model does not need.
     pub fn cache_read_enable(&mut self, map: u32, p: u32, _v: u32) {
-        self.cache_base = ((map & 1) << 20) | ((p & 7) << 21);
+        let base = ((map & 1) << 20) | ((p & 7) << 21);
+        if base != self.cache_base {
+            // other bytes behind every pc of the window
+            self.cache_base = base;
+            self.bump_pages(IRAM_PAGES..IRAM_PAGES + WINDOW_PAGES);
+        }
         self.cache_enabled = true;
+    }
+
+    /// The code page of `addr` (`Bus::code_page`).
+    fn code_page_of(addr: u32) -> usize {
+        match addr {
+            IRAM_LOW..IRAM_HIGH => ((addr - IRAM_LOW) >> PAGE_SHIFT) as usize,
+            FLASH_WIN_LOW..FLASH_WIN_HIGH => IRAM_PAGES + ((addr - FLASH_WIN_LOW) >> PAGE_SHIFT) as usize,
+            _ => CODE_PAGES - 1,
+        }
+    }
+
+    fn bump_pages(&mut self, pages: std::ops::Range<usize>) {
+        for v in &mut self.code_ver[pages] { *v = v.wrapping_add(1); }
+    }
+
+    /// `len` bytes of IRAM from offset `o` may have changed.
+    #[inline]
+    fn iram_changed(&mut self, o: usize, len: usize) {
+        let end = o.saturating_add(len).min(IRAM_PAGES << PAGE_SHIFT);
+        if o >= end { return; }
+        self.bump_pages(o >> PAGE_SHIFT..((end - 1) >> PAGE_SHIFT) + 1);
+    }
+
+    /// `len` bytes of flash from offset `off` changed: the window pages showing them move.
+    pub fn flash_changed(&mut self, off: usize, len: usize) {
+        let lo = self.cache_base as usize;
+        let hi = lo + (WINDOW_PAGES << PAGE_SHIFT);
+        let (a, b) = (off.max(lo), off.saturating_add(len).min(hi));
+        if a >= b { return; }
+        let (first, last) = ((a - lo) >> PAGE_SHIFT, (b - 1 - lo) >> PAGE_SHIFT);
+        self.bump_pages(IRAM_PAGES + first..IRAM_PAGES + last + 1);
+    }
+
+    /// Any code may have changed (after direct writes to `iram` or `flash.bytes`).
+    pub fn code_changed(&mut self) { self.bump_pages(0..CODE_PAGES); }
+
+    /// Program flash (`Flash::write`), keeping the code pages current.
+    pub fn flash_write(&mut self, off: u32, data: &[u8]) -> bool {
+        let ok = self.flash.write(off, data);
+        if ok { self.flash_changed(off as usize, data.len()); }
+        ok
+    }
+
+    /// Erase a 4 KB sector (`Flash::erase_sector`), keeping the code pages current.
+    pub fn flash_erase_sector(&mut self, n: u32) -> bool {
+        let ok = self.flash.erase_sector(n);
+        if ok { self.flash_changed(n as usize * crate::flash::SECTOR, crate::flash::SECTOR); }
+        ok
+    }
+
+    /// Erase a 64 KB block (`Flash::erase_block`), keeping the code pages current.
+    pub fn flash_erase_block(&mut self, n: u32) -> bool {
+        let ok = self.flash.erase_block(n);
+        if ok { self.flash_changed(n as usize * crate::flash::BLOCK, crate::flash::BLOCK); }
+        ok
     }
 
     #[inline]
@@ -197,7 +270,7 @@ impl SocBus {
         let mem = match self.at(addr) {
             At::Dram(o) => self.dram.get_mut(o..o + N),
             At::Rtc(o) => self.rtc_mem.get_mut(o..o + N),
-            At::Iram(o) if N == 4 => self.iram.get_mut(o..o + N),
+            At::Iram(o) if N == 4 => { self.iram_changed(o, N); self.iram.get_mut(o..o + N) }
             At::Iram(_) => return self.fault(addr, true, Fault::LoadStoreError),
             At::Flash(_) if N < 4 => return self.fault(addr, true, Fault::LoadStoreError),
             At::Flash(_) | At::Rom => return self.fault(addr, true, Fault::Prohibited),
@@ -317,13 +390,14 @@ impl SocBus {
             // the status register (SPI0RS 0x210): never busy, no write enable latched
             self.periph.spi0.write(reg(0x10), 0);
         } else if cmd & SPI_PP != 0 {
-            self.flash.write(addr, &w[..len]);
+            self.flash_write(addr, &w[..len]);
         } else if cmd & SPI_SE != 0 {
-            self.flash.erase_sector(addr / crate::flash::SECTOR as u32);
+            self.flash_erase_sector(addr / crate::flash::SECTOR as u32);
         } else if cmd & SPI_BE != 0 {
-            self.flash.erase_block(addr / crate::flash::BLOCK as u32);
+            self.flash_erase_block(addr / crate::flash::BLOCK as u32);
         } else if cmd & SPI_CE != 0 {
             self.flash.bytes.fill(0xff);
+            self.flash_changed(0, self.flash.len());
         }
         // WREN, WRDI, WRSR, DP, RES, HPM and user commands change nothing a model reads
         self.periph.spi0.write(SPI0_CMD, 0);
@@ -334,7 +408,7 @@ impl SocBus {
     pub fn ram_mut(&mut self, addr: u32, len: usize) -> Option<&mut [u8]> {
         let (mem, o) = match self.at(addr) {
             At::Dram(o) => (&mut self.dram, o),
-            At::Iram(o) => (&mut self.iram, o),
+            At::Iram(o) => { self.iram_changed(o, len); (&mut self.iram, o) }
             At::Rtc(o) => (&mut self.rtc_mem, o),
             _ => return None,
         };
@@ -368,14 +442,21 @@ impl SocBus {
         Ok(())
     }
 
-    pub fn write_flash(&mut self, offset: usize, data: &[u8]) -> Result<(), String> { self.flash.load(offset, data) }
+    pub fn write_flash(&mut self, offset: usize, data: &[u8]) -> Result<(), String> {
+        self.flash.load(offset, data)?;
+        self.flash_changed(offset, data.len());
+        Ok(())
+    }
 
     /// The pins the chip drives high: GPIO_OUT & GPIO_ENABLE (esp8266_peri.h:48,51), bit 16 GPIO16.
     pub fn gpio_output(&self) -> u32 { self.periph.gpio_output() }
 }
 
 impl Bus for SocBus {
-    fn note_code_page(&mut self, _vidx: u32) {} // The LX106 interpreter keeps no decoded code.
+    fn note_code_page(&mut self, _vidx: u32) {} // Every write to a code page moves its version.
+    /// IRAM and the flash window in 256-byte pages (`code_ver`).
+    fn page_versions(&self) -> &[u32] { &self.code_ver }
+    fn code_page(&mut self, pc: u32) -> u32 { Self::code_page_of(pc) as u32 }
     fn read8(&mut self, addr: u32) -> Result<u8, Fault> { self.read_n::<1>(addr).map(|b| b[0]) }
     fn read16(&mut self, addr: u32) -> Result<u16, Fault> { self.read_n::<2>(addr).map(u16::from_le_bytes) }
     fn read32(&mut self, addr: u32) -> Result<u32, Fault> { self.read_n::<4>(addr).map(u32::from_le_bytes) }
