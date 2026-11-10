@@ -5,46 +5,50 @@
 //! the IEEE 802.11 PRF, RC4 with a skipped key stream, AES FIPS 197 (its equivalent inverse
 //! cipher, section 5.3.5, with the decryption key schedule rijndael-alg-fst.c builds). SHA-1,
 //! HMAC-SHA1, PBKDF2 and the PRF are esp-periph's.
-use super::{arg, ret, Lx106, SocBus};
+//!
+//! The buffers go through the ROM's faulting accessors (`super::load8`, `super::store8`): an
+//! address the chip's load or store faults on ends the call with that exception. A function reads
+//! all its input before it writes its output.
+use super::{arg, done, load8, store8, Lx106, Mem, SocBus};
 use esp_periph::crypto as pc;
 
 /// The longest buffer a call reads, against a runaway guest length.
 const MAX_LEN: u32 = 1 << 20;
 
-fn read(bus: &mut SocBus, addr: u32, len: u32) -> Vec<u8> {
-    (0..len.min(MAX_LEN)).map(|i| bus.peek8(addr.wrapping_add(i)).unwrap_or(0)).collect()
+fn read(bus: &mut SocBus, addr: u32, len: u32) -> Mem<Vec<u8>> {
+    (0..len.min(MAX_LEN)).map(|i| load8(bus, addr.wrapping_add(i))).collect()
 }
 
-fn write(bus: &mut SocBus, addr: u32, data: &[u8]) {
-    for (i, &b) in data.iter().enumerate() { bus.poke8(addr.wrapping_add(i as u32), b); }
+fn write(bus: &mut SocBus, addr: u32, data: &[u8]) -> Mem<()> {
+    data.iter().enumerate().try_for_each(|(i, &b)| store8(bus, addr.wrapping_add(i as u32), b))
 }
 
-fn read_words<const N: usize>(bus: &mut SocBus, addr: u32) -> [u32; N] {
-    let b = read(bus, addr, 4 * N as u32);
-    std::array::from_fn(|i| u32::from_le_bytes([b[4 * i], b[4 * i + 1], b[4 * i + 2], b[4 * i + 3]]))
+fn read_words<const N: usize>(bus: &mut SocBus, addr: u32) -> Mem<[u32; N]> {
+    let b = read(bus, addr, 4 * N as u32)?;
+    Ok(std::array::from_fn(|i| u32::from_le_bytes([b[4 * i], b[4 * i + 1], b[4 * i + 2], b[4 * i + 3]])))
 }
 
-fn write_words(bus: &mut SocBus, addr: u32, w: &[u32]) {
+fn write_words(bus: &mut SocBus, addr: u32, w: &[u32]) -> Mem<()> {
     let b: Vec<u8> = w.iter().flat_map(|v| v.to_le_bytes()).collect();
-    write(bus, addr, &b);
+    write(bus, addr, &b)
 }
 
 /// A NUL-terminated string (hostap passes the passphrase and the PRF label so).
-fn c_string(bus: &mut SocBus, addr: u32) -> Vec<u8> {
+fn c_string(bus: &mut SocBus, addr: u32) -> Mem<Vec<u8>> {
     let mut s = Vec::new();
-    while s.len() < 4096 { match bus.peek8(addr.wrapping_add(s.len() as u32)) { Some(0) | None => break, Some(b) => s.push(b) } }
-    s
+    while s.len() < 4096 { match load8(bus, addr.wrapping_add(s.len() as u32))? { 0 => break, b => s.push(b) } }
+    Ok(s)
 }
 
 /// The `num` buffers of a hostap vector call: `addr[i]`, `len[i]`, concatenated.
-fn vector(bus: &mut SocBus, num: u32, addrs: u32, lens: u32) -> Vec<u8> {
+fn vector(bus: &mut SocBus, num: u32, addrs: u32, lens: u32) -> Mem<Vec<u8>> {
     let mut v = Vec::new();
     for i in 0..num.min(16) {
-        let [a] = read_words::<1>(bus, addrs + 4 * i);
-        let [l] = read_words::<1>(bus, lens + 4 * i);
-        v.extend(read(bus, a, l));
+        let [a] = read_words::<1>(bus, addrs.wrapping_add(4 * i))?;
+        let [l] = read_words::<1>(bus, lens.wrapping_add(4 * i))?;
+        v.extend(read(bus, a, l)?);
     }
-    v
+    Ok(v)
 }
 
 // ------------------------------------------------------------------ MD5 (RFC 1321)
@@ -101,17 +105,17 @@ impl Md5 {
         for (i, w) in self.buf.iter().enumerate() { out[4 * i..4 * i + 4].copy_from_slice(&w.to_le_bytes()); }
         out
     }
-    fn load(bus: &mut SocBus, ctx: u32) -> Self {
-        let w = read_words::<6>(bus, ctx);
+    fn load(bus: &mut SocBus, ctx: u32) -> Mem<Self> {
+        let w = read_words::<6>(bus, ctx)?;
         let bits = u64::from(w[4]) | u64::from(w[5]) << 32;
-        let input = read(bus, ctx + 24, ((bits >> 3) % 64) as u32);
-        Md5 { buf: [w[0], w[1], w[2], w[3]], bits, input }
+        let input = read(bus, ctx.wrapping_add(24), ((bits >> 3) % 64) as u32)?;
+        Ok(Md5 { buf: [w[0], w[1], w[2], w[3]], bits, input })
     }
-    fn store(&self, bus: &mut SocBus, ctx: u32) {
-        write_words(bus, ctx, &[self.buf[0], self.buf[1], self.buf[2], self.buf[3], self.bits as u32, (self.bits >> 32) as u32]);
+    fn store(&self, bus: &mut SocBus, ctx: u32) -> Mem<()> {
+        write_words(bus, ctx, &[self.buf[0], self.buf[1], self.buf[2], self.buf[3], self.bits as u32, (self.bits >> 32) as u32])?;
         let mut block = self.input.clone();
         block.resize(64, 0);
-        write(bus, ctx + 24, &block);
+        write(bus, ctx.wrapping_add(24), &block)
     }
 }
 
@@ -129,50 +133,57 @@ pub fn hmac_md5_bytes(key: &[u8], data: &[u8]) -> [u8; 16] {
 }
 
 /// `MD5Init(ctx)`.
-pub fn md5_init(core: &mut Lx106, bus: &mut SocBus) { let ctx = arg(core, bus, 0); Md5::new().store(bus, ctx); ret(core, bus, 0); }
+pub fn md5_init(core: &mut Lx106, bus: &mut SocBus) { let ctx = arg(core, bus, 0); let r = Md5::new().store(bus, ctx); done(core, bus, r.map(|()| 0)); }
 
 /// `MD5Update(ctx, buf, len)`.
 pub fn md5_update(core: &mut Lx106, bus: &mut SocBus) {
     let (ctx, buf, len) = (arg(core, bus, 0), arg(core, bus, 1), arg(core, bus, 2));
-    let mut m = Md5::load(bus, ctx);
-    let data = read(bus, buf, len);
-    m.update(&data);
-    m.store(bus, ctx);
-    ret(core, bus, 0);
+    let r = (|| {
+        let mut m = Md5::load(bus, ctx)?;
+        let data = read(bus, buf, len)?;
+        m.update(&data);
+        m.store(bus, ctx)
+    })();
+    done(core, bus, r.map(|()| 0));
 }
 
 /// `MD5Final(digest, ctx)`: the digest, and the context cleared (md5-internal.c).
 pub fn md5_final(core: &mut Lx106, bus: &mut SocBus) {
     let (digest, ctx) = (arg(core, bus, 0), arg(core, bus, 1));
-    let out = Md5::load(bus, ctx).finish();
-    write(bus, digest, &out);
-    write(bus, ctx, &[0; 88]);
-    ret(core, bus, 0);
+    let r = (|| {
+        let out = Md5::load(bus, ctx)?.finish();
+        write(bus, digest, &out)?;
+        write(bus, ctx, &[0; 88])
+    })();
+    done(core, bus, r.map(|()| 0));
 }
 
 /// `md5_vector(num_elem, addr[], len[], mac)`: 0.
 pub fn md5_vector(core: &mut Lx106, bus: &mut SocBus) {
     let (num, addrs, lens, mac) = (arg(core, bus, 0), arg(core, bus, 1), arg(core, bus, 2), arg(core, bus, 3));
-    let data = vector(bus, num, addrs, lens);
-    write(bus, mac, &md5(&data));
-    ret(core, bus, 0);
+    let r = vector(bus, num, addrs, lens).and_then(|data| write(bus, mac, &md5(&data)));
+    done(core, bus, r.map(|()| 0));
 }
 
 /// `hmac_md5(key, key_len, data, data_len, mac)`: 0.
 pub fn hmac_md5(core: &mut Lx106, bus: &mut SocBus) {
     let (k, kl, d, dl, mac) = (arg(core, bus, 0), arg(core, bus, 1), arg(core, bus, 2), arg(core, bus, 3), arg(core, bus, 4));
-    let (key, data) = (read(bus, k, kl), read(bus, d, dl));
-    write(bus, mac, &hmac_md5_bytes(&key, &data));
-    ret(core, bus, 0);
+    let r = (|| {
+        let (key, data) = (read(bus, k, kl)?, read(bus, d, dl)?);
+        write(bus, mac, &hmac_md5_bytes(&key, &data))
+    })();
+    done(core, bus, r.map(|()| 0));
 }
 
 /// `hmac_md5_vector(key, key_len, num_elem, addr[], len[], mac)`: 0.
 pub fn hmac_md5_vector(core: &mut Lx106, bus: &mut SocBus) {
     let (k, kl, num, addrs, lens, mac) = (arg(core, bus, 0), arg(core, bus, 1), arg(core, bus, 2), arg(core, bus, 3), arg(core, bus, 4), arg(core, bus, 5));
-    let key = read(bus, k, kl);
-    let data = vector(bus, num, addrs, lens);
-    write(bus, mac, &hmac_md5_bytes(&key, &data));
-    ret(core, bus, 0);
+    let r = (|| {
+        let key = read(bus, k, kl)?;
+        let data = vector(bus, num, addrs, lens)?;
+        write(bus, mac, &hmac_md5_bytes(&key, &data))
+    })();
+    done(core, bus, r.map(|()| 0));
 }
 
 // ------------------------------------------------------------------ SHA-1 family (FIPS 180-4)
@@ -180,48 +191,55 @@ pub fn hmac_md5_vector(core: &mut Lx106, bus: &mut SocBus) {
 /// `sha1_vector(num_elem, addr[], len[], mac)`: 0.
 pub fn sha1_vector(core: &mut Lx106, bus: &mut SocBus) {
     let (num, addrs, lens, mac) = (arg(core, bus, 0), arg(core, bus, 1), arg(core, bus, 2), arg(core, bus, 3));
-    let data = vector(bus, num, addrs, lens);
-    write(bus, mac, &pc::sha1(&data));
-    ret(core, bus, 0);
+    let r = vector(bus, num, addrs, lens).and_then(|data| write(bus, mac, &pc::sha1(&data)));
+    done(core, bus, r.map(|()| 0));
 }
 
 /// `hmac_sha1(key, key_len, data, data_len, mac)`: 0.
 pub fn hmac_sha1(core: &mut Lx106, bus: &mut SocBus) {
     let (k, kl, d, dl, mac) = (arg(core, bus, 0), arg(core, bus, 1), arg(core, bus, 2), arg(core, bus, 3), arg(core, bus, 4));
-    let (key, data) = (read(bus, k, kl), read(bus, d, dl));
-    write(bus, mac, &pc::hmac_sha1(&key, &data));
-    ret(core, bus, 0);
+    let r = (|| {
+        let (key, data) = (read(bus, k, kl)?, read(bus, d, dl)?);
+        write(bus, mac, &pc::hmac_sha1(&key, &data))
+    })();
+    done(core, bus, r.map(|()| 0));
 }
 
 /// `hmac_sha1_vector(key, key_len, num_elem, addr[], len[], mac)`: 0.
 pub fn hmac_sha1_vector(core: &mut Lx106, bus: &mut SocBus) {
     let (k, kl, num, addrs, lens, mac) = (arg(core, bus, 0), arg(core, bus, 1), arg(core, bus, 2), arg(core, bus, 3), arg(core, bus, 4), arg(core, bus, 5));
-    let key = read(bus, k, kl);
-    let data = vector(bus, num, addrs, lens);
-    write(bus, mac, &pc::hmac_sha1(&key, &data));
-    ret(core, bus, 0);
+    let r = (|| {
+        let key = read(bus, k, kl)?;
+        let data = vector(bus, num, addrs, lens)?;
+        write(bus, mac, &pc::hmac_sha1(&key, &data))
+    })();
+    done(core, bus, r.map(|()| 0));
 }
 
 /// `pbkdf2_sha1(passphrase, ssid, ssid_len, iterations, buf, buflen)`: the WPA PSK; 0.
 pub fn pbkdf2_sha1(core: &mut Lx106, bus: &mut SocBus) {
     let (p, s, sl, iter, buf, bl) = (arg(core, bus, 0), arg(core, bus, 1), arg(core, bus, 2), arg(core, bus, 3), arg(core, bus, 4), arg(core, bus, 5));
-    let pass = c_string(bus, p);
-    let ssid = read(bus, s, sl);
-    let out = pc::pbkdf2_sha1(&pass, &ssid, iter.clamp(1, 1 << 20), bl.min(MAX_LEN) as usize);
-    write(bus, buf, &out);
-    ret(core, bus, 0);
+    let r = (|| {
+        let pass = c_string(bus, p)?;
+        let ssid = read(bus, s, sl)?;
+        let out = pc::pbkdf2_sha1(&pass, &ssid, iter.clamp(1, 1 << 20), bl.min(MAX_LEN) as usize);
+        write(bus, buf, &out)
+    })();
+    done(core, bus, r.map(|()| 0));
 }
 
 /// `sha1_prf(key, key_len, label, data, data_len, buf, buf_len)` (the 7th argument on the
 /// stack): the IEEE 802.11 PRF; 0.
 pub fn sha1_prf(core: &mut Lx106, bus: &mut SocBus) {
     let (k, kl, l, d, dl, buf, bl) = (arg(core, bus, 0), arg(core, bus, 1), arg(core, bus, 2), arg(core, bus, 3), arg(core, bus, 4), arg(core, bus, 5), arg(core, bus, 6));
-    let key = read(bus, k, kl);
-    let label = String::from_utf8_lossy(&c_string(bus, l)).into_owned();
-    let data = read(bus, d, dl);
-    let out = pc::prf(&key, &label, &data, bl.min(MAX_LEN) as usize * 8);
-    write(bus, buf, &out);
-    ret(core, bus, 0);
+    let r = (|| {
+        let key = read(bus, k, kl)?;
+        let label = String::from_utf8_lossy(&c_string(bus, l)?).into_owned();
+        let data = read(bus, d, dl)?;
+        let out = pc::prf(&key, &label, &data, bl.min(MAX_LEN) as usize * 8);
+        write(bus, buf, &out)
+    })();
+    done(core, bus, r.map(|()| 0));
 }
 
 // ------------------------------------------------------------------ RC4
@@ -246,11 +264,13 @@ pub fn rc4(key: &[u8], skip: u32, data: &mut [u8]) {
 /// `rc4_skip(key, keylen, skip, data, data_len)`: in place; 0.
 pub fn rc4_skip(core: &mut Lx106, bus: &mut SocBus) {
     let (k, kl, skip, d, dl) = (arg(core, bus, 0), arg(core, bus, 1), arg(core, bus, 2), arg(core, bus, 3), arg(core, bus, 4));
-    let key = read(bus, k, kl);
-    let mut data = read(bus, d, dl);
-    rc4(&key, skip, &mut data);
-    write(bus, d, &data);
-    ret(core, bus, 0);
+    let r = (|| {
+        let key = read(bus, k, kl)?;
+        let mut data = read(bus, d, dl)?;
+        rc4(&key, skip, &mut data);
+        write(bus, d, &data)
+    })();
+    done(core, bus, r.map(|()| 0));
 }
 
 // ------------------------------------------------------------------ AES (FIPS 197)
@@ -339,19 +359,20 @@ pub fn decrypt_block(rk: &[u32; 44], input: &[u8; 16]) -> [u8; 16] {
 /// `rijndaelKeySetupDec(rk, cipherKey)`: the 44-word decryption schedule into `rk`.
 pub fn rijndael_key_setup_dec(core: &mut Lx106, bus: &mut SocBus) {
     let (rk, k) = (arg(core, bus, 0), arg(core, bus, 1));
-    let key: [u8; 16] = read(bus, k, 16).try_into().unwrap();
-    write_words(bus, rk, &key_setup_dec(&key));
-    ret(core, bus, NR as u32);
+    let r = read(bus, k, 16).and_then(|key| write_words(bus, rk, &key_setup_dec(&key.try_into().unwrap())));
+    done(core, bus, r.map(|()| NR as u32));
 }
 
 /// `aes_decrypt(ctx, crypt, plain)`: one block with the schedule at `ctx` (what
 /// `aes_decrypt_init` made with `rijndaelKeySetupDec`).
 pub fn aes_decrypt(core: &mut Lx106, bus: &mut SocBus) {
     let (ctx, c, p) = (arg(core, bus, 0), arg(core, bus, 1), arg(core, bus, 2));
-    let rk = read_words::<44>(bus, ctx);
-    let input: [u8; 16] = read(bus, c, 16).try_into().unwrap();
-    write(bus, p, &decrypt_block(&rk, &input));
-    ret(core, bus, 0);
+    let r = (|| {
+        let rk = read_words::<44>(bus, ctx)?;
+        let input: [u8; 16] = read(bus, c, 16)?.try_into().unwrap();
+        write(bus, p, &decrypt_block(&rk, &input))
+    })();
+    done(core, bus, r.map(|()| 0));
 }
 
 #[cfg(test)]
@@ -374,16 +395,16 @@ mod tests {
     fn md5_context_survives_the_guest_memory_round_trip() {
         let mut bus = SocBus::new(1 << 20, [0; 6]);
         let ctx = 0x3FFE_9000;
-        Md5::new().store(&mut bus, ctx);
+        Md5::new().store(&mut bus, ctx).unwrap();
         for chunk in [&b"1234567890"[..], &[b'x'; 70][..], b"tail"] {
-            let mut m = Md5::load(&mut bus, ctx);
+            let mut m = Md5::load(&mut bus, ctx).unwrap();
             m.update(chunk);
-            m.store(&mut bus, ctx);
+            m.store(&mut bus, ctx).unwrap();
         }
         let mut all = b"1234567890".to_vec();
         all.extend([b'x'; 70]);
         all.extend(b"tail");
-        assert_eq!(Md5::load(&mut bus, ctx).finish(), md5(&all));
+        assert_eq!(Md5::load(&mut bus, ctx).unwrap().finish(), md5(&all));
     }
 
     #[test]

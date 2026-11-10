@@ -38,9 +38,9 @@ pub fn slot(core: &mut Lx106, bus: &mut SocBus, pc: u32) {
         I2C_WRITE_MASK => i2c_write_mask(core, bus),
         k => {
             // one line for all of them; each slot's first call under `--debug rom`
-            if bus.rom.phy_seen.is_empty() { eprintln!("[emu] rom: the PHY functions of phy_get_romfuncs return 0 (no radio; --debug rom lists them)"); }
+            if bus.rom.phy_seen.is_empty() { bus.rom.note("the PHY functions of phy_get_romfuncs return 0 (no radio; --debug rom lists them)".into()); }
             if bus.rom.phy_seen.insert(k) && bus.debug.has("rom") {
-                eprintln!("[emu] rom: PHY function {k} of phy_get_romfuncs (a2={:#x} a3={:#x}) returns 0", core.get_ar(2), core.get_ar(3));
+                bus.rom.note(format!("PHY function {k} of phy_get_romfuncs (a2={:#x} a3={:#x}) returns 0", core.get_ar(2), core.get_ar(3)));
             }
             ret(core, bus, 0);
         }

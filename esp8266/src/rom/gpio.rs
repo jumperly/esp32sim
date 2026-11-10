@@ -3,7 +3,11 @@
 //! prototypes ESP-IDF's components/esp_rom/include/esp32/rom/lldesc.h documents for the same
 //! ROM code), `roundup2`, the CPU frequency the ROM keeps (ets_sys.h `ets_update_cpu_frequency`,
 //! `ets_get_cpu_frequency`) and `ets_rtc_int_register`.
-use super::{arg, ret, Lx106, SocBus};
+//!
+//! The GPIO functions reach fixed registers, which are always there. The descriptor functions
+//! walk the guest's chains with word loads and stores (`super::load32`, `super::store32`): a
+//! descriptor the chip's own access faults on ends the call with that exception.
+use super::{arg, done, load32, ret, store32, Lx106, Mem, SocBus};
 use crate::periph::PERIPH_BASE;
 use emu_core::Bus;
 
@@ -64,41 +68,50 @@ pub fn lldesc_build_chain(core: &mut Lx106, bus: &mut SocBus) {
     let (desc, desclen, buf, buflen, blksz, owner) = (arg(core, bus, 0), arg(core, bus, 1), arg(core, bus, 2), arg(core, bus, 3), arg(core, bus, 4), arg(core, bus, 5) & 1);
     let (headp, tailp) = (arg(core, bus, 6), arg(core, bus, 7));
     let blocks = if blksz == 0 { 0 } else { buflen.div_ceil(blksz).min(desclen / DESC) };
-    let (mut first, mut prev) = (0, 0);
-    for i in 0..blocks {
-        let d = desc + DESC * i;
-        let size = if i == blocks - 1 && buflen % blksz != 0 { buflen % blksz } else { blksz };
-        let _ = bus.write32(d, (size & 0xfff) | owner << 31);
-        let _ = bus.write32(d + 4, buf + i * blksz);
-        let _ = bus.write32(d + 8, 0);
-        if prev != 0 { let _ = bus.write32(prev + 8, d); } else { first = d; }
-        prev = d;
-    }
-    if headp != 0 { let _ = bus.write32(headp, first); }
-    if tailp != 0 { let _ = bus.write32(tailp, prev); }
-    ret(core, bus, 0);
+    let r = (|| -> Mem<()> {
+        let (mut first, mut prev) = (0, 0);
+        for i in 0..blocks {
+            let d = desc.wrapping_add(DESC * i);
+            let size = if i == blocks - 1 && buflen % blksz != 0 { buflen % blksz } else { blksz };
+            store32(bus, d, (size & 0xfff) | owner << 31)?;
+            store32(bus, d.wrapping_add(4), buf.wrapping_add(i * blksz))?;
+            store32(bus, d.wrapping_add(8), 0)?;
+            if prev != 0 { store32(bus, prev + 8, d)?; } else { first = d; }
+            prev = d;
+        }
+        if headp != 0 { store32(bus, headp, first)?; }
+        if tailp != 0 { store32(bus, tailp, prev)?; }
+        Ok(())
+    })();
+    done(core, bus, r.map(|()| 0));
 }
 
 /// `lldesc_num2link(head, nblks)`: the `nblks`-th descriptor of the chain (the head is the first).
 pub fn lldesc_num2link(core: &mut Lx106, bus: &mut SocBus) {
     let (mut d, n) = (arg(core, bus, 0), arg(core, bus, 1) & 0xffff);
-    for _ in 1..n { if d == 0 { break; } d = bus.read32(d + 8).unwrap_or(0); }
-    ret(core, bus, d);
+    let r = (|| {
+        for _ in 1..n { if d == 0 { break; } d = load32(bus, d.wrapping_add(8))?; }
+        Ok(d)
+    })();
+    done(core, bus, r);
 }
 
 /// `lldesc_set_owner(head, nblks, owner)`: the owner bit of the first `nblks` descriptors; the
 /// last of them.
 pub fn lldesc_set_owner(core: &mut Lx106, bus: &mut SocBus) {
     let (mut d, n, owner) = (arg(core, bus, 0), arg(core, bus, 1) & 0xffff, arg(core, bus, 2) & 1);
-    let mut last = d;
-    for _ in 0..n {
-        if d == 0 { break; }
-        let w = bus.read32(d).unwrap_or(0);
-        let _ = bus.write32(d, (w & !(1 << 31)) | owner << 31);
-        last = d;
-        d = bus.read32(d + 8).unwrap_or(0);
-    }
-    ret(core, bus, last);
+    let r = (|| {
+        let mut last = d;
+        for _ in 0..n {
+            if d == 0 { break; }
+            let w = load32(bus, d)?;
+            store32(bus, d, (w & !(1 << 31)) | owner << 31)?;
+            last = d;
+            d = load32(bus, d.wrapping_add(8))?;
+        }
+        Ok(last)
+    })();
+    done(core, bus, r);
 }
 
 /// `roundup2(x, n)`: `x` rounded up to a multiple of the power of two `n`.

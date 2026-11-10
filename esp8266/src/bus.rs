@@ -239,7 +239,7 @@ impl SocBus {
     /// A data read from the mask ROM: 0, and one log line for the first of them.
     fn rom_read(&mut self, addr: u32) {
         self.rom_data_reads += 1;
-        if self.rom_data_reads == 1 { eprintln!("[emu] rom: data read at {addr:#010x} reads 0: the ESP8266 mask ROM's bytes are not modelled (logged once)"); }
+        if self.rom_data_reads == 1 { self.rom.note(format!("data read at {addr:#010x} reads 0: the ESP8266 mask ROM's bytes are not modelled (logged once)")); }
     }
 
     fn fault<T>(&mut self, addr: u32, write: bool, f: Fault) -> Result<T, Fault> { self.last_fault = Some((addr, write)); Err(f) }
@@ -325,7 +325,7 @@ impl SocBus {
     pub fn chip_reset(&mut self, cause: u32) {
         use crate::rom::boot::{RST_DEEPSLEEP, RST_EXT, RST_POWERON};
         let cause = if (RST_POWERON..=RST_DEEPSLEEP).contains(&cause) { cause } else {
-            eprintln!("[emu] reset cause {cause} is not an ESP8266 ROM cause (1..=5): taken as an external reset ({RST_EXT})");
+            self.rom.push_note(format!("[emu] reset cause {cause} is not an ESP8266 ROM cause (1..=5): taken as an external reset ({RST_EXT})"));
             RST_EXT
         };
         let cause = if cause == RST_EXT && self.deep_sleep() { RST_DEEPSLEEP } else { cause };

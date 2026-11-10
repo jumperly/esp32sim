@@ -152,7 +152,7 @@ pub fn parse(flash: &[u8], at: usize) -> Result<Image, String> {
 /// the guest's, it is a request to start over: the chip resets with the cause it had.
 pub fn reset_vector(core: &mut Lx106, bus: &mut SocBus) {
     if bus.rom.boot_pending { boot(core, bus); return; }
-    eprintln!("[emu] rom: _ResetVector reached by a jump (a0={:#010x}): restart", core.get_ar(0));
+    bus.rom.note(format!("_ResetVector reached by a jump (a0={:#010x}): restart", core.get_ar(0)));
     bus.restart_from_reset_vector();
 }
 
@@ -167,7 +167,7 @@ pub fn boot(core: &mut Lx106, bus: &mut SocBus) {
         // The ROM waits for the download tool (or, in the SDIO and other modes, for its host);
         // its protocols are not modelled, so the core only waits, with every interrupt masked,
         // until the next reset (a press of RST with GPIO0 released boots from flash).
-        eprintln!("[emu] rom: boot mode {mode} (not a flash boot): the ROM's UART download and other modes are not modelled; waiting for a reset");
+        bus.rom.note(format!("boot mode {mode} (not a flash boot): the ROM's UART download and other modes are not modelled; waiting for a reset"));
         core.write_sr(sr::INTENABLE, 0).unwrap();
         core.waiti(15);
         return;
@@ -181,7 +181,7 @@ pub fn boot(core: &mut Lx106, bus: &mut SocBus) {
             // (INTENABLE is 0 after a reset, so none is taken until the guest enables one).
             core.write_sr(sr::PS, ps::UM).unwrap();
         }
-        Err(e) => { eprintln!("[emu] rom: flash boot failed: {e}; stopping"); bus.rom.request_stop(); }
+        Err(e) => bus.rom.halt(format!("flash boot failed: {e}; stopping")),
     }
 }
 
