@@ -105,7 +105,8 @@ it. Each is cited in the source next to the code.
 | RF 0x60009B60 bit 1 | always clear | libphy `do_noisefloor` polls it with a timeout; clear is "measurement done" | Blink image 0x402277e0 (disassembly) |
 | WDEV 0x3FF20C00, 0x3FF21048/4C | device time in us (TSF 64-bit) | `system_get_time`, beacon scheduling | digitake `src/soc.c:500-504` |
 | WDEV 0x3FF20E44 (RANDOM_REG32) | deterministic LCG seeded from the MAC | reproducible runs | `esp8266_peri.h:851` |
-| WDEV MAC queues | plain memory | no frame completes, no MAC interrupt; WiFi stays "connecting" | - |
+| WDEV MAC queues | plain memory | no frame completes, no MAC frame interrupt; WiFi stays "connecting" | - |
+| WDEV MAC timer 1 (0x3FF210C8..D0, 0x3FF21058) | status bit 26 on interrupt 0 at the target microsecond | libpp's soft watchdog (`pp_soft_wdt_feed_local`) runs on it and feeds the hardware watchdog | digitake `src/soc.c:473-493,753-759`; Blink image 0x4022f580, 0x40101944 |
 | SPI0 CMD | the command completes at once, CMD reads 0 | `spi_flash_get_id` and SDK flash reads poll CMD | `esp8266_peri.h:301-320,382-391`; digitake `src/soc.c:424-436` |
 | UART RXFIFO_TOUT | masked unless CONF1 RX_TOUT_EN | the shared UART raises it whenever bytes wait; the core leaves it disabled | `uart_register.h:17,103`; `uart.cpp:430-433,457` |
 | Scheduler idle callback | once per wake-up, then WAITI | the ROM calls it on every empty pass; once lets the machine skip idle time | digitake `src/rom.c:390-402` |

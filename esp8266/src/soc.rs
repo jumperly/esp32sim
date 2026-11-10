@@ -32,6 +32,7 @@ impl Soc for Esp8266 {
     /// The app follows eboot at 0x1000; flash 0x10000 is the app's IROM there, no image header.
     const APP_OFFSET: usize = APP_OFFSET;
     const ROM_DATA_TABLE: &'static [&'static str] = &[];
+    fn reset_cause_name(cause: u32) -> &'static str { boot::reset_cause_name(cause) }
     fn new_core(_i: usize) -> Lx106 { Lx106::new() }
     fn reset_core(c: &mut Lx106, _i: usize) { c.reset(); }
     /// As eboot starts the application: at its entry, on the boot stack.
@@ -129,7 +130,12 @@ impl esp_soc::SocBus for SocBus {
                 self.iram.fill(0);
             }
         }
-        self.periph.gpio.level = old.gpio.level;
+        // A jump resets no hardware, so the ROM finds the strapping it latched at the last
+        // hardware reset (`SocBus::latch_strap`). The pads' levels are not carried over: a pin
+        // without a pull that only the chip drove floats, and a floating pad reads low at reset
+        // release (design ruling for GPIO15, which has no pull).
+        self.strap_kept = self.reset_kind == ResetKind::Jump;
+        if self.strap_kept { self.periph.gpio.strap = old.gpio.strap; }
         let before = old.gpio.output();
         let g = &mut self.periph.gpio;
         g.update_levels();
@@ -147,8 +153,9 @@ impl esp_soc::SocBus for SocBus {
         self.reset_cause
     }
     fn sw_reset(&self) -> bool { self.sw_reset }
-    /// A reset from outside with the ROM's `cause` (`rom::boot::RST_*`): RST_EXT is the RST pin,
-    /// and in deep sleep that is the wake-up (`chip_reset`).
+    /// A reset from outside with the ROM's `cause` (`rom::boot::RST_*`: 1 power-on, 2 external,
+    /// 3 software, 4 hardware watchdog, 5 deep-sleep wake; others are taken as 2): RST_EXT is the
+    /// RST pin, and in deep sleep that is the wake-up (`SocBus::chip_reset`).
     fn request_reset(&mut self, cause: u32) { self.chip_reset(cause); }
     fn reset_cause(&self) -> u32 { self.reset_cause }
     fn last_fault(&self) -> Option<(u32, bool)> { self.last_fault }

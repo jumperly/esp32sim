@@ -64,6 +64,9 @@ pub trait Soc: 'static {
     const ROM_DATA_TABLE_END: &'static [&'static str] = &["_data_end"];
     /// Bytes per table entry: (dst_start, dst_end, rom_src[, 0]) — 16 on the S3 and C3, 12 on the C6.
     const ROM_DATA_TABLE_STRIDE: u32 = 16;
+    /// The name of a reset cause as `SocBus::reset_cause` numbers it on this chip (the ROM's
+    /// numbering); the ESP32 family's RTC_CNTL names by default.
+    fn reset_cause_name(cause: u32) -> &'static str { esp_periph::reset_cause_name(cause) }
     fn new_core(i: usize) -> Self::Core;
     /// Connect core-local state to resources owned by this machine's bus.
     fn new_core_with_bus(i: usize, _bus: &Self::Bus) -> Self::Core { Self::new_core(i) }

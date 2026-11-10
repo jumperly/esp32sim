@@ -61,14 +61,16 @@ fn wave(e: &[(u64, bool)]) -> Vec<(u64, u64)> {
     e[start..].windows(3).step_by(2).map(|w| ((w[2].0 - w[0].0) / US, (w[1].0 - w[0].0) / US)).collect()
 }
 
-/// `esp8266-pwm`: `analogWrite(4, 256)` and `analogWrite(4, 768)` are both full on in core 3.1.2,
-/// whose `analogWriteRange` defaults to 255 (cores/esp8266/core_esp8266_wiring_pwm.cpp:29) and
-/// clamps the value to it (:57-58; the fixture's "25 % of 1023" assumes the 2.x range), so GPIO4
-/// goes high once and stays high until `analogWrite(4, 0)` at 4 s. `tone(5, 440)` from 1 s to 3 s
-/// is the waveform generator on FRC1 in the NMI (core_esp8266_waveform_pwm.cpp:102-107), which
-/// toggles GPIO5 every 1136 us (Tone.cpp:35-46: high = low = half the period).
+/// `esp8266-pwm`: `analogWriteRange(1023)` and `analogWriteFreq(1000)`, then `analogWrite(4, 256)`
+/// (25 %), at 2 s `analogWrite(4, 768)` (75 %), at 4 s `analogWrite(4, 0)`. Core 3.1.2's PWM is the
+/// waveform generator (cores/esp8266/core_esp8266_waveform_pwm.cpp), which times its edges with
+/// FRC1 at divider 1 in the NMI (:102-107): an edge falls on the 80 MHz timer's grid (12.5 ns)
+/// plus the NMI's entry and the generator's loop, a few microseconds. 10 us is 1 % of the period;
+/// observed here (whole microseconds, rounded down): periods 997..999 us, high times 249..250 us
+/// and 748..750 us, so within 3 us of the nominal values. `tone(5, 440)` from 1 s to 3 s runs on the same
+/// generator and toggles GPIO5 every 1136 us (Tone.cpp:35-46: high = low = half the period).
 #[test]
-fn pwm_fixture_drives_gpio4_full_on_and_a_440_hz_tone_on_gpio5_through_the_nmi() {
+fn pwm_fixture_toggles_gpio4_at_1khz_25_then_75_percent_and_a_440_hz_tone_on_gpio5() {
     let mut m = machine("esp8266-pwm");
     m.bus.observe_gpio(true);
     run(&mut m, 4.5, false);
@@ -76,13 +78,18 @@ fn pwm_fixture_drives_gpio4_full_on_and_a_440_hz_tone_on_gpio5_through_the_nmi()
     assert!(m.bus.rom.unknown.is_empty(), "{:?}", unknown(&m));
     assert!(text.contains("pwm=256\n") && text.contains("pwm=768\n") && text.contains("pwm=0\n"), "{text}");
     let events = m.bus.take_gpio_events();
-    let gpio4 = edges(&events, 4, 0.0, 4.5);
-    println!("GPIO4: {:?}", gpio4.iter().map(|&(c, l)| (c / US, l)).collect::<Vec<_>>());
-    assert_eq!(gpio4.iter().map(|e| e.1).collect::<Vec<_>>(), [true, false], "on, then off at 4 s");
-    assert!((4.0..4.1).contains(&(gpio4[1].0 as f64 / periph::CPU_HZ as f64)));
+    let quarter = wave(&edges(&events, 4, 0.5, 1.5));
+    assert!(quarter.len() > 950, "{}", quarter.len());
+    assert!(quarter.iter().all(|&(p, h)| p.abs_diff(1000) <= 10 && h.abs_diff(250) <= 10), "{quarter:?}");
+    let three = wave(&edges(&events, 4, 2.1, 3.9));
+    assert!(three.len() > 1700, "{}", three.len());
+    assert!(three.iter().all(|&(p, h)| p.abs_diff(1000) <= 10 && h.abs_diff(750) <= 10), "{three:?}");
+    // `analogWrite(4, 0)` 4 s after `setup()`, which runs about 10 ms after reset release
+    assert!(!edges(&events, 4, 4.0, 4.02).is_empty(), "still running at 4 s");
+    assert!(edges(&events, 4, 4.02, 4.5).is_empty(), "analogWrite(4, 0): a constant level");
+    assert_eq!(m.bus.gpio_output() & 1 << 4, 0);
     let tone = edges(&events, 5, 1.2, 2.8);
     let w = wave(&tone);
-    println!("GPIO5: {} edges, first periods (us, high us) {:?}", tone.len(), &w[..w.len().min(6)]);
     assert!(w.len() > 600, "{}", w.len());
     assert!(w.iter().all(|&(p, h)| p.abs_diff(2273) <= 10 && h.abs_diff(1136) <= 10), "{w:?}");
     assert!(edges(&events, 5, 3.1, 4.5).is_empty(), "noTone at 3 s");
@@ -101,7 +108,6 @@ fn servo_fixture_pulses_1500us_at_50hz() {
     let events = m.bus.take_gpio_events();
     let at0 = wave(&edges(&events, 14, 0.2, 0.9));
     let at90 = wave(&edges(&events, 14, 1.2, 1.8));
-    println!("0 deg: {:?}\n90 deg: {:?}", &at0[..at0.len().min(4)], &at90[..at90.len().min(4)]);
     assert!(at0.len() >= 30 && at90.len() >= 25, "{} {}", at0.len(), at90.len());
     assert!(at0.iter().all(|&(p, h)| p.abs_diff(20_000) <= 10 && h.abs_diff(1000) <= 10), "{at0:?}");
     assert!(at90.iter().all(|&(p, h)| p.abs_diff(20_000) <= 10 && h.abs_diff(1500) <= 10), "{at90:?}");
@@ -112,19 +118,55 @@ fn servo_fixture_pulses_1500us_at_50hz() {
 /// own record, REASON_SOFT_RESTART, from RTC STORE0 and RTC memory, which the restart kept
 /// (libmain `system_restart_local`, Blink image 0x40234aba..0x40234ad0). The word the sketch
 /// left in RTC user memory survives too, so it does not restart again.
+///
+/// The soft watchdog's MAC timer feeds the hardware watchdog meanwhile: the runs pass its 8.4 s
+/// with no reset. Then the RST pin (ROM EXT_RESET): it clears the RTC registers, so STORE0 = 1 is gone and the
+/// SDK reports REASON_EXT_SYS_RST (with STORE0 kept it would report a hardware watchdog reset). Then the core hangs with its interrupts masked:
+/// nothing feeds the hardware watchdog (the SDK sets stage 0 to 2^27 and stage 1 to 2^29 APB
+/// cycles, 1.68 s and 6.71 s), whose stage 1 resets the digital core (ROM OWDT_RESET); the RTC
+/// registers survive that, and STORE0 = 1, which the soft watchdog writes while the sketch runs
+/// (0x401019a9), makes the SDK report REASON_WDT_RST, as `getResetInfo()` shows.
 #[test]
-fn strap_fixture_reports_power_on_then_software_restart() {
+fn strap_fixture_reports_power_on_software_restart_external_reset_and_hardware_watchdog() {
     let mut m = machine("esp8266-strap");
     run(&mut m, 3.0, true);
     let text = uart0(&m);
-    println!("UART0:\n{text}");
     assert!(m.bus.rom.unknown.is_empty(), "{:?}", unknown(&m));
     assert_eq!(m.reboots, 1, "one restart: {text}");
-    let resets: Vec<&str> = text.lines().filter(|l| l.starts_with("reset=")).collect();
-    assert_eq!(resets, ["reset=Power On info=Power On", "reset=Software/System restart info=Software/System restart"], "{text}");
-    let banners: Vec<&str> = text.lines().filter(|l| l.starts_with(" ets Jan  8 2013,")).collect();
-    assert_eq!(banners, [" ets Jan  8 2013,rst cause:1, boot mode:(3,6)"; 2], "{text}");
+    let resets = |t: &str| t.lines().filter(|l| l.starts_with("reset=")).map(String::from).collect::<Vec<_>>();
+    let banners = |t: &str| t.lines().filter(|l| l.starts_with(" ets Jan  8 2013,")).map(String::from).collect::<Vec<_>>();
+    assert_eq!(resets(&text), ["reset=Power On info=Power On", "reset=Software/System restart info=Software/System restart"], "{text}");
+    assert_eq!(banners(&text), [" ets Jan  8 2013,rst cause:1, boot mode:(3,6)"; 2], "{text}");
     assert_eq!(m.bus.read32(0x6000_1200).unwrap(), 0x4A4D_5052, "the sketch's word in RTC user memory");
+    // STORE0: 4, the SDK's record of the restart, became 1 again: the soft watchdog's timer writes
+    // it every 1.6 s while the sketch runs (`pp_soft_wdt_feed_local`, Blink image 0x401019a9;
+    // cores/esp8266/hwdt_app_entry.cpp:600-605)
+    assert_eq!(m.bus.read32(0x6000_0730).unwrap(), 1);
+
+    // the RST pin
+    m.bus.request_reset(boot::RST_EXT);
+    m.reboot();
+    run(&mut m, 5.0, true);
+    let text = uart0(&m);
+    assert_eq!(resets(&text)[2..], ["reset=External System info=External System"], "{text}");
+    assert_eq!(banners(&text)[2..], [" ets Jan  8 2013,rst cause:2, boot mode:(3,6)"], "{text}");
+    assert_eq!(m.bus.read32(0x6000_0730).unwrap(), 1, "STORE0 1 again after the soft watchdog's first 1.6 s");
+
+    // a hang with the interrupts masked: the soft watchdog's timer interrupt is masked too, so
+    // nothing feeds; fed at most 1.6 s before, the watchdog resets 1.68 s + 6.71 s after that
+    let hung = m.seconds();
+    let c = &mut m.cores[0];
+    c.waiti(15);
+    c.write_sr(xtensa_lx7::state::sr::INTENABLE, 0).unwrap();
+    run(&mut m, hung + 6.7, false);
+    run(&mut m, hung + 9.0, true);
+    let text = uart0(&m);
+    assert!(m.bus.rom.unknown.is_empty(), "{:?}", unknown(&m));
+    assert_eq!(banners(&text)[3..], [" ets Jan  8 2013,rst cause:4, boot mode:(3,6)"], "{text}");
+    let wdt = &resets(&text)[3..];
+    assert_eq!(wdt.len(), 1, "{text}");
+    assert!(wdt[0].starts_with("reset=Hardware Watchdog info=Fatal exception:") && wdt[0].contains(" flag:1 (Hardware Watchdog) "), "{text}");
+    assert_eq!(m.bus.read32(0x6000_1200).unwrap(), 0x4A4D_5052, "RTC user memory survives every reset but power-on");
 }
 
 /// `esp8266-exc` after the external reset that a programmer's auto-reset gives (EXT_RESET):
@@ -136,7 +178,6 @@ fn exc_fixture_dumps_and_restarts() {
     m.bus.set_reset_cause(boot::RST_EXT);
     run(&mut m, 0.35, true);
     let text = uart0(&m);
-    println!("UART0:\n{text}");
     assert!(m.bus.rom.unknown.is_empty(), "{:?}", unknown(&m));
     assert!(text.contains("Exception (29):") && text.contains("epc1=0x4020"), "{text}");
     assert!(text.contains("excvaddr=0x00000000"), "{text}");
@@ -161,7 +202,6 @@ fn sleep_fixture_wakes_through_gpio16_to_rst() {
     let until = m.bus.deep_sleep_until().expect("a timer wake");
     let entered = m.bus.take_gpio_events().iter().find(|e| e.1 == 16).map(|e| e.0).expect("GPIO16 goes high at the sleep");
     let slept = (until - entered) as f64 / periph::CPU_HZ as f64;
-    println!("deep sleep at {:.4} s for {slept:.4} s", entered as f64 / periph::CPU_HZ as f64);
     assert!((slept - 2.0).abs() < 0.01, "{slept}");
     let insns = m.insns();
     run(&mut m, until as f64 / periph::CPU_HZ as f64 + 0.001, false);
@@ -174,7 +214,6 @@ fn sleep_fixture_wakes_through_gpio16_to_rst() {
     m.reboot();
     run(&mut m, until as f64 / periph::CPU_HZ as f64 + 0.5, false);
     let text = uart0(&m);
-    println!("UART0:\n{text}");
     assert!(m.bus.rom.unknown.is_empty(), "{:?}", unknown(&m));
     assert!(text.contains("wake=Power On\n"), "{text}");
     assert!(text.contains(" ets Jan  8 2013,rst cause:5, boot mode:(3,6)"), "{text}");
@@ -210,6 +249,32 @@ fn spi_fixture_sends_bytes_to_host_hspi() {
     assert_eq!(m.bus.periph.spi1.transfers, seen.len() as u64);
 }
 
+/// `esp8266-spi` holds its latch, GPIO15, high between steps; GPIO15 is a strapping pin, high for
+/// the SDIO boot. A hardware reset releases the pads and GPIO15, with no pull, reads low at reset
+/// release (design section 3), so after every kind of reset the ROM boots the flash again.
+#[test]
+fn spi_fixture_with_its_latch_high_boots_again_after_every_hardware_reset() {
+    let mut m = machine("esp8266-spi");
+    let mut t = 0.0;
+    for (i, cause) in [boot::RST_EXT, boot::RST_WDT, boot::RST_SW, boot::RST_POWERON].into_iter().enumerate() {
+        t += 0.25;
+        run(&mut m, t, false);
+        while m.bus.gpio_output() & 1 << 15 == 0 { t += 0.001; run(&mut m, t, false); }
+        assert!(m.bus.periph.strap().0, "the latch is high");
+        m.bus.request_reset(cause);
+        m.reboot();
+        assert!(!m.bus.periph.strap().0, "cause {cause}: GPIO15 floats low at reset release");
+        t += 0.25;
+        run(&mut m, t, false);
+        let text = uart0(&m);
+        let (_, after) = text.rsplit_once(" ets Jan  8 2013,").unwrap();
+        assert!(after.starts_with(&format!("rst cause:{cause}, boot mode:(3,6)")), "cause {cause}: {after}");
+        assert!(after.contains("Ready\nout=55 via=spi\n"), "cause {cause}: {after}");
+        assert_eq!(text.matches(" ets Jan  8 2013,").count(), i + 2);
+    }
+    assert!(m.bus.rom.unknown.is_empty(), "{:?}", unknown(&m));
+}
+
 /// A byte load from the flash window is a LoadStoreError (EXCCAUSE 3) on the bus and in the core;
 /// the core's emulation of it (`core_esp8266_non32xfer.cpp`) is only installed with
 /// NON32XFER_HANDLER or MMU_IRAM_HEAP (:65,:183-196), which the fixtures' default build lacks.
@@ -230,6 +295,16 @@ fn byte_read_from_flash_window_raises_cause_3() {
     let trap = c.step(&mut m.bus).trap();
     assert!(matches!(trap, Some(xtensa_lx7::Trap::Exception(3))), "{trap:?}");
     assert_eq!(c.state().excvaddr, 0x4020_1011);
+}
+
+/// The soft watchdog's MAC timer runs libpp's feed of the hardware watchdog every 1.6 s, so a
+/// sketch that yields runs past the watchdog's 8.4 s (any reset stops `run` with a panic).
+#[test]
+fn blink_runs_past_the_hardware_watchdog_period() {
+    let mut m = machine("esp8266-blink");
+    run(&mut m, 12.0, false);
+    assert!(uart0(&m).contains("\nt=115"), "{}", uart0(&m));
+    assert_eq!(m.bus.read32(0x6000_0730).unwrap(), 1);
 }
 
 /// The OTP words carry the whole MAC: a locally administered address (not Espressif's 18:fe:34)

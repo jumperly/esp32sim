@@ -17,8 +17,17 @@ use xtensa_lx7::{state::{ps, sr}, Lx106};
 /// The reset causes as the ROM numbers them (what `rtc_get_reset_reason` returns and the banner's
 /// `rst cause` prints): Arduino ESP8266 3.1.2 cores/esp8266/hwdt_app_entry.cpp:580-589,
 /// ROM_RST_REASON: 0 NO_MEAN, 1 POWERON_RESET, 2 EXT_RESET ("External reset or wake-up from
-/// Deep-sleep"), 3 SW_RESET, 4 OWDT_RESET ("Hardware WDT reset"), 5 DEEPSLEEP_RESET, 6 SDIO_RESET.
+/// Deep-sleep"), 3 SW_RESET, 4 OWDT_RESET ("Hardware WDT reset"), 5 DEEPSLEEP_RESET ("Deep Sleep
+/// reset digital core", the RTOS SDK's comment there), 6 SDIO_RESET.
 /// `SocBus::reset_cause` and `request_reset` use this numbering.
+///
+/// EXT_RESET's comment there names the deep-sleep wake too, but a chip woken from deep sleep
+/// through its RST pin reports 5: real boot logs read `rst cause:5, boot mode:(3,6)` after the
+/// GPIO16 pulse, and a press of RST during deep sleep gives the same 5, which the SDK names
+/// REASON_DEEP_SLEEP_AWAKE (5, user_interface.h:63), so `getResetReason()` cannot tell the two
+/// apart (esp8266/Arduino issue #7067, "ESP.getResetReason() doesn't allow to distinguish between
+/// timer wakeup and physical reset during deep sleep", with such a log). So an external reset is
+/// 2 when the chip is awake and 5 when it sleeps (`SocBus::chip_reset`).
 ///
 /// The SDK's `rst_info.reason`, which `ESP.getResetReason()` names (tools/sdk/include/
 /// user_interface.h:58-64, cores/esp8266/Esp.cpp:486-500), is another numbering. libmain's start-up
@@ -49,6 +58,11 @@ pub const RST_EXT: u32 = 2;
 pub const RST_SW: u32 = 3;
 pub const RST_WDT: u32 = 4;
 pub const RST_DEEPSLEEP: u32 = 5;
+
+/// The ROM's name of a reset cause (hwdt_app_entry.cpp:580-589).
+pub fn reset_cause_name(cause: u32) -> &'static str {
+    match cause { 1 => "POWERON_RESET", 2 => "EXT_RESET", 3 => "SW_RESET", 4 => "OWDT_RESET", 5 => "DEEPSLEEP_RESET", 6 => "SDIO_RESET", _ => "?" }
+}
 
 /// Strapping, as the banner's first `boot mode` number: GPIO15 << 2 | GPIO0 << 1 | GPIO2. Flash:
 /// GPIO15 low, GPIO0 high, GPIO2 high; UART download: GPIO0 low (Ai-Thinker ESP-12F datasheet

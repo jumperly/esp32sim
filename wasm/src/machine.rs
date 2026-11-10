@@ -181,7 +181,7 @@ impl std::ops::DerefMut for MachineKind {
 pub(super) fn reboot<S: Soc>(machine: &mut Machine<S>) {
     let cause = machine.bus.reset_cause();
     let note = format!("[emu] chip reset at t={:.3}s: cause {:#x} ({})",
-        machine.seconds(), cause, esp_periph::reset_cause_name(cause));
+        machine.seconds(), cause, S::reset_cause_name(cause));
     log(&note);
     if let Some(web) = &machine.web {
         web.send_text(&format!("{{\"t\":\"emu\",\"msg\":\"{}\"}}", json_escape(&note)));

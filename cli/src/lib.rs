@@ -765,7 +765,7 @@ fn run_with_reboots<S: Soc>(m: &mut Machine<S>, mut remaining: u64, reboot: bool
         remaining = remaining.saturating_sub(m.run_steps().saturating_sub(before));
         if let Stop::SwReset = stop {
             let cause = m.bus.reset_cause();
-            eprintln!("[emu] chip reset at t={:.3}s: cause {:#x} ({})", m.seconds(), cause, esp_periph::reset_cause_name(cause));
+            eprintln!("[emu] chip reset at t={:.3}s: cause {:#x} ({})", m.seconds(), cause, S::reset_cause_name(cause));
             let button = m.take_button_reset();
             if !reboot && !(button && app) { return stop; }
             if remaining == 0 { return Stop::MaxInsns; }

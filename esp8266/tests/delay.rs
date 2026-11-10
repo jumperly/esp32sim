@@ -48,7 +48,6 @@ fn check(cpi: u32) {
     let done = m.bus.read32(OUT + 4).unwrap().wrapping_sub(t0);
     let insns = m.insns() - insns0;
     let ccount = u64::from(m.cores[0].read_sr(sr::CCOUNT).unwrap().wrapping_sub(t0));
-    println!("cpi {cpi}: interrupt at +{at_irq}, delay done at +{done}, {insns} steps, CCOUNT +{ccount}, device time +{}", m.bus.cycles - cycles0);
     // the timer interrupt is taken on the cycle CCOMPARE0 matches, inside the wait
     assert_eq!(at_irq, 40_000, "cpi {cpi}");
     assert_eq!(m.interrupts, 1);
@@ -87,7 +86,6 @@ fn cpu2x_halves_the_device_time_of_a_cpu_cycle() {
         let ccount = m.cores[0].read_sr(sr::CCOUNT).unwrap().wrapping_sub(c0);
         // `run` stops at a quantum's end: scale to 1000 CPU cycles
         let per_1000 = (m.bus.cycles - t0) * 1000 / u64::from(ccount);
-        println!("CPU2X {cpu2x}: CCOUNT +{ccount}, device time +{} cycles: {} us per 1000 CPU cycles", m.bus.cycles - t0, per_1000 as f64 / 80.0);
         assert!(ccount >= 1000);
         assert_eq!(per_1000, apb);
     }
@@ -98,7 +96,6 @@ fn cpu2x_halves_the_device_time_of_a_cpu_cycle() {
     let cycles0 = m.bus.cycles;
     while m.bus.read32(OUT + 4).unwrap() == 0 && m.insns() < 400_000 { m.run(1000); }
     let done = m.bus.read32(OUT + 4).unwrap().wrapping_sub(t0);
-    println!("ets_delay_us(1000) at 160 MHz: CCOUNT +{done}, device time +{}", m.bus.cycles - cycles0);
     assert!((160_000..160_010).contains(&done), "{done}");
     assert!((m.bus.cycles - cycles0).abs_diff(80_000 + 500) <= 500, "about 1000 us: {}", m.bus.cycles - cycles0);
 }

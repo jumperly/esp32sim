@@ -7,7 +7,7 @@
 //! interrupt types, interrupt 4) and GPIO16 (the RTC pad), the strapping bits of GPIO_IN, the
 //! hardware watchdog, the RTC block (software reset, the STORE registers, the sleep counter and
 //! deep sleep with its GPIO16 wake pulse), SPI1 (HSPI) as a master, DPORT (edge-interrupt
-//! enables, NMI routing, CPU2X, the watchdog pause, the OTP words) and WDEV (the microsecond
+//! enables, NMI routing, CPU2X, the OTP words) and WDEV (the microsecond
 //! counter, the TSF and the random number register). Every other register in the peripheral page,
 //! DPORT, WDEV and the RF block is register memory: it reads what was last written, 0 after a
 //! reset. Device time is the bus's cycle count (`now`) at the 80 MHz APB clock the timers count;
@@ -58,9 +58,13 @@ pub const DPORT_NMI: u32 = DPORT_BASE;
 pub const DPORT_TEIE: u32 = DPORT_BASE + 0x04;
 const TEIE1: u32 = 1 << 1;
 const TEIE_WDT: u32 = 1;
-/// DPORT 0x18 bit 3: the watchdog is paused while set (digitake esp8266-emulator src/soc.c:526-530;
-/// the SDK sets it on its way into deep sleep, `0x3ff00018 <- 0xfc700008` in the sleep fixture).
-const DPORT_WDT_PAUSE: u32 = DPORT_BASE + 0x18;
+/// DPORT 0x18 (esp-open-rtos core/include/esp/dport_regs.h: CLOCKGATE_WATCHDOG, bit 3 named
+/// DISABLE, "not sure what this means or does") is register memory. It does not pause the
+/// watchdog, as digitake esp8266-emulator src/soc.c:526-530 has it: the SDK sets bit 3 at its
+/// start-up (`0x3ff00018 <- 0xfc700008` 4.4 ms into every fixture) and keeps it while the sketch
+/// runs, and there the hardware watchdog does reset a chip whose software watchdog stops being fed
+/// (cores/esp8266/Esp.cpp:107-108: stopping it for 6 seconds or more "will trigger hardware
+/// watchdog reset").
 /// esp8266_peri.h:189-191: UIS, the UART interrupt status, bit 0 UART0, bit 2 UART1.
 const UIS: u32 = DPORT_BASE + 0x20020;
 /// WDEV 0x3FF20C00: the free-running microsecond counter `system_get_time` reads (digitake
@@ -274,7 +278,10 @@ const RESET_PULLUPS: u32 = 1 << 0 | 1 << 2;
 /// GPIO (esp8266_peri.h:48-87, 0x300..0x370) and the pads: GPIO0..15 with their output, enable,
 /// open-drain and interrupt settings, GPIO16 through its RTC registers (esp8266_peri.h:126-141,
 /// 0x768 OUT, 0x774 ENABLE, 0x78C IN, 0x790 CONF, 0x7A0 FUNC), and each pad's level: the chip's
-/// drive, else the host's, else the pull-up (GPIO16: the pull-down), else the last level.
+/// drive, else the host's, else the pull-up (GPIO16: the pull-down), else the last level. A reset
+/// releases the pads (`Soc::reboot` does not carry the levels over), so a floating pad without a
+/// pull reads low at reset release: for GPIO15 that is the design's ruling (no pull, floating =
+/// low, the flash boot).
 /// GPIO_IN (0x318) reads the levels of GPIO0..15 and, in bits 16 and up, the strapping latched at
 /// reset as the boot mode number GPIO15 << 2 | GPIO0 << 1 | GPIO2 (cores/esp8266/Updater.cpp:84
 /// reads `(GPI >> 16) & 0xf`; digitake esp8266-emulator src/soc.c:216 returns 3, a flash boot).
@@ -472,7 +479,7 @@ pub fn now_us(cycles: u64) -> u64 { cycles / (CPU_HZ / 1_000_000) }
 /// RST 0x14 (0x73 feeds, esp8266_peri.h:293-294 WDT_FEED), 0x18 (0x73 back to stage 0). Stage 0
 /// running out raises the WDT edge (line 8) with DPORT 0x04 bit 0; stage 1 resets the chip.
 #[derive(Default)]
-pub struct Wdt { ctrl: u32, reload: [u32; 2], stage: u32, count: u64, paused: bool, due: Option<u64> }
+pub struct Wdt { ctrl: u32, reload: [u32; 2], stage: u32, count: u64, due: Option<u64> }
 const WDT_FEED_KEY: u32 = 0x73;
 impl Wdt {
     fn length(&self, stage: usize) -> u64 { 1 << (16 + (self.reload[stage] & 15)) }
@@ -480,12 +487,7 @@ impl Wdt {
     fn feed(&mut self, now: u64) {
         self.stage = 0;
         self.count = self.length(0);
-        self.due = (self.ctrl & 1 != 0 && !self.paused).then(|| now + self.count);
-    }
-    fn pause(&mut self, on: bool, now: u64) {
-        if on == self.paused { return; }
-        if on { self.count = self.count(now); self.due = None; } else if self.ctrl & 1 != 0 { self.due = Some(now + self.count); }
-        self.paused = on;
+        self.due = (self.ctrl & 1 != 0).then(|| now + self.count);
     }
     fn read(&self, off: u32, now: u64) -> u32 {
         match off { 0x00 => self.ctrl, 0x04 => self.reload[0], 0x08 => self.reload[1], 0x0C => self.count(now) as u32, 0x10 => self.stage, _ => 0 }
@@ -575,7 +577,9 @@ impl Hspi {
             for i in 0..n { tx.push(order((user2 >> (8 * i)) as u8)); }
         }
         if user & SPI_USR_ADDR != 0 {
-            let bits = (user1 >> 26) + 1;
+            // USR_ADDR_BITLEN is 6 bits (up to 64 bits) but SPI_ADDR holds 32: the address phase
+            // shifts out at most its four bytes, high byte first (model choice for longer phases).
+            let bits = ((user1 >> 26) + 1).min(32);
             let a = self.reg(0x04);
             for i in 0..bits.div_ceil(8) { tx.push(order((a >> (24 - 8 * i)) as u8)); }
         }
@@ -610,11 +614,48 @@ impl Hspi {
 
 /// DPORT (0x3FF00000..0x3FF10000): register memory with the OTP words read-only.
 pub struct Dport { pub regs: RegMem, pub otp: [u32; 4] }
-/// WDEV (0x3FF20000..0x3FF40000): register memory with the counters and the random number
-/// register; the MAC's queues are plain memory, so no frame completes and no MAC interrupt rises.
-pub struct Wdev { pub regs: RegMem, rng: u64 }
+/// WDEV (0x3FF20000..0x3FF40000): register memory with the counters, the random number register
+/// and the MAC's timer 1; the MAC's queues are plain memory, so no frame completes.
+pub struct Wdev { pub regs: RegMem, rng: u64, timer1: Option<u64> }
+
+/// The MAC interrupt (digitake esp8266-emulator src/soc.c:462-464, 487-493): status 0xC20, enable
+/// 0xC18, a write of ones to 0xC24 clears status bits; status & enable is interrupt 0, where the SDK
+/// attaches `wDev_ProcessFiq`.
+const WDEV_INT_ENA: u32 = WDEV_BASE + 0xC18;
+const WDEV_INT_ST: u32 = WDEV_BASE + 0xC20;
+const WDEV_INT_CLR: u32 = WDEV_BASE + 0xC24;
+pub const INUM_WDEV: u32 = 0;
+/// The MAC's timer 1 (soc.c:473-485, 753-759): 0x10C8 bit 31 arms it, 0x10CC/0x10D0 hold the
+/// target on the microsecond counter (low, high word); when the counter reaches it the arm bit
+/// clears and, with 0x1058 bit 31, status bit 26 rises. libpp's soft watchdog runs on it:
+/// `pp_soft_wdt_init` (Blink image 0x4022f580) hands it `pp_soft_wdt_feed_local` (0x40101944),
+/// which re-arms it every 1.6 s (the SDK's first target is 0x187a68 us) and posts the task that
+/// feeds the hardware watchdog (`PPWdtReset`, 0x4022f54c: 0x73 to 0x60000914); a second expiry
+/// with no `system_soft_wdt_feed` in between is the soft watchdog reset.
+const WDEV_T1_CTRL: u32 = WDEV_BASE + 0x10C8;
+const WDEV_T1_LO: u32 = WDEV_BASE + 0x10CC;
+const WDEV_T1_HI: u32 = WDEV_BASE + 0x10D0;
+const WDEV_T1_INT: u32 = WDEV_BASE + 0x1058;
+const WDEV_T1_ARMED: u32 = 1 << 31;
+const WDEV_INT_TIMER1: u32 = 1 << 26;
 
 impl Wdev {
+    /// The cycle timer 1 runs out at, from its registers (`now` the device time).
+    fn schedule_timer1(&mut self, now: u64) {
+        self.timer1 = (self.regs.read(WDEV_T1_CTRL) & WDEV_T1_ARMED != 0).then(|| {
+            let target = u64::from(self.regs.read(WDEV_T1_HI)) << 32 | u64::from(self.regs.read(WDEV_T1_LO));
+            target.saturating_mul(CPU_HZ / 1_000_000).max(now)
+        });
+    }
+    /// Timer 1 up to `now`: whether it ran out.
+    fn advance(&mut self, now: u64) -> bool {
+        if self.timer1.is_none_or(|t| t > now) { return false; }
+        self.timer1 = None;
+        self.regs.write(WDEV_T1_CTRL, self.regs.read(WDEV_T1_CTRL) & !WDEV_T1_ARMED);
+        if self.regs.read(WDEV_T1_INT) & 1 << 31 != 0 { self.regs.write(WDEV_INT_ST, self.regs.read(WDEV_INT_ST) | WDEV_INT_TIMER1); }
+        true
+    }
+    fn irq(&self) -> bool { self.regs.read(WDEV_INT_ST) & self.regs.read(WDEV_INT_ENA) != 0 }
     /// A deterministic sequence seeded from the MAC: a 64-bit LCG (Knuth's MMIX constants), the
     /// high word of each step.
     fn random(&mut self) -> u32 {
@@ -669,7 +710,7 @@ impl Peripherals {
             uart: [Uart::new(UART_LAYOUT), Uart::new(UART_LAYOUT)], frc1: Frc1::new(), frc2: Frc2::new(), wdt: Wdt::default(),
             rtc: Rtc::default(), gpio, io_mux, spi0: RegMem::default(), spi1: Hspi::default(),
             dport: Dport { regs: RegMem::default(), otp: otp_words(mac) },
-            wdev: Wdev { regs: RegMem::default(), rng: seed }, rf: RegMem::default(), other: RegMem::default(), misc: Misc::new(),
+            wdev: Wdev { regs: RegMem::default(), rng: seed, timer1: None }, rf: RegMem::default(), other: RegMem::default(), misc: Misc::new(),
             now: 0, reset: None, cpu_scale_half: 2, pulses: 0, presented: 0, seen: HashSet::new(),
         }
     }
@@ -780,7 +821,8 @@ impl Peripherals {
                 self.mem(addr).write(addr, v);
                 match addr {
                     DPORT_CPU2X => self.cpu_scale_half = if v & 1 != 0 { 1 } else { 2 },
-                    DPORT_WDT_PAUSE => self.wdt.pause(v & 1 << 3 != 0, now),
+                    WDEV_INT_CLR => { let st = self.wdev.regs.read(WDEV_INT_ST); self.wdev.regs.write(WDEV_INT_ST, st & !v); }
+                    WDEV_T1_CTRL | WDEV_T1_LO | WDEV_T1_HI => self.wdev.schedule_timer1(now),
                     _ => {}
                 }
             }
@@ -808,6 +850,7 @@ impl Peripherals {
         self.frc1.next = u64::MAX;
         self.frc2.next = u64::MAX;
         self.wdt.due = None;
+        self.wdev.timer1 = None;
         self.pulses = 0;
         self.rtc.sleep = Some(DeepSleep { until, pulse_end: None });
         self.gpio.set_xpd(Some(true), self.now);
@@ -847,7 +890,7 @@ impl Peripherals {
     /// The cycle of the next timer, watchdog or deep-sleep event (u64::MAX: none).
     pub fn next_event(&self) -> u64 {
         let sleep = self.rtc.sleep.map_or(u64::MAX, |s| s.pulse_end.or(s.until).unwrap_or(u64::MAX));
-        self.frc1.next.min(self.frc2.next).min(self.wdt.next()).min(sleep)
+        self.frc1.next.min(self.frc2.next).min(self.wdt.next()).min(self.wdev.timer1.unwrap_or(u64::MAX)).min(sleep)
     }
 
     /// Device time is `now`: run the timers up to it. Whether an interrupt may have changed.
@@ -867,6 +910,7 @@ impl Peripherals {
         let (edge, reset) = self.wdt.advance(now);
         if edge && self.dport.regs.read(DPORT_TEIE) & TEIE_WDT != 0 { self.pulses |= 1 << INUM_WDT; }
         if reset { self.reset = Some(RST_WDT); }
+        self.wdev.advance(now);
         if let Some(mut s) = self.rtc.sleep {
             if let Some(end) = s.pulse_end.filter(|&e| e <= now) {
                 s.pulse_end = None;
@@ -893,6 +937,7 @@ impl Peripherals {
         let mut level = 0;
         if self.uart_irq(0) || self.uart_irq(1) { level |= 1 << INUM_UART; }
         if self.gpio.status != 0 { level |= 1 << INUM_GPIO; }
+        if self.wdev.irq() { level |= 1 << INUM_WDEV; }
         if self.frc1.status && self.frc1.ctrl & TCIT != 0 && self.dport.regs.read(DPORT_NMI) & 1 == 0 { level |= 1 << INUM_FRC1; }
         let edges = self.pulses & !self.presented;
         self.pulses &= !edges;
@@ -1073,23 +1118,50 @@ mod tests {
         assert_eq!(p.next_event(), 2 * s0 - 1000, "fed");
         p.write32(WDT + 0x14, 0x72);
         assert_eq!(p.next_event(), 2 * s0 - 1000, "only 0x73 feeds");
-        // DPORT 0x18 bit 3 pauses it
-        p.advance(s0);
-        p.write32(DPORT_BASE + 0x18, 1 << 3);
-        assert_eq!(p.next_event(), u64::MAX);
-        p.advance(3 * s0);
-        p.write32(DPORT_BASE + 0x18, 0);
-        assert_eq!(p.next_event(), 4 * s0 - 1000);
+        // DPORT 0x18 bit 3, which the SDK keeps set while it runs, does not pause it
+        p.write32(DPORT_BASE + 0x18, 0xfc70_0008);
+        assert_eq!(p.next_event(), 2 * s0 - 1000);
+        let fed = s0 + 1000;
+        p.advance(fed);
+        p.write32(WDT + 0x14, 0x73);
+        assert_eq!(p.next_event(), fed + s0);
         // stage 0 runs out: the WDT edge (line 8) with DPORT 0x04 bit 0, no reset yet
         p.write32(DPORT_TEIE, 1);
-        assert!(p.advance(4 * s0 - 1000));
+        assert!(p.advance(fed + s0));
         assert_eq!(p.refresh_lines().0, 1 << INUM_WDT);
         assert_eq!((p.reset, p.read32(WDT + 0x10)), (None, 1));
         // stage 1 runs out: a reset with the ROM's OWDT_RESET
-        assert!(!p.advance(4 * s0 - 1000 + s1 - 1));
+        assert!(!p.advance(fed + s0 + s1 - 1));
         assert_eq!(p.reset, None);
-        p.advance(4 * s0 - 1000 + s1);
+        p.advance(fed + s0 + s1);
         assert_eq!(p.reset, Some(crate::rom::boot::RST_WDT));
+    }
+
+    /// The SDK's soft-watchdog timer as libpp programs it at start-up: status bit 26 on line 0
+    /// at the target microsecond, the arm bit cleared; ones to 0xC24 clear the status.
+    #[test]
+    fn wdev_timer1_raises_mac_status_bit26_on_interrupt_0() {
+        let mut p = Peripherals::new([0; 6]);
+        p.write32(WDEV_INT_ENA, 0x2c9f_0300);
+        p.write32(WDEV_T1_INT, 1 << 31);
+        p.write32(WDEV_T1_LO, 0x0018_7a68);
+        p.write32(WDEV_T1_HI, 0);
+        assert_eq!(p.next_event(), u64::MAX, "not armed");
+        p.write32(WDEV_T1_CTRL, 1 << 31);
+        let due = 0x0018_7a68 * 80;
+        assert_eq!(p.next_event(), due);
+        assert!(!p.advance(due - 1));
+        assert_eq!(p.refresh_lines().0, 0);
+        assert!(p.advance(due));
+        assert_eq!((p.read32(WDEV_T1_CTRL), p.read32(WDEV_INT_ST)), (0, 1 << 26));
+        assert_eq!(p.refresh_lines().0, 1 << INUM_WDEV);
+        assert_eq!(p.next_event(), u64::MAX, "one shot");
+        p.write32(WDEV_INT_CLR, u32::MAX);
+        assert_eq!(p.refresh_lines().0, 0);
+        // a target already past runs out at once
+        p.write32(WDEV_T1_LO, 5);
+        p.write32(WDEV_T1_CTRL, 1 << 31);
+        assert_eq!(p.next_event(), due);
     }
 
     #[test]
@@ -1258,6 +1330,82 @@ mod tests {
         assert_eq!((t.tx.as_slice(), t.rx_len), (&[0x9f][..], 3));
         p.spi1.finish_transfer(t, &[0xef, 0x40, 0x16]);
         assert_eq!(p.read32(SPI1 + 0x40), 0x0016_40ef);
+        // an address phase of 40 bits (USER1 bits 26..31 = 39): SPI_ADDR's 32 bits, high byte first
+        p.write32(SPI1 + 0x1C, 1 << 30);
+        p.write32(SPI1 + 0x20, 39 << 26);
+        p.write32(SPI1 + 0x04, 0x1234_5678);
+        p.write32(SPI1, 1 << 18);
+        let t = p.spi1.take_transfer().unwrap();
+        assert_eq!((t.tx.as_slice(), t.rx_len), (&[0x12, 0x34, 0x56, 0x78][..], 0));
+        p.write32(SPI1 + 0x20, 63 << 26);
+        p.spi1.finish_transfer(t, &[]);
+        p.write32(SPI1, 1 << 18);
+        assert_eq!(p.spi1.take_transfer().unwrap().tx.len(), 4, "64 address bits");
+    }
+
+    /// The ROM latches the strapping at a hardware reset's release, when the pads are released: a
+    /// GPIO15 the guest drove high floats, without a pull, low (design section 3), so every
+    /// hardware reset boots the flash. A jump to the reset vector releases nothing and samples
+    /// nothing: the boot mode latched before stays, whatever the pads read.
+    #[test]
+    fn strapping_is_latched_at_hardware_resets_and_kept_across_a_jump() {
+        use crate::rom::boot::{RST_EXT, RST_POWERON, RST_SW, RST_WDT, STRAP_FLASH, STRAP_UART};
+        use emu_core::Bus;
+        use esp_soc::SocBus as _;
+        let mut b = crate::bus::SocBus::new(1 << 20, [0; 6]);
+        let drive15 = |b: &mut crate::bus::SocBus| {
+            b.write32(GPIO + 0x10, 1 << 15).unwrap();          // ENABLE_W1TS
+            b.write32(GPIO + 0x04, 1 << 15).unwrap();          // OUT_W1TS
+            assert!(b.periph.strap().0);
+        };
+        assert_eq!(b.latch_strap(), STRAP_FLASH);
+        for cause in [RST_WDT, RST_SW, RST_EXT, RST_POWERON] {
+            drive15(&mut b);
+            b.request_reset(cause);
+            b.reboot([0; 6]);
+            assert!(!b.periph.strap().0, "cause {cause}: GPIO15 floats low");
+            assert_eq!(b.latch_strap(), STRAP_FLASH, "cause {cause}");
+        }
+        // a jump with GPIO15 driven high keeps the flash boot latched before
+        drive15(&mut b);
+        b.restart_from_reset_vector();
+        b.reboot([0; 6]);
+        assert_eq!(b.latch_strap(), STRAP_FLASH);
+        // GPIO15 held high by the host at an external reset: the SDIO boot (7) is latched, and a
+        // jump keeps it after the host lets go
+        b.gpio_set_input(15, true);
+        b.request_reset(RST_EXT);
+        b.reboot([0; 6]);
+        assert_eq!(b.latch_strap(), 0b111);
+        b.periph.gpio_set_input(15, None);
+        b.restart_from_reset_vector();
+        b.reboot([0; 6]);
+        assert!(!b.periph.strap().0);
+        assert_eq!(b.latch_strap(), 0b111, "a jump keeps the latched boot mode");
+        // GPIO0 low at a hardware reset (a programmer's auto-reset): the UART download, which a
+        // jump (`ESP.restart()`) keeps after GPIO0 is released; the RST pin samples again
+        b.gpio_set_input(0, false);
+        b.request_reset(RST_EXT);
+        b.reboot([0; 6]);
+        assert_eq!(b.latch_strap(), STRAP_UART);
+        b.periph.gpio_set_input(0, None);
+        b.restart_from_reset_vector();
+        b.reboot([0; 6]);
+        assert_eq!(b.latch_strap(), STRAP_UART);
+        assert_eq!(b.read32(GPIO + 0x18).unwrap() >> 16, STRAP_UART, "GPIO_IN's strapping bits");
+        b.request_reset(RST_EXT);
+        b.reboot([0; 6]);
+        assert_eq!(b.latch_strap(), STRAP_FLASH);
+    }
+
+    #[test]
+    fn a_reset_cause_outside_the_roms_numbering_is_an_external_reset() {
+        use esp_soc::SocBus as _;
+        let mut b = crate::bus::SocBus::new(1 << 20, [0; 6]);
+        b.request_reset(12);
+        assert_eq!(b.reboot([0; 6]), crate::rom::boot::RST_EXT);
+        b.request_reset(0);
+        assert_eq!(b.reboot([0; 6]), crate::rom::boot::RST_EXT);
     }
 
     /// The OTP words decode, the way libmain's MAC reader does (Blink image 0x40105434..0x401054cd),

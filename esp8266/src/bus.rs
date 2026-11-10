@@ -103,6 +103,9 @@ pub struct SocBus {
     pub reset_kind: ResetKind,
     /// the host's strapping (`--strap`), GPIO15 << 2 | GPIO0 << 1 | GPIO2; `None`: the pins' levels
     pub strap: Option<u32>,
+    /// the last reset was a jump to the reset vector: the ROM's boot keeps the strapping latched
+    /// at the hardware reset before it (`latch_strap`)
+    pub strap_kept: bool,
     /// a host serves SPI1's transactions (`Hspi::host_wait`); without one the board answers at once
     pub spi_host: bool,
     /// something the host must see happened (an SPI1 transaction waits): `take_host_event`
@@ -121,7 +124,7 @@ impl SocBus {
             rtc_mem: vec![0; (RTC_MEM_HIGH - RTC_MEM_LOW) as usize], flash: Flash::new(flash_size), cache_base: 0, cache_enabled: false,
             periph: Peripherals::new(mac), rom: RomState::default(), board: Box::new(esp_soc::NoBoard),
             cycles: 0, irq_dirty: true, last_fault: None, rom_data_reads: 0, reset_cause: crate::rom::boot::RST_POWERON,
-            sw_reset: false, reset_kind: ResetKind::Jump, strap: None, spi_host: false, host_event: false, clock_half: 0, lines: 0,
+            sw_reset: false, reset_kind: ResetKind::Jump, strap: None, strap_kept: false, spi_host: false, host_event: false, clock_half: 0, lines: 0,
             debug: Default::default(),
         }
     }
@@ -229,10 +232,19 @@ impl SocBus {
         if let Some(t) = self.periph.spi1.host_wait.take() { self.periph.spi1.finish_transfer(t, rx); }
     }
 
-    /// A reset with the ROM's `cause`: an external reset of a chip in deep sleep is its wake-up,
-    /// DEEPSLEEP_RESET (the GPIO16 wire to RST does it).
+    /// A reset with `cause` in the ROM's numbering (`rom::boot::RST_*`, what the banner's
+    /// `rst cause` prints): 1 power-on, 2 external (the RST pin), 3 software, 4 hardware watchdog,
+    /// 5 deep-sleep wake. This is not the ESP32 numbering of `esp_periph::RST_*`, which hosts
+    /// shared with the other chips pass through `esp_soc::SocBus::request_reset`; there 1 is
+    /// POWERON_RESET too, but 2..5 mean other things. A cause outside 1..=5 is logged and taken as
+    /// an external reset, the reset a host can give the chip. An external reset of a chip in deep
+    /// sleep is its wake-up, DEEPSLEEP_RESET (the GPIO16 wire to RST does it).
     pub fn chip_reset(&mut self, cause: u32) {
-        use crate::rom::boot::{RST_DEEPSLEEP, RST_EXT};
+        use crate::rom::boot::{RST_DEEPSLEEP, RST_EXT, RST_POWERON};
+        let cause = if (RST_POWERON..=RST_DEEPSLEEP).contains(&cause) { cause } else {
+            eprintln!("[emu] reset cause {cause} is not an ESP8266 ROM cause (1..=5): taken as an external reset ({RST_EXT})");
+            RST_EXT
+        };
         let cause = if cause == RST_EXT && self.deep_sleep() { RST_DEEPSLEEP } else { cause };
         self.reset_cause = cause;
         self.reset_kind = ResetKind::of(cause);
@@ -253,8 +265,16 @@ impl SocBus {
     pub fn deep_sleep_until(&self) -> Option<u64> { self.periph.rtc.sleep.and_then(|s| s.until) }
 
     /// The boot mode at reset release: the host's `--strap`, or the strapping pins' levels, which
-    /// GPIO_IN then reports in its bits 16 and up.
+    /// GPIO_IN then reports in its bits 16 and up. After a jump to the reset vector nothing was
+    /// released from reset, so the boot mode is the one latched before (`strap_kept`): the chip
+    /// samples GPIO15/GPIO0/GPIO2 only on a hardware reset. That is why `ESP.restart()` right
+    /// after a serial upload, with GPIO0 still held low by the programmer, hangs in the UART
+    /// download mode: real logs show `rst cause:2, boot mode:(1,7)` there and a normal boot after
+    /// a press of RST (esp8266/Arduino issue #1722, "hanging ESP.restart()"; the boot mode number
+    /// is GPIO15 << 2 | GPIO0 << 1 | GPIO2, Arduino ESP8266 3.1.2 doc/boards.rst "Boot Messages
+    /// and Modes"). The second number of the banner (7 there) is not modelled.
     pub fn latch_strap(&mut self) -> u32 {
+        if std::mem::take(&mut self.strap_kept) { return self.periph.gpio.strap; }
         let mode = self.periph.latch_strap();
         if let Some(s) = self.strap { self.periph.gpio.strap = s; return s; }
         mode
