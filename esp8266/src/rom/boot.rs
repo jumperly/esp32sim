@@ -164,8 +164,12 @@ pub fn boot(core: &mut Lx106, bus: &mut SocBus) {
     rom_data_init(bus);
     rom_print(bus, &format!("\n ets Jan  8 2013,rst cause:{}, boot mode:({mode},6)\n\n", bus.reset_cause));
     if mode != STRAP_FLASH {
-        eprintln!("[emu] rom: boot mode {mode} (not a flash boot): the ROM's UART download and other modes are not modelled; stopping");
-        bus.rom.request_stop();
+        // The ROM waits for the download tool (or, in the SDIO and other modes, for its host);
+        // its protocols are not modelled, so the core only waits, with every interrupt masked,
+        // until the next reset (a press of RST with GPIO0 released boots from flash).
+        eprintln!("[emu] rom: boot mode {mode} (not a flash boot): the ROM's UART download and other modes are not modelled; waiting for a reset");
+        core.write_sr(sr::INTENABLE, 0).unwrap();
+        core.waiti(15);
         return;
     }
     match load(bus) {

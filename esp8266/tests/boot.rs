@@ -93,3 +93,22 @@ fn blink_reaches_setup_and_toggles_gpio2() {
     assert!(periods.iter().all(|&p| p.abs_diff(500_000) <= 1_000), "{periods:?}");
     assert_eq!(m.bus.gpio_output() >> 2 & 1, u32::from(toggles.last().unwrap().1));
 }
+
+/// GPIO0 low at reset release (`--strap 1`): the ROM prints its banner and waits for the download
+/// tool, which is not modelled; the core waits with every interrupt masked and device time runs
+/// on (no stop), until a reset with GPIO0 released boots from flash.
+#[test]
+fn uart_download_mode_waits_for_a_reset() {
+    let mut m = machine("esp8266-blink");
+    m.bus.set_strap(1);
+    run_for(&mut m, 0.5);
+    let text = String::from_utf8_lossy(&m.console.uart0).into_owned();
+    assert!(text.contains("rst cause:1, boot mode:(1,6)") && !text.contains("Ready"), "{text}");
+    assert!(m.seconds() >= 0.5);
+    m.bus.strap = None;
+    m.bus.request_reset(rom::boot::RST_EXT);
+    m.reboot();
+    run_for(&mut m, 1.0);
+    let text = String::from_utf8_lossy(&m.console.uart0).into_owned();
+    assert!(text.contains("rst cause:2, boot mode:(3,6)") && text.contains("Ready"), "{text}");
+}
