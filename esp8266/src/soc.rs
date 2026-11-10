@@ -149,6 +149,8 @@ impl esp_soc::SocBus for SocBus {
         self.rom.reset();
         self.cache_base = 0;
         self.cache_enabled = false;
+        // RAM may have been cleared and the window moved under the decoded code
+        self.code_changed();
         self.sw_reset = false;
         self.irq_dirty = true;
         self.jumperly_after_reboot();   // Jumperly patch J29
@@ -183,7 +185,7 @@ impl esp_soc::SocBus for SocBus {
     fn audio(&self) -> (&[i16], u32) { (&[], 44100) }
     fn irq_sources_of(&self, _core: usize, _line: u32) -> Vec<usize> { Vec::new() }
     fn set_debug(&mut self, f: &esp_soc::DebugFlags) { self.debug = f.clone(); self.periph.misc.log_all = f.has("mmio"); }
-    fn set_flash_size(&mut self, bytes: usize) { self.flash = crate::flash::Flash::new(bytes); }
+    fn set_flash_size(&mut self, bytes: usize) { self.flash = crate::flash::Flash::new(bytes); self.code_changed(); }
     /// The host's strapping instead of the pins' levels (`--strap`).
     fn set_strap(&mut self, v: u32) { self.strap = Some(v & 7); self.periph.gpio.strap = v & 7; }
     fn set_reset_cause(&mut self, cause: u32) { self.reset_cause = cause; }

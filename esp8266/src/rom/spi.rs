@@ -25,19 +25,19 @@ pub fn spi_read(core: &mut Lx106, bus: &mut SocBus) {
 pub fn spi_write(core: &mut Lx106, bus: &mut SocBus) {
     let (addr, src, size) = (arg(core, bus, 0), arg(core, bus, 1), arg(core, bus, 2));
     let data: Option<Vec<u8>> = (0..size).map(|i| bus.peek8(src.wrapping_add(i))).collect();
-    let r = match data { Some(d) if bus.flash.write(addr, &d) => OK, _ => ERR };
+    let r = match data { Some(d) if bus.flash_write(addr, &d) => OK, _ => ERR };
     ret(core, bus, r);
 }
 
 pub fn spi_erase_sector(core: &mut Lx106, bus: &mut SocBus) {
     let n = arg(core, bus, 0);
-    let r = if bus.flash.erase_sector(n) { OK } else { ERR };
+    let r = if bus.flash_erase_sector(n) { OK } else { ERR };
     ret(core, bus, r);
 }
 
 pub fn spi_erase_block(core: &mut Lx106, bus: &mut SocBus) {
     let n = arg(core, bus, 0);
-    let r = if bus.flash.erase_block(n) { OK } else { ERR };
+    let r = if bus.flash_erase_block(n) { OK } else { ERR };
     ret(core, bus, r);
 }
 

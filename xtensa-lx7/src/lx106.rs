@@ -3,11 +3,14 @@
 //! Configuration source: Arduino ESP8266 3.1.2 (210897ef),
 //! libraries/GDBStub/src/xtensa/config/core-isa.h, checked against PlatformIO
 //! toolchain-xtensa 2.100300.220621 (GCC 10.3.0), include/xtensa/config/core-isa.h.
-//! This adapter intentionally never enters the LX6/LX7 block caches or either JIT.
+//! This adapter intentionally never enters the LX6/LX7 block caches or either JIT; `run` keeps
+//! predecoded blocks of its own (`blocks`).
 use crate::{decode, disasm, exec, Bus, Core, Cpu, Insn, Op, Trap};
 use crate::state::{exc, ps, sr};
-use emu_core::core::pc_bit;
 use emu_core::{StepKind, StepOutcome};
+
+mod blocks;
+use blocks::{Blocks, Bounds, Decoded, ALIGN, LITERAL, SLOW, STORE};
 
 // core-isa.h:260-343,390-419. Reset selection 1 is the ESP8266 ROM entry
 // (_ResetVector in Arduino 3.1.2 tools/sdk/ld/eagle.rom.addr.v6.ld).
@@ -69,7 +72,6 @@ fn exchangeable_sr(n: u32) -> bool {
 
 /// Interpreter-only core, selectable as a distinct `emu_core::Core` type.
 /// The backing state is private: callers cannot enable windows, extra timers or JIT.
-#[derive(Clone)]
 pub struct Lx106 {
     cpu: Cpu,
     litbase: u32,
@@ -78,18 +80,38 @@ pub struct Lx106 {
     /// `Core::set_boundary_range`: its start and length (0: none), tested exactly
     range_lo: u32,
     range_len: u32,
+    /// the interpreter's predecoded blocks (`blocks`)
+    blocks: Blocks,
 }
 
 impl Default for Lx106 {
     fn default() -> Self { Self::new() }
 }
 
+/// A clone starts with no decoded blocks.
+impl Clone for Lx106 {
+    fn clone(&self) -> Self {
+        Self { cpu: self.cpu.clone(), litbase: self.litbase, boundaries: self.boundaries, range_lo: self.range_lo,
+            range_len: self.range_len, blocks: Blocks::new(self.blocks.enabled) }
+    }
+}
+
 impl Lx106 {
     pub fn new() -> Self {
-        let mut c = Self { cpu: Cpu::new(0), litbase: 0, boundaries: 0, range_lo: 0, range_len: 0 };
+        let mut c = Self { cpu: Cpu::new(0), litbase: 0, boundaries: 0, range_lo: 0, range_len: 0, blocks: Blocks::new(true) };
         c.reset();
         c
     }
+
+    /// Run with predecoded blocks (the default) or fetch and decode every instruction, the
+    /// reference the blocks are tested against. Either way the same instructions retire.
+    pub fn set_block_cache(&mut self, on: bool) {
+        self.blocks.flush();
+        self.blocks.enabled = on;
+    }
+
+    /// (blocks decoded, cache flushes) since the core was made.
+    pub fn block_cache_stats(&self) -> (u64, u64) { (self.blocks.builds, self.blocks.flushes) }
 
     /// Read-only diagnostic state. Register writes go through the profile's accessors.
     pub fn state(&self) -> &Cpu { &self.cpu }
@@ -175,20 +197,40 @@ impl Lx106 {
         }
     }
 
+    /// core-isa.h:110-113: no hardware unaligned loads/stores. Keep this profile-specific rule
+    /// out of existing ESP32 memory paths. `align` is the address mask of the access.
+    #[inline(always)]
+    fn misaligned(&mut self, i: &Insn, align: u32) -> Option<Trap> {
+        let addr = self.get_ar(i.s).wrapping_add(i.imm as u32);
+        if addr & align == 0 { return None; }
+        self.cpu.excvaddr = addr;
+        Some(self.raise(exc::LOAD_STORE_ALIGNMENT))
+    }
+
+    /// Xtensa ISA L32R: signed, word-scaled 16-bit literal displacement; extended mode uses
+    /// LITBASE[31:12] instead of aligned PC+3.
+    #[inline(always)]
+    fn literal(&self, i: &mut Insn) {
+        if self.litbase & 1 != 0 { i.imm = (self.litbase & 0xffff_f000).wrapping_add(((i.raw >> 8) << 2) | 0xfffc_0000) as i32; }
+    }
+
+    /// The shared executor, with exceptions vectored the LX106 way (no S3 vector table).
+    #[inline(always)]
+    fn exec_plain<B: Bus>(&mut self, bus: &mut B, i: &Insn) -> Result<(), Trap> {
+        let ps = self.cpu.ps;
+        let result = exec::exec_insn(&mut self.cpu, bus, i);
+        if matches!(result, Err(Trap::Exception(_))) { self.cpu.pc = self.vector(ps); }
+        result
+    }
+
     fn execute<B: Bus>(&mut self, bus: &mut B, mut i: Insn) -> Result<(), Trap> {
         if !supports(&i) { return Err(self.raise(exc::ILLEGAL)); }
-        // core-isa.h:110-113: no hardware unaligned loads/stores. Keep this
-        // profile-specific rule out of existing ESP32 memory paths.
         let align = match i.op {
             Op::L16ui | Op::L16si | Op::S16i => 1,
             Op::L32i | Op::L32iN | Op::S32i | Op::S32iN => 3,
             _ => 0,
         };
-        let addr = self.get_ar(i.s).wrapping_add(i.imm as u32);
-        if addr & align != 0 {
-            self.cpu.excvaddr = addr;
-            return Err(self.raise(exc::LOAD_STORE_ALIGNMENT));
-        }
+        if let Some(t) = self.misaligned(&i, align) { return Err(t); }
         let next = self.cpu.pc.wrapping_add(i.len as u32);
         match i.op {
             // The SoC must eventually supply these external-register operations.
@@ -217,17 +259,99 @@ impl Lx106 {
                 c.waiting = false;
                 return Err(Trap::Exception(0x108));
             }
-            Op::L32r if self.litbase & 1 != 0 => {
-                // Xtensa ISA L32R: signed, word-scaled 16-bit literal displacement;
-                // extended mode uses LITBASE[31:12] instead of aligned PC+3.
-                i.imm = (self.litbase & 0xffff_f000).wrapping_add(((i.raw >> 8) << 2) | 0xfffc_0000) as i32;
-            }
+            Op::L32r => self.literal(&mut i),
             _ => {}
         }
-        let vector = self.vector(self.cpu.ps);
-        let result = exec::exec_insn(&mut self.cpu, bus, &i);
-        if matches!(result, Err(Trap::Exception(_))) { self.cpu.pc = vector; }
-        result
+        self.exec_plain(bus, &i)
+    }
+
+    /// Retire `n` instructions: the instruction count and CCOUNT (with its CCOMPARE0 match).
+    #[inline(always)]
+    fn retire(&mut self, n: u32) {
+        self.cpu.insn_count += u64::from(n);
+        self.advance_cycles(n * self.cpu.approximate_cpi);
+    }
+
+    /// The loop over `step` without the `StepOutcome` facts nobody reads here: every instruction
+    /// is fetched and decoded as it runs.
+    fn run_uncached<B: Bus>(&mut self, bus: &mut B, budget: u32) -> (u32, Option<Trap>) {
+        let bounds = self.bounds();
+        for i in 0..budget {
+            let pc = self.cpu.pc;
+            if i > 0 && bounds.hit(pc) && !self.cpu.waiting { return (i, None); }
+            if let Some(t) = self.take_interrupt() { return (i + 1, Some(t)); }
+            if self.cpu.waiting { self.advance_cycles(self.cpu.approximate_cpi); continue; }
+            let r = match bus.fetch(pc) {
+                Err(_) => { self.cpu.excvaddr = pc; return (i + 1, Some(self.raise(exc::IFETCH_ERROR))); }
+                Ok(bytes) => self.execute(bus, decode(pc, bytes)),
+            };
+            self.retire(1);
+            if let Err(t) = r { return (i + 1, Some(t)); }
+        }
+        (budget, None)
+    }
+
+    fn bounds(&self) -> Bounds { Bounds { bloom: self.boundaries, lo: self.range_lo, len: self.range_len } }
+
+    /// `run_uncached` a block at a time: the boundary, interrupt and wait checks are made where
+    /// the uncached loop would make them with an effect, in front of each block (`blocks`).
+    fn run_blocks<B: Bus>(&mut self, bus: &mut B, budget: u32) -> (u32, Option<Trap>) {
+        let bounds = self.bounds();
+        let mut i = 0;
+        while i < budget {
+            let pc = self.cpu.pc;
+            if i > 0 && bounds.hit(pc) && !self.cpu.waiting { return (i, None); }
+            if let Some(t) = self.take_interrupt() { return (i + 1, Some(t)); }
+            if self.cpu.waiting { self.advance_cycles(self.cpu.approximate_cpi); i += 1; continue; }
+            let Some((ei, k, end)) = self.blocks.find(bus, pc, bounds) else {
+                self.cpu.excvaddr = pc;
+                return (i + 1, Some(self.raise(exc::IFETCH_ERROR)));
+            };
+            let (done, trap) = self.run_block(bus, ei, k, end, budget - i);
+            i += done;
+            if trap.is_some() { return (i, trap); }
+        }
+        (budget, None)
+    }
+
+    /// Run block `ei` from arena index `k` (before `end`) for at most `budget` instructions, and no
+    /// further than the instruction whose cycles reach the CCOMPARE0 match, so the uncached loop
+    /// would not have taken an interrupt in between. Returns the instructions retired and the trap.
+    #[inline(always)]
+    fn run_block<B: Bus>(&mut self, bus: &mut B, ei: u32, mut k: u32, end: u32, budget: u32) -> (u32, Option<Trap>) {
+        let cpi = self.cpu.approximate_cpi;
+        let mut limit = (end - k).min(budget);
+        // the match is in (CCOUNT, CCOUNT + n * cpi] after n more instructions (`advance_cycles`)
+        let d = self.cpu.ccompare[0].wrapping_sub(self.cpu.ccount);
+        if d != 0 { limit = limit.min(d.div_ceil(cpi)); }
+        let (mut done, mut retired, mut stopped) = (0, 0, false);
+        let mut trap = None;
+        while done < limit {
+            let Decoded { mut insn, kind } = self.blocks.arena[k as usize];
+            k += 1;
+            done += 1;
+            let r = if kind & SLOW != 0 {
+                // a special register access sees exact CCOUNT; WSR and XSR end the block
+                self.retire(done - 1 - retired);
+                retired = done - 1;
+                self.execute(bus, insn)
+            } else {
+                let fault = if kind & ALIGN != 0 { self.misaligned(&insn, u32::from(kind & ALIGN)) } else { None };
+                match fault {
+                    Some(t) => Err(t),
+                    None => {
+                        if kind & LITERAL != 0 { self.literal(&mut insn); }
+                        self.exec_plain(bus, &insn)
+                    }
+                }
+            };
+            if let Err(t) = r { trap = Some(t); break; }
+            // a store that changed code ends the run; the next lookup decodes the new bytes
+            if kind & STORE != 0 && !self.blocks.still_valid(ei, bus.page_versions()) { stopped = true; break; }
+        }
+        self.retire(done - retired);
+        if trap.is_none() && !stopped && k < end { self.blocks.cut(self.cpu.pc, ei, k); }
+        (done, trap)
     }
 }
 
@@ -239,6 +363,7 @@ impl Core for Lx106 {
         self.cpu.configid = [0xc28c_dafa, 0x1082_b6f6];
         self.cpu.memctl = 0;
         self.litbase = 0;
+        self.blocks.flush();
     }
     fn pc(&self) -> u32 { self.cpu.pc }
     fn set_pc(&mut self, pc: u32) { self.cpu.pc = pc; }
@@ -287,25 +412,21 @@ impl Core for Lx106 {
     }
     /// `step` until the budget is spent or a trap, returning in front of a boundary pc (a stub, a
     /// probe, or a pc of the boundary range, such as a SoC's ROM modelled in Rust) so the machine
-    /// intercepts it there. The loop is `step` without the `StepOutcome` facts nobody reads here.
+    /// intercepts it there. Predecoded blocks (`blocks`) when the bus keeps page versions, else
+    /// the uncached loop; both retire the same instructions with the same effects.
     fn run<B: Bus>(&mut self, bus: &mut B, budget: u32) -> (u32, Option<Trap>) {
-        for i in 0..budget {
-            let pc = self.cpu.pc;
-            if i > 0 && (self.boundaries & pc_bit(pc) != 0 || pc.wrapping_sub(self.range_lo) < self.range_len) && !self.cpu.waiting { return (i, None); }
-            if let Some(t) = self.take_interrupt() { return (i + 1, Some(t)); }
-            if self.cpu.waiting { self.advance_cycles(self.cpu.approximate_cpi); continue; }
-            let r = match bus.fetch(pc) {
-                Err(_) => { self.cpu.excvaddr = pc; return (i + 1, Some(self.raise(exc::IFETCH_ERROR))); }
-                Ok(bytes) => self.execute(bus, decode(pc, bytes)),
-            };
-            self.cpu.insn_count += 1;
-            self.advance_cycles(self.cpu.approximate_cpi);
-            if let Err(t) = r { return (i + 1, Some(t)); }
-        }
-        (budget, None)
+        if self.blocks.enabled && !bus.page_versions().is_empty() { self.run_blocks(bus, budget) } else { self.run_uncached(bus, budget) }
     }
-    fn set_boundaries(&mut self, bloom: u64) { self.boundaries = bloom; }
-    fn set_boundary_range(&mut self, lo: u32, hi: u32) { self.range_lo = lo; self.range_len = hi.saturating_sub(lo); }
+    fn set_boundaries(&mut self, bloom: u64) {
+        if bloom != self.boundaries { self.blocks.flush(); }
+        self.boundaries = bloom;
+    }
+    fn set_boundary_range(&mut self, lo: u32, hi: u32) {
+        let len = hi.saturating_sub(lo);
+        if (lo, len) != (self.range_lo, self.range_len) { self.blocks.flush(); }
+        self.range_lo = lo; self.range_len = len;
+    }
+    fn flush_caches(&mut self) { self.blocks.flush(); }
     fn regs(&self, out: &mut Vec<(&'static str, u32)>) { self.cpu.regs(out); }
     fn arg<B: Bus>(&self, bus: &mut B, n: usize) -> u32 {
         if n < 6 { self.get_ar(2 + n as u8) } else { bus.read32(self.get_ar(1).wrapping_add(((n - 6) * 4) as u32)).unwrap_or(0) }

@@ -402,3 +402,123 @@ fn waiti_sleeps_at_the_pc_until_an_interrupt_and_returns_there() {
     assert!(!c.waiting());
     assert_eq!((c.state().epc[1], c.pc()), (BASE + 0x100, BASE + 0x50));
 }
+
+/// `count` NOPs from BASE and a `j BASE` behind them (Xtensa ISA CALL format: op0 6, n 0, an
+/// 18-bit offset from pc + 4): a straight-line loop longer than one decoded block.
+fn nop_loop(b: &mut FlatRam, count: usize) {
+    for i in 0..count { b.mem[i * 3..i * 3 + 3].copy_from_slice(&[0xf0, 0x20, 0x00]); }
+    let offset = (-(3 * count as i32) - 4) as u32 & 0x3ffff;
+    b.mem[count * 3..count * 3 + 3].copy_from_slice(&((offset << 6) | 6).to_le_bytes()[..3]);
+}
+
+/// What `run` returned for each slice, then EPC1, the instruction count, CCOUNT moved and the pc.
+type TimerFacts = (Vec<(u32, Option<Trap>)>, u32, u64, u32, u32);
+
+/// The interrupt facts of a run in slices of `slice` until the CCOMPARE0 interrupt is taken.
+fn timer_run(cached: bool, cpi: u32, after: u32, slice: u32) -> TimerFacts {
+    let (mut c, mut b) = machine(BASE);
+    nop_loop(&mut b, 45);
+    c.set_block_cache(cached);
+    c.set_approximate_cpi(cpi);
+    c.write_sr(sr::INTENABLE, 1 << 6).unwrap();
+    let t0 = c.state().ccount;
+    c.write_sr(sr::CCOMPARE0, t0.wrapping_add(after)).unwrap();
+    let mut log = Vec::new();
+    while log.len() < 1000 {
+        let r = c.run(&mut b, slice);
+        log.push(r);
+        if r.1.is_some() { break; }
+    }
+    assert!(!cached || c.block_cache_stats().0 > 0, "blocks were decoded");
+    (log, c.state().epc[1], c.insn_count(), c.state().ccount.wrapping_sub(t0), c.pc())
+}
+
+#[test]
+fn decoded_blocks_take_the_timer_interrupt_in_front_of_the_same_instruction() {
+    for cpi in [1, 2, 3] {
+        for after in (1..=100).chain([1000, 4093]) {
+            for slice in [5, 64, 256] {
+                let cached = timer_run(true, cpi, after, slice);
+                assert_eq!(cached, timer_run(false, cpi, after, slice), "cpi {cpi}, CCOMPARE0 at +{after}, slices of {slice}");
+                assert_eq!(cached.0.last().unwrap().1, Some(Trap::Interrupt(6)));
+            }
+        }
+    }
+}
+
+#[test]
+fn decoded_blocks_see_code_written_before_and_inside_them() {
+    // s32i a5, a6, 8 / nop / nop.n / movi a2, 1 / j . : the store replaces the MOVI it reaches
+    let program = [0x52, 0x66, 0x02, 0xf0, 0x20, 0x00, 0x3d, 0xf0, 0x22, 0xa0, 0x01, 0x06, 0xff, 0xff];
+    for cached in [true, false] {
+        let (mut c, mut b) = machine(BASE);
+        c.set_block_cache(cached);
+        b.mem[..program.len()].copy_from_slice(&program);
+        // first without the store reaching the MOVI: a6 points elsewhere
+        c.set_ar(5, 0x06_02_a0_22); c.set_ar(6, BASE + 0x100);
+        assert_eq!(c.run(&mut b, 5), (5, None));
+        assert_eq!((c.get_ar(2), c.pc()), (1, BASE + 11));
+        // the store in the same block now rewrites the MOVI to `movi a2, 2` before it runs
+        c.set_pc(BASE); c.set_ar(6, BASE);
+        assert_eq!(c.run(&mut b, 5), (5, None), "cached {cached}");
+        assert_eq!((c.get_ar(2), c.pc()), (2, BASE + 11), "cached {cached}");
+        // a write from outside (a loader) between runs: `movi a2, 3`
+        b.write32(BASE + 8, 0x06_03_a0_22).unwrap();
+        c.set_pc(BASE + 8);
+        assert_eq!(c.run(&mut b, 2), (2, None));
+        assert_eq!(c.get_ar(2), 3, "cached {cached}");
+        assert_eq!(c.insn_count(), 12);
+    }
+}
+
+#[test]
+fn decoded_blocks_follow_new_boundaries_and_literal_base() {
+    let (mut c, mut b) = machine(BASE);
+    nop_loop(&mut b, 4);
+    assert_eq!(c.run(&mut b, 5), (5, None), "the loop runs once around: four NOPs and the jump");
+    // a boundary inside the block decoded above: the next run stops in front of it
+    c.set_boundaries(emu_core::core::pc_bit(BASE + 6));
+    assert_eq!(c.run(&mut b, 10), (2, None));
+    assert_eq!(c.pc(), BASE + 6);
+    c.set_boundaries(0);
+    assert_eq!(c.run(&mut b, 3), (3, None));
+    assert_eq!(c.pc(), BASE);
+    // L32R takes LITBASE as it is when it runs, also from a decoded block
+    let (mut c, mut b) = machine(corpus::LITERAL_INSN);
+    assert_eq!(c.run(&mut b, 1), (1, None));
+    assert_eq!(c.get_ar(2), 0x12345678);
+    c.set_pc(corpus::LITERAL_INSN);
+    c.write_sr(5, BASE + 0x2001).unwrap();
+    b.write32(BASE + 0x1ffc, 0xaabbccdd).unwrap();
+    assert_eq!(c.run(&mut b, 1), (1, None));
+    assert_eq!(c.get_ar(2), 0xaabbccdd);
+}
+
+#[test]
+fn faults_inside_decoded_blocks_trap_like_the_uncached_loop() {
+    // nop / nop / l32i a2, a1, 0 (misaligned a1) / nop: the third instruction traps
+    let program = [0xf0, 0x20, 0x00, 0xf0, 0x20, 0x00, 0x28, 0x01, 0xf0, 0x20, 0x00];
+    for (a1, cause) in [(BASE + 0x8001, exc::LOAD_STORE_ALIGNMENT), (0x1000, exc::LOAD_PROHIBITED)] {
+        let mut seen = Vec::new();
+        for cached in [true, false] {
+            let (mut c, mut b) = machine(BASE);
+            c.set_block_cache(cached);
+            b.mem[..program.len()].copy_from_slice(&program);
+            c.set_ar(1, a1);
+            let r = c.run(&mut b, 10);
+            seen.push((r, c.pc(), c.state().epc[1], c.state().excvaddr, c.state().exccause, c.insn_count(), c.state().ccount));
+        }
+        assert_eq!(seen[0], seen[1]);
+        assert_eq!(seen[0].0, (3, Some(Trap::Exception(cause))));
+        assert_eq!((seen[0].1, seen[0].2), (0x4000_0030, BASE + 6));
+    }
+    // an unmapped pc is an instruction fetch error, even where an empty slot of the table is
+    let (mut c, mut b) = machine(BASE);
+    nop_loop(&mut b, 2);
+    assert_eq!(c.run(&mut b, 3), (3, None));
+    for pc in [0, 1, 2, 0x1234_5679] {
+        c.set_pc(pc);
+        assert_eq!(c.run(&mut b, 10), (1, Some(Trap::Exception(exc::IFETCH_ERROR))), "pc {pc:#x}");
+        assert_eq!(c.state().excvaddr, pc);
+    }
+}
