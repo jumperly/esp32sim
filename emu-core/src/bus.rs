@@ -10,6 +10,9 @@ pub enum Fault {
     Prohibited,
     /// address is not aligned for this access width
     Misaligned,
+    /// memory that only takes 32-bit accesses was reached with a narrower one (ESP8266 IRAM and
+    /// flash cache: Xtensa EXCCAUSE 3, LoadStoreError, which the Arduino core's handler emulates)
+    LoadStoreError,
 }
 
 /// Number of entries in a bus's software TLB and the write-version page size, fixed here

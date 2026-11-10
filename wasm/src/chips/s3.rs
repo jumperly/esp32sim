@@ -119,7 +119,7 @@ impl JumperlyChip for esp32s3::Machine {
         self.bus.cycles
     }
 
-    fn wifi_link(&mut self) -> &mut esp_soc::wifi::StationLink { &mut self.bus.periph.wifi.link }
+    fn wifi_link(&mut self) -> Option<&mut esp_soc::wifi::StationLink> { Some(&mut self.bus.periph.wifi.link) }
 
     fn set_mac(&mut self, mac: [u8; 6]) -> bool {
         self.mac = mac;
@@ -127,7 +127,7 @@ impl JumperlyChip for esp32s3::Machine {
         true
     }
 
-    fn ble(&mut self) -> &mut esp_soc::ble::vhci::Ble { &mut self.bus.ble }
+    fn ble(&mut self) -> Option<&mut esp_soc::ble::vhci::Ble> { Some(&mut self.bus.ble) }
 
     /// Jumperly patch J16: ESP32-S3-WROOM-2's octal flash.
     fn flash_octal(&mut self, on: bool) -> bool {

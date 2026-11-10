@@ -84,6 +84,7 @@ dependencies = [
  "esp32c6",
  "esp32p4",
  "esp32s3",
+ "esp8266",
 ]
 
 [[package]]
@@ -98,6 +99,7 @@ dependencies = [
  "esp32p4",
  "esp32s3",
  "esp32sim-wasm-jit",
+ "esp8266",
  "xtensa-lx7",
 ]
 
@@ -108,6 +110,16 @@ dependencies = [
  "emu-core",
  "esp-soc",
  "esp32s3",
+ "xtensa-lx7",
+]
+
+[[package]]
+name = "esp8266"
+version = "0.3.0"
+dependencies = [
+ "emu-core",
+ "esp-periph",
+ "esp-soc",
  "xtensa-lx7",
 ]
 

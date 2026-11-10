@@ -57,12 +57,14 @@ pub(crate) trait JumperlyChip {
     fn pending_cycles(&self) -> u64 { 0 }
     /// Deliver the bus's deferred device time; the cycle count after it.
     fn flush_ticks(&mut self) -> u64;
-    /// The station's Wi-Fi link (no deferred time delivered: see `flush_ticks`).
-    fn wifi_link(&mut self) -> &mut esp_soc::wifi::StationLink;
+    /// The station's Wi-Fi link (no deferred time delivered: see `flush_ticks`); None for a chip
+    /// whose radio is not modelled (Jumperly patch J29: the ESP8266), so the Wi-Fi exports answer
+    /// as without an access point.
+    fn wifi_link(&mut self) -> Option<&mut esp_soc::wifi::StationLink>;
     /// The station's MAC (efuse and machine); false when the chip cannot take one.
     fn set_mac(&mut self, mac: [u8; 6]) -> bool { let _ = mac; false }
-    /// The virtual BLE controller.
-    fn ble(&mut self) -> &mut esp_soc::ble::vhci::Ble;
+    /// The virtual BLE controller; None for a chip without Bluetooth (J29: the ESP8266).
+    fn ble(&mut self) -> Option<&mut esp_soc::ble::vhci::Ble>;
     /// Octal SPI flash (J16) when `on`; false when the chip has no octal flash.
     fn flash_octal(&mut self, on: bool) -> bool { let _ = on; false }
     /// The DAC output changes since the last call: (GPIO, mV) for an enabled output, (GPIO,
@@ -72,6 +74,10 @@ pub(crate) trait JumperlyChip {
     fn touch_set(&mut self, gpio: u32, touched: bool) -> bool { let _ = (gpio, touched); false }
     /// The `[emu]` lines the chip has for the host log since the last call (after each slice).
     fn take_notes(&mut self) -> Vec<&'static str> { Vec::new() }
+    /// Jumperly patch J29: decode a software I2C master on GPIO `sda` / `scl` (`on`) or stop; the
+    /// chip plays the circuit's targets through `host_i2c` itself. False for a chip with I2C
+    /// controllers (their bridge is `bus_host`) or pins it cannot take.
+    fn soft_i2c(&mut self, sda: u8, scl: u8, on: bool) -> bool { let _ = (sda, scl, on); false }
 }
 
 /// The station's MAC in efuse BLK1 words 0 and 1, as `Efuse::new` lays them out; the rest of
@@ -187,6 +193,30 @@ mod tests {
         assert!(c.touch_set(4, true) && !c.touch_set(5, true));
         assert!(c.take_dac().is_empty());
         unsafe { esp32sim_delete(classic) };
+
+        // Jumperly patch J29: the ESP8266 has two UARTs (UART1 transmits only), no matrix, no
+        // radio, the soft I2C decoder instead of controllers
+        let esp8266 = new("esp8266");
+        // SAFETY: the test owns the live emulator until it deletes it.
+        let c = unsafe { &mut *esp8266 }.m.chip_mut().expect("the ESP8266 has a host ABI");
+        assert_eq!((c.pins(), c.console_ports(), c.cpu_hz()), (17, 2, 80_000_000));
+        assert!(c.i2s(0).is_none() && !c.flash_octal(true) && c.take_dac().is_empty());
+        assert!(c.wifi_link().is_none() && c.ble().is_none());
+        assert_eq!((c.uart_in(1, b"x"), c.uart_in(2, b"x")), (Some(0), None));
+        assert_eq!(c.gpio_in_pin(0), 255);
+        assert!(c.soft_i2c(4, 5, true) && !c.soft_i2c(16, 5, true));
+        assert!(!c.adc_set(17, 500), "outside Jumperly mode");
+        unsafe { esp32sim_delete(esp8266) };
+        for name in ["esp12f", "esp-12f"] {
+            let e = new(name);
+            // SAFETY: the test owns the live emulator until it deletes it.
+            assert_eq!(unsafe { &*e }.m.chip(), "esp8266");
+            unsafe { esp32sim_delete(e) };
+        }
+        let s3 = new("none");
+        // SAFETY: the test owns the live emulator until it deletes it.
+        assert!(!unsafe { &mut *s3 }.m.chip_mut().unwrap().soft_i2c(4, 5, true), "the S3 has I2C controllers");
+        unsafe { esp32sim_delete(s3) };
 
         let c6 = new("esp32c6");
         // SAFETY: the test owns the live emulator until it deletes it.

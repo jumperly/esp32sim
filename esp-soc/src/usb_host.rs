@@ -64,7 +64,7 @@ pub fn run_machine_until<S: Soc>(m: &mut Machine<S>, t_ns: u64, insns: &mut u64,
             Stop::Halted | Stop::MaxInsns => {}
             Stop::SwReset => {
                 let cause = m.bus.reset_cause();
-                eprintln!("[emu] chip reset at t={:.3}s: cause {:#x} ({})", m.seconds(), cause, esp_periph::reset_cause_name(cause));
+                eprintln!("[emu] chip reset at t={:.3}s: cause {:#x} ({})", m.seconds(), cause, S::reset_cause_name(cause));
                 reset(m)?;
             }
             s => return Err(format!("the run stopped: {s:?}")),

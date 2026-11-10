@@ -105,7 +105,7 @@ impl<R: Revision> Soc for Esp32p4<R> {
     const NAME: &'static str = "esp32p4";
     /// IDF v5.5.3 components/bootloader/Kconfig.projbuild: BOOTLOADER_OFFSET_IN_FLASH 0x2000.
     const BOOTLOADER_OFFSET: usize = 0x2000;
-    const ROM_ELF: &'static str = R::ROM_ELF;
+    const ROM_ELF: Option<&'static str> = Some(R::ROM_ELF);
     const CPU_HZ: u64 = periph::CPU_HZ;
     const CORES: usize = 2;
     const IDLE_CHUNK: u64 = 64;

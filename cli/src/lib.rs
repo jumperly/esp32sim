@@ -1,4 +1,4 @@
-//! esp32sim — the command line, one front end for every chip (`--chip esp32|s3|c3|c6|p4`; the `esp32sim-c3`,
+//! esp32sim — the command line, one front end for every chip (`--chip esp32|s3|c3|c6|p4|esp8266`; the `esp32sim-c3`,
 //! `esp32sim-c6` and `esp32sim-p4` binaries are `--chip c3` / `--chip c6` / `--chip p4`). Parsing and everything a run does are chip-agnostic over
 //! `Machine<S>`; the few flags a chip owns (board, WiFi, camera, PSRAM, register presets) live in
 //! its setup function.
@@ -16,14 +16,16 @@ fn usage(chip: &str) -> ! { help(chip, 2) }
 
 /// `--help` prints this and exits 0; a usage error prints it and exits 2.
 fn help(chip: &str, code: i32) -> ! {
-    eprintln!("usage: esp32sim [--chip esp32|s3|c3|c6|p4] --boot rom|app --bootloader B.bin --ptable P.bin --app A.bin [--elf X.elf]... [options]");
+    eprintln!("usage: esp32sim [--chip esp32|s3|c3|c6|p4|esp8266] --boot rom|app --bootloader B.bin --ptable P.bin --app A.bin [--elf X.elf]... [options]");
     eprintln!("       esp32sim --flash-image flash.bin --boot rom [options]            (a whole flash dump instead of the three images)");
     eprintln!("       default chip here: {}; esp32sim-c3, esp32sim-c6 and esp32sim-p4 are --chip c3 / --chip c6 / --chip p4", chip);
     eprintln!();
     eprintln!("  --rom F               the chip's mask ROM ELF; default: $ESP32SIM_ROM_DIR, then ~/.espressif/tools/esp-rom-elfs/*/");
     eprintln!("                        (Espressif's, not in the tarball: tools/fetch-rom-elfs.sh DIR downloads all five)");
     eprintln!("  --board NAME          board model (S3: atech14, waveshare-lcd4b, waveshare-amoled18-v2, waveshare-cam, none;");
-    eprintln!("                        C6: waveshare-c6-lcd147, none; P4: waveshare-p4-lcd35, none; classic: ttgo-tdisplay, ulanzi-tc001, esp32dev, none)");
+    eprintln!("                        C6: waveshare-c6-lcd147, none; P4: waveshare-p4-lcd35, none; classic: ttgo-tdisplay, ulanzi-tc001, esp32dev, none;");
+    eprintln!("                        ESP8266: esp12f, none)");
+    eprintln!("  --rom-strict          ESP8266: stop at a call into the ROM that the model lacks, instead of returning 0");
     eprintln!("  --flash-mb N, --psram-mb N   memory sizes (S3 default 8 / 2, C3, C6 and classic 4 / 0, P4 16 / 0)");
     eprintln!("  --max-seconds S       stop after S emulated seconds (always give one: the run returns)");
     eprintln!("  --console usb|uart0|both|none   which consoles to print (uart0 shows the ROM and bootloader)");
@@ -117,6 +119,8 @@ pub struct Opts {
     pub spi2_timing: bool, pub measured_te: bool,
     pub max_insns: u64, pub max_seconds: Option<f64>, pub script: Option<String>, pub serial: Option<String>,
     pub console: Option<String>, pub console_prefix: bool, pub realtime: bool, pub web_port: Option<u16>, pub web_dir: Option<String>, pub no_reboot: bool,
+    /// `--rom-strict`: the ESP8266's modelled ROM stops at an entry it lacks
+    pub rom_strict: bool,
     pub i2s_tone: Vec<String>,
     pub wav: Option<String>, pub tft_png: Option<String>, pub gram_png: Option<String>, pub dump: bool,
     pub trace: bool, pub trace_from: u64, pub breaks: Vec<u32>, pub watch: Option<u32>, pub peeks: Vec<(u32, usize)>, pub pwm_pins: Vec<u8>, pub adc_pins: Vec<u8>, pub adc_raw: Vec<(u8, u16)>, pub disasms: Vec<(u32, usize)>,
@@ -191,6 +195,7 @@ pub fn parse(args: &[String], default_chip: &str) -> Opts {
             "--web" => o.web_port = Some(next().parse().expect("port")),
             "--web-dir" => o.web_dir = Some(next()),
             "--no-reboot" => o.no_reboot = true,
+            "--rom-strict" => o.rom_strict = true,
             "--i2s-tone" => o.i2s_tone.push(next()),
             "--wav" => o.wav = Some(next()),
             "--tft-png" => o.tft_png = Some(next()),
@@ -251,6 +256,7 @@ pub fn parse(args: &[String], default_chip: &str) -> Opts {
         if let Err(e) = esp_soc::ble::peer::Nearby::parse_all(&o.ble_nearby) { usage_error(&format!("--ble-nearby: {e}")); }
     }
     if o.ble_full && !matches!(o.chip.as_str(), "c3" | "esp32c3") { usage_error("--ble full requires C3"); }
+    if o.rom_strict && !matches!(o.chip.as_str(), "esp8266" | "8266") { usage_error("--rom-strict is for the ESP8266, whose ROM is modelled; the other chips run their ROM ELF"); }
     if let Some(path) = &o.script {
         let text = std::fs::read_to_string(path).unwrap_or_else(|e| usage_error(&format!("script: {e}")));
         for (ln, line) in text.lines().enumerate() {
@@ -283,7 +289,8 @@ pub fn run_cli(default_chip: &str) {
         "c6" | "esp32c6" => { let m = setup_c6(&o); run(m, &o) }
         "p4" | "esp32p4" if p4_rev3(&o) => { let m = setup_p4::<esp32p4::RevGe3>(&o); run(m, &o) }
         "p4" | "esp32p4" => { let m = setup_p4::<esp32p4::RevLt3>(&o); run(m, &o) }
-        c => { eprintln!("--chip {}: esp32, s3, c3, c6 or p4", c); std::process::exit(2) }
+        "esp8266" | "8266" => { let m = setup_esp8266(&o); run(m, &o) }
+        c => { eprintln!("--chip {}: esp32, s3, c3, c6, p4 or esp8266", c); std::process::exit(2) }
     }
 }
 
@@ -413,7 +420,7 @@ fn setup_coproc(o: &Opts, spec: &cosim::CoprocSpec) -> esp32c6::Machine {
         let (cfg, nat) = wifi_config(spec, &o.net, m.bus.debug.has("net"), &o.hostfwd);
         m.bus.attach_wifi(cfg, nat).unwrap_or_else(|e| usage_error(&format!("--wifi: {e}")));
     }
-    let rom = spec.rom.as_ref().map(PathBuf::from).or_else(|| find_rom(<esp32c6::C6 as Soc>::ROM_ELF))
+    let rom = spec.rom.as_ref().map(PathBuf::from).or_else(|| <esp32c6::C6 as Soc>::ROM_ELF.and_then(find_rom))
         .unwrap_or_else(|| usage_error("--coproc: no esp32c6_rev0_rom.elf found (rom=FILE)"));
     let image = std::fs::read(&rom).unwrap_or_else(|e| usage_error(&format!("--coproc rom {}: {e}", rom.display())));
     m.load_rom(&image).unwrap_or_else(|e| usage_error(&format!("--coproc rom {}: {e}", rom.display())));
@@ -562,6 +569,25 @@ fn setup_c3(o: &Opts) -> esp32c3::Machine {
     attach_nearby_networks(&mut m.bus.periph.wifi.link, o);
     for (flag, on) in [("--board", o.board != "atech14" && o.board != "none"), ("--cam-image", o.cam_image.is_some()), ("--cam-stream", o.cam_stream.is_some()), ("--cam-size", o.cam_size.is_some()), ("--psram-mb", o.psram_mb.is_some()), ("--flash-octal", o.flash_octal), ("--efuse-regs", o.efuse_regs.is_some()), ("--regs-init", o.regs_init.is_some()), ("--regstat", o.regstat.is_some())] {
         if on { eprintln!("{} is not available on the C3", flag); std::process::exit(2); }
+    }
+    m
+}
+
+fn setup_esp8266(o: &Opts) -> esp8266::Machine {
+    // 5C:CF:7F is an Espressif OUI; the rest is made up
+    let mut m = esp8266::machine(o.mac.unwrap_or([0x5c, 0xcf, 0x7f, 0x00, 0x11, 0x22]), o.flash_mb.unwrap_or(4) << 20);
+    if !o.debug.is_empty() { let mut f = esp_soc::DebugFlags::from_env(); for d in &o.debug { f.parse(d); } m.set_debug(&f); }
+    let board = if o.board == "atech14" { "none" } else { o.board.as_str() };   // the S3 default means "bare module" here
+    m.bus.board = esp8266::board::make_board(board).unwrap_or_else(|| usage_error(&format!("--board {board}: esp12f or none on the ESP8266")));
+    m.bus.rom.strict = o.rom_strict;
+    for (flag, on) in [("--wifi", o.wifi.is_some()), ("--ble", o.ble || o.ble_full), ("--cam-image", o.cam_image.is_some()), ("--cam-stream", o.cam_stream.is_some()), ("--cam-size", o.cam_size.is_some()), ("--psram-mb", o.psram_mb.is_some()), ("--flash-octal", o.flash_octal), ("--efuse-regs", o.efuse_regs.is_some()), ("--regs-init", o.regs_init.is_some()), ("--regstat", o.regstat.is_some())] {
+        if on { eprintln!("{} is not available on the ESP8266", flag); std::process::exit(2); }
+    }
+    // The ROM boots the image at flash 0 (eboot on Arduino builds), which starts the app at 0x1000
+    // inside the same image: there is no partition table or app slot at 0x10000, and no app boot.
+    if o.boot.as_deref().is_some_and(|b| b != "rom") { usage_error("--boot app is not available on the ESP8266: the ROM boots the whole flash image (--flash-image)"); }
+    for (flag, on) in [("--bootloader", o.bootloader.is_some()), ("--ptable", o.ptable.is_some()), ("--app", o.app.is_some())] {
+        if on { usage_error(&format!("{flag} is not available on the ESP8266: its app sits at 0x1000 inside the one flash image; give that image with --flash-image")); }
     }
     m
 }
@@ -739,7 +765,7 @@ fn run_with_reboots<S: Soc>(m: &mut Machine<S>, mut remaining: u64, reboot: bool
         remaining = remaining.saturating_sub(m.run_steps().saturating_sub(before));
         if let Stop::SwReset = stop {
             let cause = m.bus.reset_cause();
-            eprintln!("[emu] chip reset at t={:.3}s: cause {:#x} ({})", m.seconds(), cause, esp_periph::reset_cause_name(cause));
+            eprintln!("[emu] chip reset at t={:.3}s: cause {:#x} ({})", m.seconds(), cause, S::reset_cause_name(cause));
             let button = m.take_button_reset();
             if !reboot && !(button && app) { return stop; }
             if remaining == 0 { return Stop::MaxInsns; }
@@ -762,10 +788,10 @@ fn prepare<S: Soc>(m: &mut Machine<S>, o: &Opts) -> String {
     m.bus.misc().log_unknown = o.log_periph;
     if !o.breaks.is_empty() { m.add_observer(Box::new(Breakpoints { pcs: o.breaks.clone() })); }
     if o.trace { m.add_observer(Box::new(Trace { from: o.trace_from })); }
-    let rom = o.rom.clone().or_else(|| find_rom(S::ROM_ELF));
+    let rom = o.rom.clone().or_else(|| S::ROM_ELF.and_then(find_rom));
     match &rom {
         Some(r) => match std::fs::read(r) { Ok(d) => { m.load_rom(&d).expect("rom"); eprintln!("[emu] ROM loaded from {}", r.display()); } Err(e) => eprintln!("[emu] no ROM ({}): {}", r.display(), e) },
-        None if boot == "rom" => { eprintln!("[emu] no {} mask ROM ELF found (pass --rom, or use --boot app)", S::NAME); std::process::exit(2) }
+        None if boot == "rom" && S::ROM_ELF.is_some() => { eprintln!("[emu] no {} mask ROM ELF found (pass --rom, or use --boot app)", S::NAME); std::process::exit(2) }
         None => {}
     }
     // an image the model cannot run (one built for another silicon revision) stops the run before it starts

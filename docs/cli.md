@@ -1,7 +1,7 @@
 # Command line
 
 ```
-esp32sim [--chip esp32|s3|c3|c6|p4] --boot rom --bootloader B.bin --ptable P.bin --app A.bin [--elf X.elf ...] [options]
+esp32sim [--chip esp32|s3|c3|c6|p4|esp8266] --boot rom --bootloader B.bin --ptable P.bin --app A.bin [--elf X.elf ...] [options]
 esp32sim --flash-image flash.bin --boot rom ...
 ```
 
@@ -10,7 +10,12 @@ One binary for every chip; `esp32sim-c3` is `esp32sim --chip c3`, `esp32sim-c6` 
 where the chip does (`--boot rom`, `--console uart0`, `--flash-mb 4`) and they refuse the flags
 their chip has nothing behind: the C3 board, camera, PSRAM and register presets; the C6, which has
 a board and WiFi, only camera, PSRAM and register presets. The P4 boots from its ROM on UART0 by
-default too, with 16 MB of flash ([esp32p4.md](esp32p4.md)).
+default too, with 16 MB of flash ([esp32p4.md](esp32p4.md)). The ESP8266 (`--chip esp8266`) boots
+its flash image (`--flash-image`, the `.bin` an Arduino build writes for offset 0) from a mask ROM
+modelled in Rust: it needs no ROM ELF. Its app sits at 0x1000 inside that one image, so it refuses
+`--boot app`, `--bootloader`, `--ptable` and `--app`. Its board is `--board esp12f` (the Ai-Thinker
+ESP-12F module) or `none`, and `--rom-strict` stops the run at a ROM function the model lacks
+instead of returning 0 from it ([esp8266.md](esp8266.md)).
 
 ## Images and boot
 | Flag | Meaning |
@@ -18,7 +23,7 @@ default too, with 16 MB of flash ([esp32p4.md](esp32p4.md)).
 | `--boot rom\|app` | `rom`: start at the mask ROM reset vector (real boot chain). `app`: load the app image segments and jump to its entry |
 | `--bootloader F`, `--ptable F`, `--app F` | written to flash at 0x0 / 0x8000 / 0x10000 |
 | `--flash-image F` | whole flash dump written at 0 |
-| `--chip esp32\|s3\|c3\|c6\|p4` | which chip (default s3; `esp32` is the classic ESP32) |
+| `--chip esp32\|s3\|c3\|c6\|p4\|esp8266` | which chip (default s3; `esp32` is the classic ESP32) |
 | `--rom F` | mask ROM ELF (default: the chip's in `ESP32SIM_ROM_DIR`, then `~/.espressif/tools/esp-rom-elfs/*/`) |
 | `--mac xx:xx:xx:xx:xx:xx` | the station MAC the efuses report |
 | `--cam-stream PATH\|-`, `--cam-size WIDTHxHEIGHT` | live RGB24 camera source and its dimensions; requires `waveshare-cam` |
@@ -31,7 +36,8 @@ default too, with 16 MB of flash ([esp32p4.md](esp32p4.md)).
 | `--sd-timing` | (P4) commands and data take their time on the SD bus at the slot's card clock and width: CMD_DONE, DATA_OVER and the auto-stop come when the bits are through (default: at once); with `--coproc` the SDIO link's too. See [esp32p4.md](esp32p4.md), "The host" |
 | `--usb-host F` | (P4) a USB host on the high-speed USB-OTG port, running the commands in F (below) from power-up; the run then goes on to `--max-seconds`. See [esp32p4.md](esp32p4.md), "USB" |
 | `--coproc c6:KEY=VALUE,...` | (P4) an ESP32-C6 co-processor on SDIO slot 1, run in lock-step with the P4 (below); `--wifi` and `--net` then go to the C6's radio |
-| `--board atech14\|waveshare-cam\|waveshare-lcd4b\|waveshare-amoled18-v2\|stopwatch\|none` | board model (default atech14); on the C6: `waveshare-c6-lcd147`, `xiao-esp32c6` or `none`; on the P4: `waveshare-p4-lcd35` (rev ≥ 3) or `none`; on the classic ESP32: `ttgo-tdisplay` (alias `tdisplay`), `ulanzi-tc001` (alias `tc001`), `esp32dev-loopback` or `none`/`esp32dev` |
+| `--board atech14\|waveshare-cam\|waveshare-lcd4b\|waveshare-amoled18-v2\|stopwatch\|none` | board model (default atech14); on the C6: `waveshare-c6-lcd147`, `xiao-esp32c6` or `none`; on the P4: `waveshare-p4-lcd35` (rev ≥ 3) or `none`; on the classic ESP32: `ttgo-tdisplay` (alias `tdisplay`), `ulanzi-tc001` (alias `tc001`), `esp32dev-loopback` or `none`/`esp32dev`; on the ESP8266: `esp12f` or `none` |
+| `--rom-strict` | ESP8266: stop at a call into the modelled ROM that has no model, instead of returning 0 |
 | `--strap HEX`, `--reset-cause HEX`, `--efuse-regs F`, `--regs-init F` | reproduce a real chip's boot state (used by the differential tests) |
 | `--no-reboot` | stop at the first chip reset instead of rebooting from ROM |
 | `--flash-at OFFSET=FILE` (repeatable) | write a file into flash at a hex offset — a data partition's contents (the panel's `demo` partition takes `energydata.json`) |

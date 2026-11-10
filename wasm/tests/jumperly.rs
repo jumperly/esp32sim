@@ -1797,3 +1797,293 @@ fn esp32_abi_refuses_what_the_chip_lacks() {
         esp32sim_delete(e);
     }
 }
+
+// ------------------------------------------------------------------ Jumperly patch J29: ESP8266
+
+/// The ESP8266's device clock: cycles are 80 MHz APB cycles, also with CPU2X.
+const ESP8266_MHZ: u64 = 80;
+/// Pin events, PWM events (`pwm_events`) and UART0 text of an ESP8266 run.
+type Esp8266Run = (Vec<(u64, u8, u32)>, Vec<(u64, u32, bool, f64, f64)>, String);
+
+impl Emu {
+    fn boot_esp8266(app: &str) -> Emu { Emu::boot_esp8266_with(app, |_| {}) }
+    /// `fixtures/bin/esp8266-<app>.bin` as the whole flash at 0x0, booted from the modelled ROM (no
+    /// ROM ELF), calling `setup` after the image is loaded and before boot.
+    fn boot_esp8266_with(app: &str, setup: impl FnOnce(*mut esp32sim_wasm::Emu)) -> Emu {
+        let board = "esp8266";
+        // SAFETY: the board name is readable for the call; the pointer is checked for null.
+        let e = unsafe { esp32sim_new(board.as_ptr(), board.len(), 4, 0) };
+        assert!(!e.is_null());
+        let emu = Emu(e);
+        let flash = read(&format!("fixtures/bin/esp8266-{app}.bin"));
+        // SAFETY: `e` is live and exclusively ours; the buffer is readable for the call.
+        unsafe {
+            assert_eq!(esp32sim_jumperly_mode(e), 0);
+            assert_eq!(esp32sim_load(e, 5, flash.as_ptr(), flash.len()), 0);
+        }
+        setup(e);
+        // SAFETY: as above.
+        unsafe { assert_eq!(esp32sim_boot(e, 0), 0) };
+        emu
+    }
+    /// Pin events, PWM events and UART0 text of `us` microseconds, in slices of at most 10 ms.
+    fn run_esp8266(&mut self, us: u64) -> Esp8266Run {
+        let end = self.cycles() + us * ESP8266_MHZ;
+        let (mut ev, mut pwm, mut text) = (Vec::new(), Vec::new(), String::new());
+        while self.cycles() < end {
+            let left = (end - self.cycles()).min(10_000 * ESP8266_MHZ) as u32;
+            assert_eq!(self.run(left), 0);
+            ev.extend(self.pin_events());
+            pwm.extend(pwm_events(self));
+            text += &self.uart(0);
+        }
+        (ev, pwm, text)
+    }
+    /// Run until UART0 shows `until` or `max_us` pass, serving the bus bridges; the UART0 text.
+    fn run_esp8266_until(&mut self, until: &str, max_us: u64) -> String {
+        let end = self.cycles() + max_us * ESP8266_MHZ;
+        let mut text = String::new();
+        while self.cycles() < end && !text.contains(until) {
+            assert_eq!(self.run((1_000 * ESP8266_MHZ) as u32), 0);
+            unsafe { esp32sim_bus_service(self.0) };
+            text += &self.uart(0);
+        }
+        text
+    }
+}
+
+#[test]
+fn esp8266_blink_prints_on_uart0_and_toggles_gpio2() {
+    take_native_log();
+    let mut e = Emu::boot_esp8266("blink");
+    let (ev, pwm, text) = e.run_esp8266(1_800_000);
+    assert!(text.contains("rst cause:1, boot mode:(3,6)") && text.contains("Ready"), "{text}");
+    assert!(text.contains("led=1") && text.contains("led=0"), "{text}");
+    assert!(!take_native_log().iter().any(|l| l.contains("no mask ROM")), "the ESP8266's ROM is modelled");
+    // from setup() on (the SDK's start-up touches GPIO2 around 4 ms)
+    let edges: Vec<_> = level_changes(&ev, 2).into_iter().filter(|x| x.0 > 10_000 * ESP8266_MHZ).collect();
+    assert!(edges.len() >= 3, "{ev:?}");
+    for w in edges.windows(2) {
+        assert_ne!(w[0].1, w[1].1);
+        let us = (w[1].0 - w[0].0) / ESP8266_MHZ;
+        assert!((499_000..=501_000).contains(&us), "half period {us} us");
+    }
+    let s2 = ev.iter().rev().find(|x| x.1 == 2).expect("no GPIO2 state").2;
+    assert!(s2 & ENABLE != 0 && s2 >> 16 == 0x100, "GPIO2 state {s2:#x}");                   // a plain GPIO output
+    assert!(pwm.is_empty(), "digitalWrite is no waveform: {pwm:?}");
+}
+
+#[test]
+fn esp8266_pin_ranges_and_console_ports() {
+    let mut e = Emu::boot_esp8266("serial");
+    let (_, _, text) = e.run_esp8266(300_000);
+    assert!(text.contains("Ready"), "{text}");
+    let one = e.uart(1);
+    assert!(one.contains("one "), "Serial1 on UART1: {one}");
+    unsafe {
+        assert_eq!(esp32sim_cpu_hz(e.0), 80e6);
+        assert_eq!(esp32sim_gpio_set_input(e.0, 16, 1), 0);
+        assert_eq!(esp32sim_gpio_set_input(e.0, 17, 1), 1);                // GPIO0..16; 17 is the ADC
+        assert_eq!(esp32sim_pin_state(e.0, 17), 0);
+        assert_eq!(esp32sim_adc_set(e.0, 17, 500), 0);                     // TOUT
+        assert_eq!(esp32sim_adc_set(e.0, 16, 500), 1);
+        assert_eq!(esp32sim_pin_watch(e.0, 0x1ffff, 0), 0);
+        assert_eq!(esp32sim_uart_take(e.0, 2), 0);                         // two UARTs
+        assert_eq!(esp32sim_uart_in(e.0, 1, b"x".as_ptr(), 1), 0);         // UART1 has no receiver
+        assert_eq!(esp32sim_uart_in(e.0, 0, b"hi\n".as_ptr(), 3), 3);
+        assert_eq!(esp32sim_gpio_in_pin(e.0, 0), 255);                     // no input matrix
+        assert_eq!(esp32sim_soft_i2c(e.0, 16, 5, 1), 1);                   // Wire uses GPIO0..15
+        assert_eq!(esp32sim_soft_i2c(e.0, 4, 5, 1), 0);
+    }
+    let (_, _, text) = e.run_esp8266(100_000);
+    assert!(text.contains("rx=hi"), "{text}");
+    assert_eq!(uart_pins(&e, 0), (1, 3));
+    assert_eq!(uart_pins(&e, 1), (2, 255));                               // Serial1: TX on GPIO2 only
+    assert_eq!(uart_pins(&e, 2), (255, 255));
+    let baud = unsafe { esp32sim_uart_baud(e.0, 0) };
+    assert!(baud.abs_diff(115_200) * 100 <= 115_200, "Serial.begin(115200): {baud}");
+    let baud1 = unsafe { esp32sim_uart_baud(e.0, 1) };
+    assert!(baud1.abs_diff(115_200) * 100 <= 115_200, "Serial1: {baud1}");
+    assert_eq!(signal_of(&e, 1), 1, "U0TXD on GPIO1");
+    assert_eq!(signal_of(&e, 2), 3, "U1TXD on GPIO2");
+}
+
+#[test]
+fn esp8266_rom_banner_baud_is_74880_until_serial_begin() {
+    let mut e = Emu::boot_esp8266("serial");
+    assert_eq!(unsafe { esp32sim_uart_baud(e.0, 0) }, 0, "before the ROM ran");
+    let (_, _, text) = e.run_esp8266(1_000);
+    assert!(text.contains("ets Jan  8 2013") && !text.contains("Ready"), "{text}");
+    assert_eq!(unsafe { esp32sim_uart_baud(e.0, 0) }, 74_880, "the ROM's divider");
+    e.run_esp8266(300_000);
+    let baud = unsafe { esp32sim_uart_baud(e.0, 0) };
+    assert!(baud.abs_diff(115_200) * 100 <= 115_200, "{baud}");
+}
+
+#[test]
+fn esp8266_pwm_fixture_yields_pwm_events_not_edges() {
+    let mut e = Emu::boot_esp8266("pwm");
+    let (ev, pwm, text) = e.run_esp8266(4_300_000);
+    assert!(text.contains("pwm="), "{text}");
+    let on4: Vec<_> = pwm.iter().filter(|x| x.1 == 4).collect();
+    assert_eq!(on4.len(), 3, "25 %, 75 %, off: {on4:?}");
+    let (c0, _, en0, f0, d0) = *on4[0];
+    assert!(en0 && (f0 - 1000.0).abs() <= 10.0 && (d0 - 0.25).abs() <= 0.01, "{on4:?}");
+    let (c1, _, en1, f1, d1) = *on4[1];
+    assert!(en1 && (f1 - 1000.0).abs() <= 10.0 && (d1 - 0.75).abs() <= 0.01, "{on4:?}");
+    let (c2, _, en2, ..) = *on4[2];
+    assert!(!en2, "{on4:?}");
+    let s = |c: u64| c as f64 / (ESP8266_MHZ as f64 * 1e6);
+    assert!(s(c0) < 0.1 && (1.95..2.1).contains(&s(c1)) && (3.95..4.1).contains(&s(c2)), "{:.3} {:.3} {:.3}", s(c0), s(c1), s(c2));
+    // the first periods are edges; once it is PWM, GPIO4 sends no pin events until it stops
+    let edges4: Vec<_> = ev.iter().filter(|x| x.1 == 4).map(|x| x.0).collect();
+    assert!(!edges4.is_empty() && edges4.len() <= 12, "{} GPIO4 events before PWM", edges4.len());
+    assert!(edges4.iter().all(|&c| c <= c0 || c >= c2), "GPIO4 edges while PWM: {edges4:?}");
+    // tone(5, 440) from the first to the third second: a square wave, then off
+    let on5: Vec<_> = pwm.iter().filter(|x| x.1 == 5).collect();
+    assert!(on5.len() >= 2, "{on5:?}");
+    assert!(on5[0].2 && (on5[0].3 - 440.0).abs() <= 4.4 && (on5[0].4 - 0.5).abs() <= 0.01, "{on5:?}");
+    assert!(!on5.last().unwrap().2, "{on5:?}");
+    assert!(on5[1..on5.len() - 1].iter().all(|x| x.2 && (x.3 - 440.0).abs() <= 4.4), "{on5:?}");
+}
+
+#[test]
+fn esp8266_servo_fixture_pwm_50hz() {
+    let mut e = Emu::boot_esp8266("servo");
+    let (_, pwm, text) = e.run_esp8266(1_600_000);
+    assert!(text.contains("servo=0") && text.contains("servo=90"), "{text}");
+    let on14: Vec<_> = pwm.iter().filter(|x| x.1 == 14).collect();
+    assert!(on14.len() >= 2, "{on14:?}");
+    assert!(on14.iter().all(|x| x.2 && (x.3 - 50.0).abs() <= 0.5), "{on14:?}");
+    assert!((on14[0].4 - 0.05).abs() <= 0.001, "write(0) = 1000 us: {on14:?}");
+    assert!((on14.last().unwrap().4 - 0.075).abs() <= 0.001, "write(90) = 1500 us: {on14:?}");
+}
+
+#[test]
+fn esp8266_spi_fixture_shiftout_stays_edges_and_hspi_goes_to_host() {
+    use std::{cell::RefCell, rc::Rc};
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let s = seen.clone();
+    set_native_bus_host(|_, _, _| 0, move |host, tx, _rx| { assert_eq!(host, 1, "HSPI is host 1"); s.borrow_mut().push(tx.to_vec()); });
+    let mut e = Emu::boot_esp8266("spi");
+    assert_eq!(unsafe { esp32sim_bus_host(e.0, 0, 1) }, 0);
+    let mut text = String::new();
+    let (mut ev, mut pwm) = (Vec::new(), Vec::new());
+    while text.matches("via=shiftOut").count() < 3 {
+        assert!(e.cycles() < 2_500_000 * ESP8266_MHZ, "{text}");
+        assert_eq!(e.run((1_000 * ESP8266_MHZ) as u32), 0);
+        unsafe { esp32sim_bus_service(e.0) };
+        ev.extend(e.pin_events());
+        pwm.extend(pwm_events(&mut e));
+        text += &e.uart(0);
+    }
+    assert!(text.contains("out=55 via=spi") && text.contains("out=5d via=shiftOut"), "{text}");
+    let seen = seen.borrow();
+    assert!(seen.len() >= 3 && seen[..3] == [vec![0x55], vec![0x54], vec![0x57]], "{seen:?}");
+    assert!(pwm.is_empty(), "shiftOut is no waveform: {pwm:?}");
+    // shiftOut's clock on GPIO14: eight pulses a byte, as pin events
+    let clock = level_changes(&ev, 14).into_iter().filter(|x| x.1).count();
+    assert!(clock >= 16, "{clock} rising edges on GPIO14");
+}
+
+#[test]
+fn esp8266_i2c_fixture_reads_bme280_id_through_soft_i2c() {
+    use std::{cell::RefCell, rc::Rc};
+    // a BME280 at 0x76: chip id 0x60 at 0xD0, calibration and status 0 (not measuring)
+    type Bme = ([u8; 256], usize, bool, Vec<u32>);                                // (registers, pointer, expect register, buses)
+    let mem: Rc<RefCell<Bme>> = Rc::new(RefCell::new(([0u8; 256], 0usize, false, Vec::new())));
+    let m = mem.clone();
+    set_native_bus_host(move |bus, op, arg| {
+        let mut s = m.borrow_mut();
+        s.3.push(bus);
+        match op {
+            0 => { if arg >> 1 != 0x76 { return 0; } s.2 = arg & 1 == 0; 1 }
+            1 => { if s.2 { s.1 = arg as usize; s.2 = false; } else { let p = s.1; s.0[p & 255] = arg as u8; s.1 += 1; } 1 }
+            2 => { let p = s.1; s.1 += 1; if p == 0xd0 { 0x60 } else { u32::from(s.0[p & 255]) } }
+            _ => 0,
+        }
+    }, |_, _, _| {});
+    let mut e = Emu::boot_esp8266_with("i2c", |e| unsafe {
+        assert_eq!(esp32sim_soft_i2c(e, 4, 5, 1), 0);
+        assert_eq!(esp32sim_bus_host(e, 1, 0), 0);
+    });
+    let text = e.run_esp8266_until("bme=", 1_500_000);
+    assert!(text.contains("bme=ok"), "{text}");
+    let s = mem.borrow();
+    assert!(!s.3.is_empty() && s.3.iter().all(|&b| b == 4 | 5 << 8), "bus = sda | scl << 8");
+    assert_eq!(s.0[0xe0], 0xb6, "the soft reset reached the target");
+}
+
+#[test]
+fn esp8266_adc_set_17_reads_512_at_500mv() {
+    let mut e = Emu::boot_esp8266_with("adc", |e| unsafe { assert_eq!(esp32sim_adc_set(e, 17, 500), 0) });
+    let (_, _, text) = e.run_esp8266(350_000);
+    let v = last_value(&text, "adc");
+    assert!((511..=512).contains(&v), "{text}");
+    unsafe { assert_eq!(esp32sim_adc_set(e.0, 17, 0), 0) };
+    let (_, _, text) = e.run_esp8266(200_000);
+    assert_eq!(last_value(&text, "adc"), 0, "{text}");
+    unsafe { assert_eq!(esp32sim_adc_set(e.0, 17, 1500), 0) };
+    let (_, _, text) = e.run_esp8266(200_000);
+    assert_eq!(last_value(&text, "adc"), 1023, "saturates: {text}");
+}
+
+#[test]
+fn esp8266_host_reset_reboots_and_keeps_rtc_memory() {
+    take_native_log();
+    let mut e = Emu::boot_esp8266("strap");
+    let mut text = e.run_esp8266_until("reset=Software/System restart", 2_500_000);
+    text += &e.run_esp8266(200_000).2;
+    assert!(text.contains("reset=Power On") && text.contains("reset=Software/System restart"), "{text}");
+    assert_eq!(unsafe { esp32sim_adc_set(e.0, 17, 500) }, 0);
+    let before = e.cycles();
+    assert_eq!(unsafe { esp32sim_reset(e.0) }, 0);
+    let (_, _, text) = e.run_esp8266(1_500_000);
+    assert!(text.contains("rst cause:2, boot mode:(3,6)") && text.contains("reset=External System"), "{text}");
+    // the sketch restarts only when its word is not in RTC memory: it was kept
+    assert!(!text.contains("reset=Software/System restart"), "{text}");
+    assert!(e.cycles() >= before + 1_500_000 * ESP8266_MHZ);
+    assert!(take_native_log().iter().any(|l| l.contains("chip reset") && l.contains("EXT_RESET")));
+}
+
+#[test]
+fn esp8266_wifi_begin_logs_a_note_and_stays_alive() {
+    take_native_log();
+    let mut e = Emu::boot_esp8266("wifi-off");
+    let (_, _, text) = e.run_esp8266(1_200_000);
+    assert!(text.matches("status=7").count() >= 2, "{text}");
+    let log = take_native_log();
+    assert_eq!(log.iter().filter(|l| l.contains("wifi: ESP8266 Wi-Fi is not modelled")).count(), 1, "{log:?}");
+    assert!(!log.iter().any(|l| l.contains("reset")), "{log:?}");
+    let (_, _, text) = e.run_esp8266(600_000);
+    assert!(text.contains("status=7"), "the guest runs on: {text}");
+    assert!(!take_native_log().iter().any(|l| l.contains("wifi:")), "once");
+    // the Wi-Fi exports answer as without a radio
+    unsafe {
+        assert_eq!(esp32sim_wifi_probe_take(e.0), 0);
+        assert_eq!(esp32sim_net_host(e.0, 1), 1);
+    }
+    let mut blink = Emu::boot_esp8266("blink");
+    blink.run_esp8266(600_000);
+    assert!(!take_native_log().iter().any(|l| l.contains("wifi:")), "no radio started, no note");
+}
+
+#[test]
+fn esp8266_deep_sleep_logs_a_note_and_drives_gpio16() {
+    take_native_log();
+    let mut e = Emu::boot_esp8266("sleep");
+    let (ev, _, text) = e.run_esp8266(1_300_000);
+    assert!(text.contains("wake="), "{text}");
+    let log = take_native_log();
+    assert!(log.iter().any(|l| l.contains("deep sleep:") && !l.contains("reset")), "{log:?}");
+    let s16 = ev.iter().rev().find(|x| x.1 == 16).expect("GPIO16 in deep sleep").2;
+    assert!(s16 & OUT != 0 && s16 & ENABLE != 0, "XPD_DCDC high: {s16:#x}");
+}
+
+#[test]
+fn esp8266_strap_from_circuit_io0_low_waits_in_uart_mode() {
+    let mut e = Emu::boot_esp8266_with("blink", |e| unsafe { assert_eq!(esp32sim_gpio_set_input(e, 0, 0), 0) });
+    let (_, _, text) = e.run_esp8266(500_000);
+    assert!(text.contains("boot mode:(1,6)"), "{text}");
+    assert!(!text.contains("Ready"), "{text}");
+}
