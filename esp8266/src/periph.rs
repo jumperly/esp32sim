@@ -16,6 +16,7 @@ use crate::rom::boot::{RST_SW, RST_WDT};
 use esp_periph::uart::{Uart, UartLayout};
 use esp_periph::Misc;
 use std::collections::{HashMap, HashSet};
+use std::hash::{BuildHasherDefault, Hasher};
 
 /// The APB clock: the timers, the UART divisors and the watchdog count it (esp8266_peri.h:32
 /// ESP8266_CLOCK), and the CPU clock with CPU2X clear.
@@ -124,9 +125,25 @@ pub const UART_LAYOUT: UartLayout = UartLayout { thrhd_mask: 0x7f, rxfifo_rst: 1
 const UART_INT_TOUT: u32 = 1 << 8;
 const UART_RX_TOUT_EN: u32 = 1 << 31;
 
-/// Register memory without a model: what was last written, 0 before.
+/// Register memory without a model: what was last written, 0 before. The interrupt bookkeeping
+/// reads some of it (WDEV's status and enable, DPORT's edge enables) whenever the lines are
+/// derived, so it is keyed with a multiply-and-fold hash of the address instead of the default
+/// SipHash, whose resistance to chosen keys buys nothing for register addresses.
 #[derive(Default, Clone)]
-pub struct RegMem(HashMap<u32, u32>);
+pub struct RegMem(HashMap<u32, u32, BuildHasherDefault<AddrHash>>);
+
+/// `RegMem`'s hash: Fibonacci hashing of the address (Knuth, TAOCP vol. 3, 6.4), folded so both
+/// the low bits (the bucket) and the high bits (hashbrown's tag) depend on every address bit.
+#[derive(Default)]
+pub struct AddrHash(u64);
+impl Hasher for AddrHash {
+    fn finish(&self) -> u64 { self.0 }
+    fn write(&mut self, bytes: &[u8]) { for &b in bytes { self.0 = (self.0.rotate_left(8) ^ u64::from(b)).wrapping_mul(0x9e37_79b9_7f4a_7c15); } }
+    fn write_u32(&mut self, n: u32) {
+        let h = u64::from(n).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        self.0 = h ^ (h >> 32);
+    }
+}
 impl RegMem {
     pub fn read(&self, addr: u32) -> u32 { self.0.get(&addr).copied().unwrap_or(0) }
     pub fn write(&mut self, addr: u32, v: u32) { self.0.insert(addr, v); }
