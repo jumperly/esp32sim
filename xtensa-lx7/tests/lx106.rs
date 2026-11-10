@@ -402,6 +402,68 @@ fn a_reset_keeps_the_approximate_cpi() {
     assert_eq!(c.state().ccount.wrapping_sub(t0), 8, "4 NOPs at CPI 2");
 }
 
+/// The instruction count is the core's lifetime count, as the LX6/LX7 `Cpu::reset` keeps it: a
+/// chip reset does not take it back to 0, so a host computing a rate from its deltas never sees
+/// a negative one.
+#[test]
+fn a_reset_keeps_the_instruction_count() {
+    let (mut c, mut b) = machine(BASE);
+    nop_loop(&mut b, 4);
+    assert_eq!(c.run(&mut b, 5), (5, None));
+    c.spin(3);
+    assert_eq!(c.insn_count(), 8);
+    c.reset();
+    assert_eq!(c.insn_count(), 8, "kept across the reset");
+    c.set_pc(BASE);
+    c.write_sr(sr::PS, 0).unwrap();
+    assert_eq!(c.run(&mut b, 2), (2, None));
+    assert_eq!(c.insn_count(), 10);
+}
+
+/// A function hook (a ROM modelled in Rust) that finds its code faulting: the next `run` or
+/// `step` takes the exception before anything else, through the path an instruction's fault takes
+/// (EXCCAUSE, EXCVADDR when given, EPC1 = the pc given, the vector by PS), and retires one
+/// instruction for it.
+#[test]
+fn an_exception_raised_from_a_hook_is_taken_by_the_next_run_or_step() {
+    const ROM_PC: u32 = 0x4000_dee0;
+    for stepped in [false, true] {
+        let (mut c, mut b) = machine(BASE + 0x100);
+        c.write_sr(sr::VECBASE, BASE).unwrap();
+        c.write_sr(sr::PS, ps::UM).unwrap();
+        c.write_sr(sr::EXCVADDR, 0x1234).unwrap();
+        c.set_irq(1 << 5);
+        c.write_sr(sr::INTENABLE, 1 << 5).unwrap();
+        let n0 = c.insn_count();
+        c.raise_from_hook(ROM_PC, exc::LOAD_PROHIBITED, Some(0));
+        assert!(c.hook_exception_pending());
+        assert_eq!(c.pc(), ROM_PC, "the pc of the fault until it is taken");
+        let trap = if stepped {
+            match c.step(&mut b).kind { StepKind::TrapDuring(t) => Some(t), k => panic!("{k:?}") }
+        } else {
+            let (n, t) = c.run(&mut b, 10);
+            assert_eq!(n, 1);
+            t
+        };
+        assert_eq!(trap, Some(Trap::Exception(exc::LOAD_PROHIBITED)), "before the pending interrupt");
+        assert!(!c.hook_exception_pending());
+        let s = c.state();
+        assert_eq!((s.exccause, s.excvaddr, s.epc[1], c.pc()), (exc::LOAD_PROHIBITED, 0, ROM_PC, BASE + 0x50));
+        assert_eq!(s.ps & ps::EXCM, ps::EXCM);
+        assert_eq!(c.insn_count() - n0, 1);
+    }
+    // without an address (an illegal instruction) EXCVADDR keeps its value; a reset drops it
+    let (mut c, mut b) = machine(BASE + 0x100);
+    c.write_sr(sr::VECBASE, BASE).unwrap();
+    c.write_sr(sr::EXCVADDR, 0x1234).unwrap();
+    c.raise_from_hook(0x4000_dce5, exc::ILLEGAL, None);
+    assert_eq!(c.run(&mut b, 1).1, Some(Trap::Exception(exc::ILLEGAL)));
+    assert_eq!((c.state().excvaddr, c.state().epc[1], c.pc()), (0x1234, 0x4000_dce5, BASE + 0x30));
+    c.raise_from_hook(0x4000_dce5, exc::ILLEGAL, None);
+    c.reset();
+    assert!(!c.hook_exception_pending());
+}
+
 #[test]
 fn waiti_sleeps_at_the_pc_until_an_interrupt_and_returns_there() {
     let (mut c, mut b) = machine(BASE + 0x100);

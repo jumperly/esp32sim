@@ -3,7 +3,11 @@
 //! `SPIEraseSector(sector)`, `SPIEraseBlock(block)`), cores/esp8266/esp8266_undocumented.h:244
 //! (`Wait_SPI_Idle(fc)`); results are `SpiFlashOpResult` (tools/sdk/include/spi_flash.h:35-39:
 //! 0 OK, 1 ERR). The flash answers at once: it is always idle and never busy in its status.
-use super::{arg, ret, SocBus};
+//!
+//! A flash range past the chip's end is an error result; a memory side (`SPIRead`'s destination,
+//! `SPIWrite`'s source, `SPI_read_status`'s word) the ROM's own load or store faults on is that
+//! exception (`super::fault`).
+use super::{arg, done, load8, ret, store32, store8, Mem, SocBus};
 use xtensa_lx7::Lx106;
 
 const OK: u32 = 0;
@@ -14,19 +18,24 @@ const ERR: u32 = 1;
 pub fn spi_read(core: &mut Lx106, bus: &mut SocBus) {
     let (addr, dest, size) = (arg(core, bus, 0), arg(core, bus, 1), arg(core, bus, 2) as usize);
     let mut buf = vec![0; size.min(bus.flash.len())];
-    let r = if buf.len() == size && bus.flash.read(addr, &mut buf) && bus.load_bytes(dest, &buf).is_ok() { OK } else {
-        bus.rom.log_once("spi-read", || format!("SPIRead({addr:#x}, {dest:#010x}, {size}) outside the flash or RAM: error"));
-        ERR
-    };
-    ret(core, bus, r);
+    if buf.len() != size || !bus.flash.read(addr, &mut buf) {
+        bus.rom.log_once("spi-read", || format!("SPIRead({addr:#x}, {dest:#010x}, {size}) outside the flash: error"));
+        ret(core, bus, ERR);
+        return;
+    }
+    if bus.load_bytes(dest, &buf).is_ok() { ret(core, bus, OK); return; }
+    // not one RAM: byte by byte, up to the first store that faults
+    let r = buf.iter().enumerate().try_for_each(|(i, &b)| store8(bus, dest.wrapping_add(i as u32), b));
+    done(core, bus, r.map(|()| OK));
 }
 
 /// `SPIWrite(addr, src, size)`: program (bits only clear) from memory.
 pub fn spi_write(core: &mut Lx106, bus: &mut SocBus) {
     let (addr, src, size) = (arg(core, bus, 0), arg(core, bus, 1), arg(core, bus, 2));
-    let data: Option<Vec<u8>> = (0..size).map(|i| bus.peek8(src.wrapping_add(i))).collect();
-    let r = match data { Some(d) if bus.flash_write(addr, &d) => OK, _ => ERR };
-    ret(core, bus, r);
+    if size as usize > bus.flash.len() { ret(core, bus, ERR); return; }
+    let data: Mem<Vec<u8>> = (0..size).map(|i| load8(bus, src.wrapping_add(i))).collect();
+    let r = data.map(|d| if bus.flash_write(addr, &d) { OK } else { ERR });
+    done(core, bus, r);
 }
 
 pub fn spi_erase_sector(core: &mut Lx106, bus: &mut SocBus) {
@@ -44,8 +53,8 @@ pub fn spi_erase_block(core: &mut Lx106, bus: &mut SocBus) {
 /// `SPI_read_status(fc, &status)`: status 0, not busy, nothing protected.
 pub fn spi_read_status(core: &mut Lx106, bus: &mut SocBus) {
     let st = arg(core, bus, 1);
-    if let Some(m) = bus.ram_mut(st, 4) { m.fill(0); }
-    ret(core, bus, OK);
+    let r = store32(bus, st, 0);
+    done(core, bus, r.map(|()| OK));
 }
 
 /// The calls that only configure or wait for the flash: `Wait_SPI_Idle`, `SPI_write_status`,

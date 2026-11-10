@@ -2,23 +2,18 @@
 //! with the standard C semantics; prototypes in tools/sdk/include/ets_sys.h:204-218) and the
 //! libgcc integer helpers the LX106 needs without a divider (call0 ABI: 64-bit values in a
 //! register pair, low word first). They take one cycle: the ROM's own timing is not modelled.
-use super::{arg, ret, ret64, SocBus};
-use xtensa_lx7::Lx106;
-
-/// A byte at `addr`, or 0 (with one log line) where the ROM's code would have faulted.
-fn get(bus: &mut SocBus, addr: u32) -> u8 {
-    bus.peek8(addr).unwrap_or_else(|| { bus.rom.log_once("libc-read", || format!("a string or memory function read {addr:#010x}, outside memory (reads 0)")); 0 })
-}
-
-fn set(bus: &mut SocBus, addr: u32, v: u8) {
-    if !bus.poke8(addr, v) { bus.rom.log_once("libc-write", || format!("a string or memory function wrote {addr:#010x}, outside RAM (dropped)")); }
-}
+//!
+//! An address the chip's own load or store faults on ends the function with that exception
+//! (`super::load8`, `super::store8`, `super::fault`): `strlen(NULL)` is LoadProhibited with
+//! EXCVADDR 0, as on the chip. A division by zero is the chip's too (`div_zero`).
+use super::{arg, done, load8, ret, ret64, store8, Mem, SocBus};
+use xtensa_lx7::{state::exc, Lx106};
 
 /// The NUL-terminated string at `addr` is this long.
-fn len(bus: &mut SocBus, addr: u32) -> u32 {
+fn len(bus: &mut SocBus, addr: u32) -> Mem<u32> {
     let mut n = 0;
-    while n < MAX_LEN && get(bus, addr.wrapping_add(n)) != 0 { n += 1; }
-    n
+    while n < MAX_LEN && load8(bus, addr.wrapping_add(n))? != 0 { n += 1; }
+    Ok(n)
 }
 
 /// The longest run one call handles: more than the chip's memory, so it only stops a guest's
@@ -30,116 +25,145 @@ fn args3(core: &Lx106, bus: &mut SocBus) -> (u32, u32, u32) { (arg(core, bus, 0)
 
 pub fn memcpy(core: &mut Lx106, bus: &mut SocBus) {
     let (d, s, n) = args3(core, bus);
-    for i in 0..n { let b = get(bus, s.wrapping_add(i)); set(bus, d.wrapping_add(i), b); }
-    ret(core, bus, d);
+    let r = (0..n).try_for_each(|i| { let b = load8(bus, s.wrapping_add(i))?; store8(bus, d.wrapping_add(i), b) });
+    done(core, bus, r.map(|()| d));
 }
 
+/// Reads the whole source before it writes, so overlapping ranges copy as C requires.
 pub fn memmove(core: &mut Lx106, bus: &mut SocBus) {
     let (d, s, n) = args3(core, bus);
-    let bytes: Vec<u8> = (0..n).map(|i| get(bus, s.wrapping_add(i))).collect();
-    for (i, b) in bytes.into_iter().enumerate() { set(bus, d.wrapping_add(i as u32), b); }
-    ret(core, bus, d);
+    let r = (0..n).map(|i| load8(bus, s.wrapping_add(i))).collect::<Mem<Vec<u8>>>()
+        .and_then(|bytes| bytes.into_iter().enumerate().try_for_each(|(i, b)| store8(bus, d.wrapping_add(i as u32), b)));
+    done(core, bus, r.map(|()| d));
 }
 
 pub fn memset(core: &mut Lx106, bus: &mut SocBus) {
     let (d, c, n) = args3(core, bus);
-    for i in 0..n { set(bus, d.wrapping_add(i), c as u8); }
-    ret(core, bus, d);
+    let r = (0..n).try_for_each(|i| store8(bus, d.wrapping_add(i), c as u8));
+    done(core, bus, r.map(|()| d));
 }
 
 pub fn bzero(core: &mut Lx106, bus: &mut SocBus) {
     let (d, n) = (arg(core, bus, 0), arg(core, bus, 1).min(MAX_LEN));
-    for i in 0..n { set(bus, d.wrapping_add(i), 0); }
-    ret(core, bus, 0);
+    let r = (0..n).try_for_each(|i| store8(bus, d.wrapping_add(i), 0));
+    done(core, bus, r.map(|()| 0));
 }
 
 pub fn memcmp(core: &mut Lx106, bus: &mut SocBus) {
     let (a, b, n) = args3(core, bus);
-    let mut r = 0i32;
-    for i in 0..n {
-        let (x, y) = (get(bus, a.wrapping_add(i)), get(bus, b.wrapping_add(i)));
-        if x != y { r = x as i32 - y as i32; break; }
-    }
-    ret(core, bus, r as u32);
+    let r = (|| {
+        for i in 0..n {
+            let (x, y) = (load8(bus, a.wrapping_add(i))?, load8(bus, b.wrapping_add(i))?);
+            if x != y { return Ok(x as i32 - y as i32); }
+        }
+        Ok(0)
+    })();
+    done(core, bus, r.map(|v| v as u32));
 }
 
-pub fn strlen(core: &mut Lx106, bus: &mut SocBus) { let s = arg(core, bus, 0); let n = len(bus, s); ret(core, bus, n); }
+pub fn strlen(core: &mut Lx106, bus: &mut SocBus) { let s = arg(core, bus, 0); let r = len(bus, s); done(core, bus, r); }
 
 /// Copies the string and its NUL; a runaway one stops after `MAX_LEN` bytes, unterminated.
 pub fn strcpy(core: &mut Lx106, bus: &mut SocBus) {
     let (d, s) = (arg(core, bus, 0), arg(core, bus, 1));
-    for i in 0..MAX_LEN {
-        let b = get(bus, s.wrapping_add(i));
-        set(bus, d.wrapping_add(i), b);
-        if b == 0 { break; }
-    }
-    ret(core, bus, d);
+    let r = (|| {
+        for i in 0..MAX_LEN {
+            let b = load8(bus, s.wrapping_add(i))?;
+            store8(bus, d.wrapping_add(i), b)?;
+            if b == 0 { break; }
+        }
+        Ok(d)
+    })();
+    done(core, bus, r);
 }
 
 /// Copies at most `n` bytes and pads the rest of them with NULs.
 pub fn strncpy(core: &mut Lx106, bus: &mut SocBus) {
     let (d, s, n) = args3(core, bus);
-    let mut end = false;
-    for i in 0..n {
-        let b = if end { 0 } else { get(bus, s.wrapping_add(i)) };
-        end |= b == 0;
-        set(bus, d.wrapping_add(i), b);
-    }
-    ret(core, bus, d);
+    let r = (|| {
+        let mut end = false;
+        for i in 0..n {
+            let b = if end { 0 } else { load8(bus, s.wrapping_add(i))? };
+            end |= b == 0;
+            store8(bus, d.wrapping_add(i), b)?;
+        }
+        Ok(d)
+    })();
+    done(core, bus, r);
 }
 
 /// The C comparison of two strings, over at most `n` bytes.
-fn compare(bus: &mut SocBus, a: u32, b: u32, n: u32) -> i32 {
+fn compare(bus: &mut SocBus, a: u32, b: u32, n: u32) -> Mem<u32> {
     for i in 0..n {
-        let (x, y) = (get(bus, a.wrapping_add(i)), get(bus, b.wrapping_add(i)));
-        if x != y { return x as i32 - y as i32; }
+        let (x, y) = (load8(bus, a.wrapping_add(i))?, load8(bus, b.wrapping_add(i))?);
+        if x != y { return Ok((x as i32 - y as i32) as u32); }
         if x == 0 { break; }
     }
-    0
+    Ok(0)
 }
 
 pub fn strcmp(core: &mut Lx106, bus: &mut SocBus) {
     let (a, b) = (arg(core, bus, 0), arg(core, bus, 1));
     let r = compare(bus, a, b, MAX_LEN);
-    ret(core, bus, r as u32);
+    done(core, bus, r);
 }
 
 pub fn strncmp(core: &mut Lx106, bus: &mut SocBus) {
     let (a, b, n) = args3(core, bus);
     let r = compare(bus, a, b, n);
-    ret(core, bus, r as u32);
+    done(core, bus, r);
+}
+
+/// The bytes of the NUL-terminated string at `addr`.
+fn string(bus: &mut SocBus, addr: u32) -> Mem<Vec<u8>> {
+    let n = len(bus, addr)?;
+    (0..n).map(|i| load8(bus, addr.wrapping_add(i))).collect()
 }
 
 /// The first `needle` in `haystack`, or NULL.
 pub fn strstr(core: &mut Lx106, bus: &mut SocBus) {
     let (h, n) = (arg(core, bus, 0), arg(core, bus, 1));
-    let needle: Vec<u8> = (0..len(bus, n)).map(|i| get(bus, n.wrapping_add(i))).collect();
-    let hay: Vec<u8> = (0..len(bus, h)).map(|i| get(bus, h.wrapping_add(i))).collect();
-    let at = if needle.is_empty() { Some(0) } else { hay.windows(needle.len()).position(|w| w == needle.as_slice()) };
-    ret(core, bus, at.map_or(0, |i| h.wrapping_add(i as u32)));
+    let r = string(bus, n).and_then(|needle| {
+        let hay = string(bus, h)?;
+        let at = if needle.is_empty() { Some(0) } else { hay.windows(needle.len()).position(|w| w == needle.as_slice()) };
+        Ok(at.map_or(0, |i| h.wrapping_add(i as u32)))
+    });
+    done(core, bus, r);
 }
 
-/// A division by zero, which libgcc leaves undefined: 0, with one log line.
-fn div_zero(bus: &mut SocBus) { bus.rom.log_once("div0", || "integer division by zero in a libgcc helper (returns 0)".into()); }
+/// Where the ROM's integer division helpers go on a zero divisor: an ILL (`00 00 00`) inside
+/// `__divsi3` (0x4000dc88), which raises IllegalInstruction (EXCCAUSE 0) with EPC1 here. The
+/// Arduino core's postmortem knows the address and prints such a crash as `Exception (6)`
+/// (IntegerDivideByZero) with the caller, which it reads from EXCSAVE1 (where the SDK's user
+/// vector saved a0) in place of EPC1 (cores/esp8266/core_esp8266_postmortem.cpp:168-178, Arduino
+/// ESP8266 3.1.2: "The GCC divide routine in ROM jumps to the address below and executes ILL (00
+/// 00 00) on div-by-zero").
+pub const DIV_ZERO_ILL: u32 = 0x4000_dce5;
+
+/// A division by zero: the ILL at `DIV_ZERO_ILL`, a0 still the caller's. The 64-bit helpers do
+/// the same here: libgcc's `__udivmoddi4` divides by the zero divisor on purpose ("Divide
+/// intentionally by zero", libgcc2.c), which reaches the ROM's 32-bit division and so this ILL
+/// (inferred, not observed: there a0 would point into the 64-bit helper, here it is its caller).
+fn div_zero(core: &mut Lx106) { core.raise_from_hook(DIV_ZERO_ILL, exc::ILLEGAL, None); }
 
 fn arg64(core: &Lx106, bus: &mut SocBus, pair: usize) -> u64 { u64::from(arg(core, bus, pair * 2)) | u64::from(arg(core, bus, pair * 2 + 1)) << 32 }
 
 pub fn divsi3(core: &mut Lx106, bus: &mut SocBus) {
     let (a, b) = (arg(core, bus, 0) as i32, arg(core, bus, 1) as i32);
-    if b == 0 { div_zero(bus); }
-    ret(core, bus, a.checked_div(b).unwrap_or(if b == 0 { 0 } else { a }) as u32);   // i32::MIN / -1 wraps
+    if b == 0 { div_zero(core); return; }
+    ret(core, bus, a.wrapping_div(b) as u32);   // i32::MIN / -1 wraps
 }
 
 pub fn udivsi3(core: &mut Lx106, bus: &mut SocBus) {
     let (a, b) = (arg(core, bus, 0), arg(core, bus, 1));
-    if b == 0 { div_zero(bus); }
-    ret(core, bus, a.checked_div(b).unwrap_or(0));
+    if b == 0 { div_zero(core); return; }
+    ret(core, bus, a / b);
 }
 
 pub fn umodsi3(core: &mut Lx106, bus: &mut SocBus) {
     let (a, b) = (arg(core, bus, 0), arg(core, bus, 1));
-    if b == 0 { div_zero(bus); }
-    ret(core, bus, a.checked_rem(b).unwrap_or(0));
+    if b == 0 { div_zero(core); return; }
+    ret(core, bus, a % b);
 }
 
 pub fn umulsidi3(core: &mut Lx106, bus: &mut SocBus) {
@@ -154,20 +178,20 @@ pub fn muldi3(core: &mut Lx106, bus: &mut SocBus) {
 
 pub fn divdi3(core: &mut Lx106, bus: &mut SocBus) {
     let (a, b) = (arg64(core, bus, 0) as i64, arg64(core, bus, 1) as i64);
-    if b == 0 { div_zero(bus); }
-    ret64(core, bus, if b == 0 { 0 } else { a.wrapping_div(b) as u64 });
+    if b == 0 { div_zero(core); return; }
+    ret64(core, bus, a.wrapping_div(b) as u64);
 }
 
 pub fn udivdi3(core: &mut Lx106, bus: &mut SocBus) {
     let (a, b) = (arg64(core, bus, 0), arg64(core, bus, 1));
-    if b == 0 { div_zero(bus); }
-    ret64(core, bus, a.checked_div(b).unwrap_or(0));
+    if b == 0 { div_zero(core); return; }
+    ret64(core, bus, a / b);
 }
 
 pub fn umoddi3(core: &mut Lx106, bus: &mut SocBus) {
     let (a, b) = (arg64(core, bus, 0), arg64(core, bus, 1));
-    if b == 0 { div_zero(bus); }
-    ret64(core, bus, a.checked_rem(b).unwrap_or(0));
+    if b == 0 { div_zero(core); return; }
+    ret64(core, bus, a % b);
 }
 
 #[cfg(test)]
@@ -219,7 +243,14 @@ mod tests {
         let mut b = SocBus::new(1 << 20, [0; 6]);
         assert_eq!(call(&mut b, divsi3, &[-7i32 as u32, 2]).0 as i32, -3);
         assert_eq!(call(&mut b, divsi3, &[i32::MIN as u32, -1i32 as u32]).0, i32::MIN as u32);
-        assert_eq!(call(&mut b, udivsi3, &[7, 0]).0, 0);
+        // a zero divisor leaves the ILL of the ROM for the core: no return
+        let mut c = Lx106::new();
+        c.set_ar(0, RA);
+        c.set_ar(2, 7);
+        c.set_ar(3, 0);
+        udivsi3(&mut c, &mut b);
+        assert!(c.hook_exception_pending());
+        assert_eq!(c.pc(), DIV_ZERO_ILL);
         assert_eq!(call(&mut b, umodsi3, &[17, 5]).0, 2);
         assert_eq!(call(&mut b, umulsidi3, &[0xffff_ffff, 2]), (0xffff_fffe, 1));
         assert_eq!(call(&mut b, muldi3, &[3, 1, 2, 0]), (6, 2));

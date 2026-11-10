@@ -68,8 +68,7 @@ pub struct GuestCall {
 pub fn call_guest(core: &mut Lx106, bus: &mut SocBus, f: u32, args: &[u32], resume: fn(&mut Lx106, &mut SocBus, GuestCall), data: [u32; 2], text: Vec<u8>) {
     let depth = bus.rom.calls.len();
     if depth >= MAX_DEPTH {
-        eprintln!("[emu] rom: calls from the ROM into the guest nest {depth} deep (at {f:#010x}): stopping");
-        bus.rom.request_stop();
+        bus.rom.halt(format!("calls from the ROM into the guest nest {depth} deep (at {f:#010x}): stopping"));
         return;
     }
     let ret_slot = GUEST_RET + 4 * depth as u32;
@@ -85,9 +84,8 @@ pub fn call_guest(core: &mut Lx106, bus: &mut SocBus, f: u32, args: &[u32], resu
 pub fn returned(core: &mut Lx106, bus: &mut SocBus, pc: u32) {
     let top = bus.rom.calls.last().map(|c| c.ret_slot);
     if top != Some(pc) {
-        eprintln!("[emu] rom: the guest returned to {pc:#010x}, but the open call from the ROM returns to {}: stopping",
-                  top.map_or("nothing".into(), |t| format!("{t:#010x}")));
-        bus.rom.request_stop();
+        bus.rom.halt(format!("the guest returned to {pc:#010x}, but the open call from the ROM returns to {}: stopping",
+                             top.map_or("nothing".into(), |t| format!("{t:#010x}"))));
         return;
     }
     let call = bus.rom.calls.pop().unwrap();
@@ -100,6 +98,10 @@ pub fn finish(core: &mut Lx106, bus: &mut SocBus, call: &GuestCall, v: u32) {
     ret(core, bus, v);
 }
 
+/// The frame and the handler tables are read and written without faults: the tables are the ROM's
+/// own DRAM data, and the frame is the one the guest's vector already stored a2..a4 into (a1 + 20
+/// .. a1 + 28 of the 80 bytes from a1), so a stack pointer that faults has faulted in the guest's
+/// vector before the ROM got here.
 fn rd(bus: &mut SocBus, a: u32) -> u32 { bus.read32(a).unwrap_or(0) }
 fn wr(bus: &mut SocBus, a: u32, v: u32) { let _ = bus.write32(a, v); }
 fn sreg(core: &mut Lx106, n: u32) -> u32 { core.read_sr(n).unwrap_or(0) }
@@ -245,8 +247,7 @@ pub fn p_none(core: &mut Lx106, bus: &mut SocBus) { ret(core, bus, 0); }
 /// watchdog resets the chip; this model stops the run.
 pub fn unhandled_exception(core: &mut Lx106, bus: &mut SocBus) {
     let c = core.state();
-    eprintln!("[emu] rom: unhandled exception: EXCCAUSE {} at {:#010x} (EXCVADDR {:#010x}); stopping", core.get_ar(2), c.epc[1], c.excvaddr);
-    bus.rom.request_stop();
+    bus.rom.halt(format!("unhandled exception: EXCCAUSE {} at {:#010x} (EXCVADDR {:#010x}); stopping", core.get_ar(2), c.epc[1], c.excvaddr));
 }
 
 // ------------------------------------------------------------------ character output

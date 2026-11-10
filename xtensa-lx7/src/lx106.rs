@@ -82,6 +82,8 @@ pub struct Lx106 {
     range_len: u32,
     /// the interpreter's predecoded blocks (`blocks`)
     blocks: Blocks,
+    /// `raise_from_hook`: the exception (cause, EXCVADDR) the next `run` or `step` takes
+    hook_exc: Option<(u32, Option<u32>)>,
 }
 
 impl Default for Lx106 {
@@ -92,13 +94,13 @@ impl Default for Lx106 {
 impl Clone for Lx106 {
     fn clone(&self) -> Self {
         Self { cpu: self.cpu.clone(), litbase: self.litbase, boundaries: self.boundaries, range_lo: self.range_lo,
-            range_len: self.range_len, blocks: Blocks::new(self.blocks.enabled) }
+            range_len: self.range_len, blocks: Blocks::new(self.blocks.enabled), hook_exc: self.hook_exc }
     }
 }
 
 impl Lx106 {
     pub fn new() -> Self {
-        let mut c = Self { cpu: Cpu::new(0), litbase: 0, boundaries: 0, range_lo: 0, range_len: 0, blocks: Blocks::new(true) };
+        let mut c = Self { cpu: Cpu::new(0), litbase: 0, boundaries: 0, range_lo: 0, range_len: 0, blocks: Blocks::new(true), hook_exc: None };
         c.reset();
         c
     }
@@ -161,6 +163,34 @@ impl Lx106 {
             _ => { self.cpu.write_sr(n, v)?; }
         }
         Some(())
+    }
+
+    /// For a function hook that stands for code (a mask ROM modelled in Rust) and finds that code
+    /// faulting: exception `cause` at `pc`, with EXCVADDR = `vaddr` when given (a load or store;
+    /// an illegal instruction leaves EXCVADDR as it is), as the instruction at `pc` would raise it.
+    /// The pc moves to `pc` now; the next `run` or `step` takes the exception before anything
+    /// else, an interrupt included, through the path an instruction's fault takes (EXCCAUSE,
+    /// EPC1 = `pc` and the vector by PS, or DEPC and the double exception vector inside an
+    /// exception) and retires one instruction for it. So the hook reports that it did not run
+    /// (`esp_soc::Soc::function_hook_steps` 0) and the machine counts and observes the exception
+    /// as it does any instruction's. A reset drops it.
+    pub fn raise_from_hook(&mut self, pc: u32, cause: u32, vaddr: Option<u32>) {
+        self.cpu.pc = pc;
+        self.hook_exc = Some((cause, vaddr));
+    }
+
+    /// Whether `raise_from_hook` left an exception for the next `run` or `step`.
+    #[inline(always)]
+    pub fn hook_exception_pending(&self) -> bool { self.hook_exc.is_some() }
+
+    /// Take the exception `raise_from_hook` left, if any.
+    #[inline(always)]
+    fn take_hook_exception(&mut self) -> Option<Trap> {
+        let (cause, vaddr) = self.hook_exc.take()?;
+        if let Some(a) = vaddr { self.cpu.excvaddr = a; }
+        let trap = self.raise(cause);
+        self.retire(1);
+        Some(trap)
     }
 
     fn vector(&self, ps: u32) -> u32 {
@@ -364,11 +394,15 @@ impl Lx106 {
 impl Core for Lx106 {
     type Irq = u32;
     /// The core's state as the reset leaves it. The approximate CPI is the host's timing setting,
-    /// not core state: it stays, as `Cpu::reset` keeps it for the LX6/LX7 profiles.
+    /// not core state, and the instruction count the core's lifetime count: both stay, as
+    /// `Cpu::reset` keeps them for the LX6/LX7 profiles (a host computes rates from the count's
+    /// deltas across chip resets).
     fn reset(&mut self) {
-        let cpi = self.cpu.approximate_cpi;
+        let (cpi, insns) = (self.cpu.approximate_cpi, self.cpu.insn_count);
         self.cpu = Cpu::new(0);
         self.cpu.approximate_cpi = cpi;
+        self.cpu.insn_count = insns;
+        self.hook_exc = None;
         self.cpu.pc = 0x4000_0080;
         self.cpu.configid = [0xc28c_dafa, 0x1082_b6f6];
         self.cpu.memctl = 0;
@@ -402,7 +436,8 @@ impl Core for Lx106 {
     fn step<B: Bus>(&mut self, bus: &mut B) -> StepOutcome {
         let pc = self.pc();
         let mut out = StepOutcome { pc, next_pc: pc, bytes: None, length: 0, kind: StepKind::Idle, control: None };
-        if let Some(t) = self.take_interrupt() { out.kind = StepKind::TrapBefore(t); }
+        if let Some(t) = self.take_hook_exception() { out.kind = StepKind::TrapDuring(t); }
+        else if let Some(t) = self.take_interrupt() { out.kind = StepKind::TrapBefore(t); }
         else if self.waiting() { self.advance_cycles(self.cpu.approximate_cpi); }
         else {
             match bus.fetch(pc) {
@@ -425,6 +460,7 @@ impl Core for Lx106 {
     /// intercepts it there. Predecoded blocks (`blocks`) when the bus keeps page versions, else
     /// the uncached loop; both retire the same instructions with the same effects.
     fn run<B: Bus>(&mut self, bus: &mut B, budget: u32) -> (u32, Option<Trap>) {
+        if self.hook_exc.is_some() { return (1, self.take_hook_exception()); }
         if self.blocks.enabled && !bus.page_versions().is_empty() { self.run_blocks(bus, budget) } else { self.run_uncached(bus, budget) }
     }
     fn set_boundaries(&mut self, bloom: u64) {
