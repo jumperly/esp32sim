@@ -28,6 +28,17 @@ fn flash_program(b: &mut SocBus, off: usize, n: u8) {
     b.flash.bytes[off + 3..off + 6].copy_from_slice(&J_SELF);
 }
 
+/// The ROM's flash function `name` with `args`, as a guest call reaches it; it must return
+/// SPI_FLASH_RESULT_OK (0).
+fn rom_call(c: &mut Lx106, b: &mut SocBus, name: &str, args: &[u32]) {
+    let entry = rom::ENTRIES.iter().find(|e| e.name == name).unwrap().addr;
+    c.set_ar(0, IRAM_LOW);
+    for (i, &a) in args.iter().enumerate() { c.set_ar(2 + i as u8, a); }
+    c.set_pc(entry);
+    assert!(rom::dispatch(c, b, 1) > 0, "{name}");
+    assert_eq!(c.get_ar(2), 0, "{name} returns SPI_FLASH_RESULT_OK");
+}
+
 /// Run two instructions at `pc`: the MOVI and the jump; a2 then says which code ran.
 fn a2_after_running(c: &mut Lx106, b: &mut SocBus, pc: u32) -> u32 {
     c.set_pc(pc);
@@ -67,14 +78,6 @@ fn flash_erased_and_programmed_under_executed_code_runs_the_new_code() {
     b.cache_read_enable(0, 0, 1);
     assert_eq!(a2_after_running(&mut c, &mut b, pc), 1);
     // the ROM: SPIEraseSector(2), then SPIWrite(0x2000, DRAM, 8) of `movi a2, 2; j .`
-    let rom_call = |c: &mut Lx106, b: &mut SocBus, name: &str, args: &[u32]| {
-        let entry = rom::ENTRIES.iter().find(|e| e.name == name).unwrap().addr;
-        c.set_ar(0, IRAM_LOW);
-        for (i, &a) in args.iter().enumerate() { c.set_ar(2 + i as u8, a); }
-        c.set_pc(entry);
-        assert!(rom::dispatch(c, b, 1) > 0, "{name}");
-        assert_eq!(c.get_ar(2), 0, "{name} returns SPI_FLASH_RESULT_OK");
-    };
     rom_call(&mut c, &mut b, "SPIEraseSector", &[2]);
     let mut code = [0xff; 8];
     code[..3].copy_from_slice(&movi_a2(2));
@@ -133,6 +136,51 @@ fn guest_stores_to_iram_reach_decoded_code() {
     c.set_pc(main + 8);
     assert_eq!(c.run(&mut b, 2), (2, None));
     assert_eq!(c.get_ar(2), 7, "and so does the next run");
+}
+
+/// A reboot, and `code_changed()` after a direct write to `iram`, both reach code that ran.
+#[test]
+fn reboot_and_code_changed_reach_decoded_code() {
+    let mut b = SocBus::new(4 << 20, MAC);
+    let (main, o) = (IRAM_LOW + 0x200, 0x200);
+    b.load_bytes(main, &[movi_a2(1), J_SELF].concat()).unwrap();
+    let mut c = Lx106::new();
+    assert_eq!(a2_after_running(&mut c, &mut b, main), 1);
+    // a direct write, then a jump reset (IRAM kept)
+    b.iram[o..o + 3].copy_from_slice(&movi_a2(2));
+    b.reboot(MAC);
+    assert_eq!(a2_after_running(&mut c, &mut b, main), 2);
+    // a direct write announced by `code_changed()`
+    b.iram[o..o + 3].copy_from_slice(&movi_a2(3));
+    b.code_changed();
+    assert_eq!(a2_after_running(&mut c, &mut b, main), 3);
+}
+
+/// The ROM's `SPIRead` copying new code from flash into IRAM over code that ran (eboot and the
+/// SDK load IRAM code this way).
+#[test]
+fn rom_spi_read_into_iram_reaches_decoded_code() {
+    let mut b = SocBus::new(4 << 20, MAC);
+    let main = IRAM_LOW + 0x300;
+    b.load_bytes(main, &[movi_a2(1), J_SELF].concat()).unwrap();
+    let mut c = Lx106::new();
+    assert_eq!(a2_after_running(&mut c, &mut b, main), 1);
+    b.write_flash(0x3000, &[movi_a2(2), J_SELF, [0xff; 3]].concat()).unwrap();
+    rom_call(&mut c, &mut b, "SPIRead", &[0x3000, main, 8]);
+    assert_eq!(a2_after_running(&mut c, &mut b, main), 2);
+}
+
+/// The host writing flash (`write_flash`, as a programmer does) under the mapped window over code
+/// that ran from there.
+#[test]
+fn host_flash_writes_under_the_window_reach_decoded_code() {
+    let mut b = SocBus::new(4 << 20, MAC);
+    flash_program(&mut b, 0x4000, 1);
+    let (mut c, pc) = (Lx106::new(), FLASH_WIN_LOW + 0x4000);
+    b.cache_read_enable(0, 0, 1);
+    assert_eq!(a2_after_running(&mut c, &mut b, pc), 1);
+    b.write_flash(0x4000, &[movi_a2(2), J_SELF].concat()).unwrap();
+    assert_eq!(a2_after_running(&mut c, &mut b, pc), 2);
 }
 
 /// Snapshot of what a run leaves: the core's registers and counters, the machine's interrupt and

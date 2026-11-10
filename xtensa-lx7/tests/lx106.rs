@@ -512,13 +512,57 @@ fn faults_inside_decoded_blocks_trap_like_the_uncached_loop() {
         assert_eq!(seen[0].0, (3, Some(Trap::Exception(cause))));
         assert_eq!((seen[0].1, seen[0].2), (0x4000_0030, BASE + 6));
     }
-    // an unmapped pc is an instruction fetch error, even where an empty slot of the table is
-    let (mut c, mut b) = machine(BASE);
-    nop_loop(&mut b, 2);
-    assert_eq!(c.run(&mut b, 3), (3, None));
+    // an unmapped pc is an instruction fetch error, even where an empty slot of the table is, and
+    // after a run was cut inside a block and a later run finished that block
     for pc in [0, 1, 2, 0x1234_5679] {
-        c.set_pc(pc);
-        assert_eq!(c.run(&mut b, 10), (1, Some(Trap::Exception(exc::IFETCH_ERROR))), "pc {pc:#x}");
-        assert_eq!(c.state().excvaddr, pc);
+        let seen = [true, false].map(|cached| {
+            let (mut c, mut b) = machine(BASE);
+            c.set_block_cache(cached);
+            nop_loop(&mut b, 45);
+            assert_eq!(c.run(&mut b, 5), (5, None));
+            assert_eq!(c.run(&mut b, 27), (27, None));
+            c.set_pc(pc);
+            jump_facts(&mut c, &mut b)
+        });
+        assert_eq!(seen[0], seen[1], "pc {pc:#x}");
+        assert_eq!(seen[0].0, (1, Some(Trap::Exception(exc::IFETCH_ERROR))), "pc {pc:#x}");
+        assert_eq!(seen[0].2, pc);
     }
+}
+
+/// `run(10)` from the current pc: what it returned, then pc, EXCVADDR, EXCCAUSE, instruction count.
+fn jump_facts(c: &mut Lx106, b: &mut FlatRam) -> ((u32, Option<Trap>), u32, u32, u32, u64) {
+    let r = c.run(b, 10);
+    (r, c.pc(), c.state().excvaddr, c.state().exccause, c.insn_count())
+}
+
+#[test]
+fn a_jump_to_pc_1_faults_after_a_resumed_block_and_from_a_fresh_cache() {
+    // a run cut inside a block (5), the next one resumes there and finishes it without a new cut
+    // (27 = the rest of the first 32-instruction block), then a jump to 1: nothing is fetched there
+    let seen = [true, false].map(|cached| {
+        let (mut c, mut b) = machine(BASE);
+        c.set_block_cache(cached);
+        nop_loop(&mut b, 45);
+        assert_eq!(c.run(&mut b, 5), (5, None));
+        assert_eq!(c.run(&mut b, 27), (27, None));
+        c.set_pc(1);
+        jump_facts(&mut c, &mut b)
+    });
+    assert_eq!(seen[0], seen[1]);
+    assert_eq!(seen[0].0, (1, Some(Trap::Exception(exc::IFETCH_ERROR))));
+    // the first block of a fresh cache: table slot 0 ((pc >> 1) ^ (pc >> 16) = 0), arena index 0
+    let pc0 = BASE + 0x8020;
+    let seen = [true, false].map(|cached| {
+        let (mut c, mut b) = machine(pc0);
+        c.set_block_cache(cached);
+        // three NOPs and `j .` (offset -4)
+        let code = [0xf0, 0x20, 0x00, 0xf0, 0x20, 0x00, 0xf0, 0x20, 0x00, 0x06, 0xff, 0xff];
+        b.mem[0x8020..0x8020 + code.len()].copy_from_slice(&code);
+        assert_eq!(c.run(&mut b, 4), (4, None));
+        c.set_pc(1);
+        jump_facts(&mut c, &mut b)
+    });
+    assert_eq!(seen[0], seen[1]);
+    assert_eq!(seen[0].0, (1, Some(Trap::Exception(exc::IFETCH_ERROR))));
 }
