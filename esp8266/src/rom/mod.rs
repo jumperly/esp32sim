@@ -11,24 +11,34 @@
 //! An entry without a model logs `[emu] rom: unimplemented <name> (<addr>) from <call site>` once
 //! and returns 0; with `RomState::strict` it stops the run there instead (`SocBus::take_stop`).
 //!
-//! 0x4000_F000..0x4000_FF00 holds no ROM symbol; this model keeps it for addresses of its own
-//! (`ENTRY_RETURN`, and later the PHY function table and the return points of calls into the guest).
+//! 0x4000_F000..0x4000_FF00 holds no ROM symbol; this model keeps it for addresses of its own:
+//! the PHY function stubs (`phy::STUBS`, 0x4000_F000..), the return points of calls into the
+//! guest (`xtos::GUEST_RET`, 0x4000_FD00..), `ENTRY_RETURN`, `DELAY_LOOP` and the scheduler's
+//! loop (`sched::RUN_LOOP`).
 //! Hooking all of it also covers every bucket of the machine's stub bloom, which it tests when the
 //! core stops in front of the ROM, so every pc there reaches `dispatch`, including the ones outside
 //! the table.
 pub mod boot;
+mod crypto;
+mod gpio;
 mod libc;
+mod libgcc;
+pub mod phy;
 mod print;
+pub mod sched;
 mod spi;
 pub mod table;
+pub mod xtos;
 
 use crate::bus::{SocBus, ROM_HIGH, ROM_LOW};
 use emu_core::Core;
 use esp_soc::Stop;
+use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 use xtensa_lx7::Lx106;
 
 pub use table::ENTRIES;
+pub use xtos::GuestCall;
 
 /// A ROM symbol: where the linker script puts it.
 #[derive(Clone, Copy, Debug)]
@@ -57,6 +67,24 @@ pub struct RomState {
     pub putc1: u32,
     /// `uart_buff_switch`: the UART of `ets_putc` and `ets_uart_putc1`
     pub uart_sel: usize,
+    /// calls into the guest waiting for their return, innermost last
+    pub calls: Vec<GuestCall>,
+    /// `ets_isr_attach`: handler and argument by interrupt number
+    pub isr: [(u32, u32); 16],
+    /// `ets_task`: by priority
+    pub tasks: [sched::Task; sched::PRIORITIES],
+    /// `ets_set_idle_cb`: function and argument
+    pub idle: (u32, u32),
+    /// the idle callback ran since the scheduler last waited
+    pub idle_called: bool,
+    /// the stack `ets_run` was called on
+    pub run_sp: u32,
+    /// `ets_update_cpu_frequency`: MHz, what `ets_delay_us` counts in
+    pub cpu_mhz: u32,
+    /// the RF analog registers of `rom_i2c_*`, by (block, host, register)
+    pub i2c: HashMap<u32, u8>,
+    /// PHY table slots already logged
+    pub phy_seen: HashSet<u32>,
     stop: Option<Stop>,
     /// one-time log lines already written
     logged: Vec<&'static str>,
@@ -64,7 +92,13 @@ pub struct RomState {
 
 impl Default for RomState {
     fn default() -> Self {
-        RomState { strict: false, unknown: Vec::new(), boot_pending: true, putc1: print::ETS_UART_PUTC1, uart_sel: 0, stop: None, logged: Vec::new() }
+        RomState {
+            strict: false, unknown: Vec::new(), boot_pending: true, putc1: print::ETS_UART_PUTC1, uart_sel: 0, calls: Vec::new(),
+            isr: [(0, 0); 16], tasks: [sched::Task::default(); sched::PRIORITIES], idle: (0, 0), idle_called: false, run_sp: 0,
+            // Model choice: the CPU runs at 80 MHz from reset here, so the ROM counts 80 cycles per
+            // microsecond until the SDK says otherwise
+            cpu_mhz: (crate::periph::CPU_HZ / 1_000_000) as u32, i2c: HashMap::new(), phy_seen: HashSet::new(), stop: None, logged: Vec::new(),
+        }
     }
 }
 
@@ -83,6 +117,9 @@ impl RomState {
 
 /// The ROM symbol at `addr`, if any.
 pub fn name_at(addr: u32) -> Option<&'static str> { index(addr).map(|i| ENTRIES[i].name) }
+
+/// The address of the ROM symbol `name` (one the model uses, so it is in the table).
+pub fn addr_of(name: &str) -> u32 { ENTRIES.iter().find(|e| e.name == name).map(|e| e.addr).unwrap_or_else(|| panic!("{name} is no ROM symbol")) }
 
 /// The table entry at `addr`: the modelled one where two names share it.
 fn index(addr: u32) -> Option<usize> {
@@ -120,6 +157,9 @@ pub fn dispatch(core: &mut Lx106, bus: &mut SocBus, budget: u32) -> u32 {
     let pc = core.pc();
     if !(ROM_LOW..ROM_HIGH).contains(&pc) { return 0; }
     if pc == DELAY_LOOP { return delay_loop(core, budget); }
+    if pc == sched::RUN_LOOP { return sched::run_loop(core, bus); }
+    if (xtos::GUEST_RET..xtos::GUEST_RET_END).contains(&pc) { xtos::returned(core, bus, pc); return 1; }
+    if (phy::STUBS..phy::STUBS + 4 * phy::SLOTS).contains(&pc) { phy::slot(core, bus, pc); return 1; }
     if pc == ENTRY_RETURN {
         eprintln!("[emu] rom: the boot image's entry returned to the ROM (a2={:#x})", core.get_ar(2));
         bus.rom.request_stop();
@@ -167,16 +207,13 @@ fn ret64(core: &mut Lx106, bus: &mut SocBus, v: u64) { core.set_ar(3, (v >> 32) 
 
 // ------------------------------------------------------------------ small functions
 
-/// CPU cycles per microsecond. The CPU runs at 80 MHz here (`periph::CPU_HZ`); CPU2X is not
-/// modelled yet.
-const CYCLES_PER_US: u32 = (crate::periph::CPU_HZ / 1_000_000) as u32;
-
 /// `ets_delay_us(us)`: a busy-wait on CCOUNT until `us` microseconds of CPU cycles have passed,
-/// the cycle count computed in 32 bits as a CCOUNT difference is. The call itself is one step; the
+/// at the frequency `ets_update_cpu_frequency` set, the cycle count computed in 32 bits as a
+/// CCOUNT difference is. The call itself is one step; the
 /// wait goes on at `DELAY_LOOP` (`delay_loop`) with its state in a3 and a4, scratch registers of
 /// the call0 ABI (an interrupt handler saves them as it saves any interrupted code's).
 fn ets_delay_us(core: &mut Lx106, bus: &mut SocBus) {
-    let cycles = arg(core, bus, 0).wrapping_mul(CYCLES_PER_US);
+    let cycles = arg(core, bus, 0).wrapping_mul(bus.rom.cpu_mhz);
     let start = core.read_sr(xtensa_lx7::state::sr::CCOUNT).unwrap_or(0);
     core.set_ar(3, start);
     core.set_ar(4, cycles);
@@ -231,7 +268,37 @@ fn ets_wdt_nop(core: &mut Lx106, bus: &mut SocBus) { ret(core, bus, 0); }
 
 /// The modelled functions by ROM symbol name.
 const IMPLEMENTED: &[(&str, Handler)] = &[
-    ("_ResetVector", boot::reset_vector), ("_xtos_unhandled_exception", boot::unhandled_exception),
+    ("_ResetVector", boot::reset_vector),
+    // interrupts, exceptions
+    ("_xtos_unhandled_exception", xtos::unhandled_exception), ("_xtos_l1int_handler", xtos::l1int_handler),
+    ("_xtos_c_wrapper_handler", xtos::c_wrapper_handler), ("_xtos_set_exception_handler", xtos::set_exception_handler),
+    ("_xtos_p_none", xtos::p_none), ("ets_isr_attach", xtos::ets_isr_attach), ("ets_isr_mask", xtos::ets_isr_mask),
+    ("ets_isr_unmask", xtos::ets_isr_unmask), ("_xtos_ints_on", xtos::xtos_ints_on), ("_xtos_ints_off", xtos::xtos_ints_off),
+    ("_xtos_set_intlevel", xtos::xtos_set_intlevel),
+    // scheduler
+    ("ets_task", sched::ets_task), ("ets_post_rom", sched::ets_post), ("ets_run", sched::ets_run), ("ets_set_idle_cb", sched::ets_set_idle_cb),
+    // PHY
+    ("phy_get_romfuncs", phy::phy_get_romfuncs), ("rom_i2c_readReg", phy::i2c_read), ("rom_i2c_readReg_Mask", phy::i2c_read_mask),
+    ("rom_i2c_writeReg", phy::i2c_write), ("rom_i2c_writeReg_Mask", phy::i2c_write_mask),
+    ("rom_chip_v5_enable_cca", phy::nop), ("rom_chip_v5_disable_cca", phy::nop), ("rom_sar_init", phy::nop),
+    // GPIO, descriptors, CPU frequency
+    ("gpio_output_set", gpio::gpio_output_set), ("gpio_input_get", gpio::gpio_input_get),
+    ("gpio_pin_wakeup_enable", gpio::gpio_pin_wakeup_enable), ("gpio_pin_wakeup_disable", gpio::gpio_pin_wakeup_disable),
+    ("lldesc_build_chain", gpio::lldesc_build_chain), ("lldesc_num2link", gpio::lldesc_num2link), ("lldesc_set_owner", gpio::lldesc_set_owner),
+    ("roundup2", gpio::roundup2), ("ets_update_cpu_frequency", gpio::ets_update_cpu_frequency),
+    ("ets_get_cpu_frequency", gpio::ets_get_cpu_frequency), ("ets_rtc_int_register", gpio::ets_rtc_int_register),
+    // crypto
+    ("MD5Init", crypto::md5_init), ("MD5Update", crypto::md5_update), ("MD5Final", crypto::md5_final), ("md5_vector", crypto::md5_vector),
+    ("hmac_md5", crypto::hmac_md5), ("hmac_md5_vector", crypto::hmac_md5_vector), ("sha1_vector", crypto::sha1_vector),
+    ("hmac_sha1", crypto::hmac_sha1), ("hmac_sha1_vector", crypto::hmac_sha1_vector), ("pbkdf2_sha1", crypto::pbkdf2_sha1),
+    ("sha1_prf", crypto::sha1_prf), ("rc4_skip", crypto::rc4_skip), ("aes_decrypt", crypto::aes_decrypt),
+    ("rijndaelKeySetupDec", crypto::rijndael_key_setup_dec),
+    // soft float
+    ("__addsf3", libgcc::addsf3), ("__subsf3", libgcc::subsf3), ("__mulsf3", libgcc::mulsf3), ("__fixunssfsi", libgcc::fixunssfsi),
+    ("__floatsisf", libgcc::floatsisf), ("__floatunsisf", libgcc::floatunsisf), ("__adddf3", libgcc::adddf3), ("__subdf3", libgcc::subdf3),
+    ("__muldf3", libgcc::muldf3), ("__divdf3", libgcc::divdf3), ("__fixdfsi", libgcc::fixdfsi), ("__fixunsdfsi", libgcc::fixunsdfsi),
+    ("__truncdfsf2", libgcc::truncdfsf2), ("__extendsfdf2", libgcc::extendsfdf2), ("__floatsidf", libgcc::floatsidf),
+    ("__floatunsidf", libgcc::floatunsidf),
     ("ets_printf", print::ets_printf), ("ets_vprintf", print::ets_vprintf), ("ets_uart_printf", print::ets_uart_printf),
     ("ets_putc", print::ets_putc), ("ets_write_char", print::ets_write_char), ("ets_uart_putc1", print::ets_uart_putc1),
     ("uart_tx_one_char", print::uart_tx_one_char),

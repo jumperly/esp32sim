@@ -44,8 +44,8 @@ pub const UART0_BOOT_DIV: u32 = 80_000_000 / 74_880 * 26 / 40;
 /// The ROM's data in DRAM that the guest uses (eagle.rom.addr.v6.ld): the per-cause exception
 /// handlers the SDK's user exception vector jumps through, the "C" handlers behind
 /// `_xtos_c_wrapper_handler`, and the pointer to the flash description (spi_flash.h:41-50).
-const XTOS_EXC_HANDLER_TABLE: u32 = 0x3fff_c000;
-const XTOS_C_HANDLER_TABLE: u32 = 0x3fff_c100;
+const XTOS_EXC_HANDLER_TABLE: u32 = super::xtos::EXC_HANDLER_TABLE;
+const XTOS_C_HANDLER_TABLE: u32 = super::xtos::C_HANDLER_TABLE;
 const FLASHCHIP: u32 = 0x3fff_c714;
 /// Model choice: where `flashchip` points, the word after it (the real ROM's struct address is not
 /// in the linker script).
@@ -67,19 +67,11 @@ fn rom_data_init(bus: &mut SocBus) {
         (XTOS_EXC_HANDLER_TABLE + 4 * i, rom(handler))
     }).collect();
     words.extend((0..64).map(|i| (XTOS_C_HANDLER_TABLE + 4 * i, rom("_xtos_p_none"))));
-    let size = bus.flash.len() as u32;
-    let id = 0x40ef | (size.max(1).ilog2() << 16);
+    let (size, id) = (bus.flash.len() as u32, bus.flash.jedec_id());
     words.extend([(FLASHCHIP, FLASHCHIP_DATA), (FLASHCHIP_DATA, id), (FLASHCHIP_DATA + 4, size), (FLASHCHIP_DATA + 8, crate::flash::BLOCK as u32),
                   (FLASHCHIP_DATA + 12, crate::flash::SECTOR as u32), (FLASHCHIP_DATA + 16, 0x100), (FLASHCHIP_DATA + 20, 0xffff)]);
     for (a, v) in words { bus.load_bytes(a, &v.to_le_bytes()).unwrap(); }
-}
-
-/// `_xtos_unhandled_exception`: the SDK's user exception vector found no handler for the cause
-/// (a2). The ROM would spin until the watchdog resets the chip; this model stops the run.
-pub fn unhandled_exception(core: &mut Lx106, bus: &mut SocBus) {
-    let c = core.state();
-    eprintln!("[emu] rom: unhandled exception: EXCCAUSE {} at {:#010x} (EXCVADDR {:#010x}); stopping", core.get_ar(2), c.epc[1], c.excvaddr);
-    bus.rom.request_stop();
+    super::phy::init(bus);
 }
 
 /// The image header's magic byte (bootloaders/eboot/flash.h:24-35 `image_header_t`).

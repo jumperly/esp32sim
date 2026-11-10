@@ -1,0 +1,36 @@
+{
+  "base_revision": "0142ee09",
+  "toolchain": "rustc 1.99.0",
+  "strict_rom": true,
+  "tests": {
+    "esp8266_unit": { "passed": 30, "failed": 0 },
+    "esp8266_boot": { "passed": 2, "failed": 0 },
+    "esp8266_delay": { "passed": 2, "failed": 0 },
+    "esp8266_strict": { "passed": 3, "failed": 0, "debug_seconds": 67.6 },
+    "esp8266_xtos": { "passed": 2, "failed": 0 },
+    "xtensa_lx7_lx106": { "passed": 20, "failed": 0 },
+    "workspace": {
+      "passed": 1497,
+      "failed": 2,
+      "ignored": 94,
+      "failed_names": ["cli/tests/cooja.rs echo_session_is_exact_and_reproducible", "cli/tests/cooja.rs ack_session_is_exact_and_reproducible"],
+      "failed_reason": "pre-existing: core.autocrlf=true checks the goldens out with CRLF; output equals the golden after removing CR"
+    }
+  },
+  "clippy": {
+    "esp8266_xtensa_lx7_all_targets": "pass",
+    "workspace_all_targets": "pass",
+    "wasm32_esp32sim_wasm_jit_tests": "pass"
+  },
+  "fixtures": {
+    "esp8266-blink": { "device_seconds": 3, "unknown_rom_entries": 0, "gpio2_period_us": "500000 +- 1000", "uart0": ["Ready", "t=4 led=1", "t=504 led=0"] },
+    "esp8266-serial": { "device_seconds": 6, "unknown_rom_entries": 0, "uart0": ["Ready", "rx=hello", "rx=0123456789abcdefghijklmnopqrstuvwxyz"], "uart1": ["one 1", "one 50"], "interrupt_5_taken": true },
+    "esp8266-strap": { "device_seconds": 6, "unknown_rom_entries": 0, "reboots": 1, "rom_banners": 2 },
+    "esp8266-wifi-off": { "device_seconds": 6, "unknown_rom_entries": 0, "status_7_lines": 10, "alive": true, "reboots": 0 }
+  },
+  "cli_release_2s": {
+    "esp8266-blink": { "instructions": 421451, "wall_seconds_below": 0.05, "interrupts": 102 },
+    "esp8266-serial": { "instructions": 159999900, "wall_seconds": 2.7, "minsn_per_s": [58.6, 60.0, 59.2], "interrupts": 99 }
+  },
+  "cpu_benchmark_run": false
+}

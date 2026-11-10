@@ -118,6 +118,14 @@ impl Lx106 {
         }
     }
 
+    /// `waiti level`: PS.INTLEVEL = `level`, then sleep until an interrupt above it is pending,
+    /// as the instruction does (Xtensa ISA WAITI). For a modelled ROM loop that waits for an
+    /// interrupt; the pc stays where it is, so the interrupt's return comes back to it.
+    pub fn waiti(&mut self, level: u32) {
+        self.cpu.ps = (self.cpu.ps & !ps::INTLEVEL_MASK) | (level & 0xf);
+        self.cpu.waiting = true;
+    }
+
     pub fn write_sr(&mut self, n: u32, v: u32) -> Option<()> {
         if !writable_sr(n) { return None; }
         match n {

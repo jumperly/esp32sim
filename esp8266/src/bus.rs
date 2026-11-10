@@ -30,6 +30,16 @@ pub const ROM_HIGH: u32 = 0x4001_0000;
 pub const FLASH_WIN_LOW: u32 = 0x4020_0000;
 pub const FLASH_WIN_HIGH: u32 = 0x4030_0000;
 
+/// SPI0, the flash controller: CMD (esp8266_peri.h:301) and its command bits (:382-391).
+const SPI0_CMD: u32 = PERIPH_BASE + 0x200;
+const SPI_READ: u32 = 1 << 31;
+const SPI_RDID: u32 = 1 << 28;
+const SPI_RDSR: u32 = 1 << 27;
+const SPI_PP: u32 = 1 << 25;
+const SPI_SE: u32 = 1 << 24;
+const SPI_BE: u32 = 1 << 23;
+const SPI_CE: u32 = 1 << 22;
+
 /// Where an address goes.
 enum At { Dram(usize), Iram(usize), Rtc(usize), Flash(usize), Rom, Mmio, Unmapped }
 
@@ -57,8 +67,8 @@ pub struct SocBus {
     pub sw_reset: bool,
     /// strapping as the ROM reads it: GPIO15 << 2 | GPIO0 << 1 | GPIO2 (3: boot from flash)
     pub strap: u32,
-    /// host-driven GPIO input levels
-    pub gpio_in: u64,
+    /// the interrupt lines as last derived (`Peripherals::refresh_lines`)
+    pub lines: u32,
     pub debug: esp_soc::DebugFlags,
 }
 
@@ -69,7 +79,7 @@ impl SocBus {
             rtc_mem: vec![0; (RTC_MEM_HIGH - RTC_MEM_LOW) as usize], flash: Flash::new(flash_size), cache_base: 0, cache_enabled: false,
             periph: Peripherals::new(mac), rom: RomState::default(), board: Box::new(esp_soc::NoBoard),
             cycles: 0, irq_dirty: true, last_fault: None, rom_data_reads: 0, reset_cause: crate::rom::boot::RST_POWERON,
-            sw_reset: false, strap: crate::rom::boot::STRAP_FLASH, gpio_in: 0, debug: Default::default(),
+            sw_reset: false, strap: crate::rom::boot::STRAP_FLASH, lines: 0, debug: Default::default(),
         }
     }
 
@@ -117,7 +127,11 @@ impl SocBus {
             At::Flash(o) if N == 4 => Self::get::<N>(&self.flash.bytes, o),
             At::Iram(_) | At::Flash(_) => return self.fault(addr, false, Fault::LoadStoreError),
             At::Rom => { self.rom_read(addr); Some([0; N]) }
-            At::Mmio => Self::get::<N>(&self.periph.read32(addr & !3).to_le_bytes(), (addr & 3) as usize),
+            At::Mmio => {
+                // a read of a receive FIFO may lower interrupt 5
+                if addr & !3 == PERIPH_BASE || addr & !3 == UART1_BASE { self.irq_dirty = true; }
+                Self::get::<N>(&self.periph.read32(addr & !3).to_le_bytes(), (addr & 3) as usize)
+            }
             At::Unmapped => None,
         };
         match bytes { Some(b) => Ok(b), None => self.fault(addr, false, Fault::Unmapped) }
@@ -149,6 +163,44 @@ impl SocBus {
         };
         self.periph.write32(a, w);
         self.irq_dirty = true;
+        if a == SPI0_CMD && w != 0 { self.spi0_command(w); }
+    }
+
+    /// A command written to SPI0's CMD register (esp8266_peri.h:301-320 for the registers,
+    /// :382-395 for the command bits), done at once; CMD then reads 0, which is what the SDK polls
+    /// for (`spi_flash_get_id`, Blink image 0x401061c8). READ takes the length from ADDR bits
+    /// 24..31 and the address from bits 0..23 (digitake esp8266-emulator src/soc.c:424-436 reads
+    /// them the same way), at most the 64 bytes of W0..W15.
+    fn spi0_command(&mut self, cmd: u32) {
+        let reg = |off: u32| SPI0_CMD + off;
+        let a = self.periph.spi0.read(reg(0x04));
+        let (addr, len) = (a & 0xff_ffff, ((a >> 24) as usize).min(64));
+        let mut w = [0u8; 64];
+        for (i, c) in w.chunks_mut(4).enumerate() { c.copy_from_slice(&self.periph.spi0.read(reg(0x40 + 4 * i as u32)).to_le_bytes()); }
+        let store = |bus: &mut SocBus, w: &[u8; 64]| {
+            for (i, c) in w.chunks(4).enumerate() { bus.periph.spi0.write(reg(0x40 + 4 * i as u32), u32::from_le_bytes(c.try_into().unwrap())); }
+        };
+        if cmd & SPI_READ != 0 {
+            let mut buf = [0u8; 64];
+            self.flash.read(addr, &mut buf[..len]);
+            store(self, &buf);
+        } else if cmd & SPI_RDID != 0 {
+            let id = self.flash.jedec_id();
+            self.periph.spi0.write(reg(0x40), id);
+        } else if cmd & SPI_RDSR != 0 {
+            // the status register (SPI0RS 0x210): never busy, no write enable latched
+            self.periph.spi0.write(reg(0x10), 0);
+        } else if cmd & SPI_PP != 0 {
+            self.flash.write(addr, &w[..len]);
+        } else if cmd & SPI_SE != 0 {
+            self.flash.erase_sector(addr / crate::flash::SECTOR as u32);
+        } else if cmd & SPI_BE != 0 {
+            self.flash.erase_block(addr / crate::flash::BLOCK as u32);
+        } else if cmd & SPI_CE != 0 {
+            self.flash.bytes.fill(0xff);
+        }
+        // WREN, WRDI, WRSR, DP, RES, HPM and user commands change nothing a model reads
+        self.periph.spi0.write(SPI0_CMD, 0);
     }
 
     /// Plain memory as the ROM model and the loaders see it, not held to the instruction bus's
@@ -191,6 +243,9 @@ impl SocBus {
     }
 
     pub fn write_flash(&mut self, offset: usize, data: &[u8]) -> Result<(), String> { self.flash.load(offset, data) }
+
+    /// The GPIO output register (GPIO_OUT, esp8266_peri.h:48): the levels of the pins GPIO_ENABLE drives.
+    pub fn gpio_output(&self) -> u32 { self.periph.gpio.out }
 }
 
 impl Bus for SocBus {
@@ -215,7 +270,15 @@ impl Bus for SocBus {
         Ok(b)
     }
     fn note_pc(&mut self, pc: u32) { self.periph.misc.cur_pc = pc; }
-    fn tick(&mut self, cycles: u32) -> u32 { self.cycles += cycles as u64; 0 }
+    /// Device time moves on; a timer that fell due re-derives the interrupt lines.
+    fn tick(&mut self, cycles: u32) -> u32 {
+        self.cycles += cycles as u64;
+        self.periph.now = self.cycles;
+        if self.cycles < self.periph.next_event() { return 0; }
+        self.periph.advance(self.cycles);
+        self.irq_dirty = true;
+        1
+    }
 }
 
 #[cfg(test)]
@@ -306,6 +369,30 @@ mod tests {
         let log = b.periph.misc.mmio_log.take().unwrap();
         assert_eq!(log.iter().map(|&(_, a, v, w)| (a, v, w)).collect::<Vec<_>>(), [(r, 0x1122_aa44, true)]);
         assert_eq!(b.read32(r), Ok(0x1122_aa44));
+    }
+
+    #[test]
+    fn spi0_commands_complete_at_once_on_the_flash() {
+        // SPI0A 0x204, SPI0RS 0x210, SPI0W0 0x240 (esp8266_peri.h:302,305,317)
+        let (mut b, a, w0) = (bus(), SPI0_CMD + 0x04, SPI0_CMD + 0x40);
+        b.write32(SPI0_CMD, SPI_RDID).unwrap();
+        assert_eq!(b.read32(SPI0_CMD), Ok(0), "done: CMD reads 0");
+        assert_eq!(b.read32(w0), Ok(0x16_40ef), "a W25Q-style id of a 4 MB chip, low byte first");
+        b.flash.bytes[0x1234..0x123c].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        b.write32(a, 8 << 24 | 0x1234).unwrap();
+        b.write32(SPI0_CMD, SPI_READ).unwrap();
+        assert_eq!((b.read32(w0), b.read32(w0 + 4)), (Ok(0x0403_0201), Ok(0x0807_0605)));
+        // page program ANDs W0.. into the cells; a sector erase sets them back
+        b.write32(w0, 0x0000_00f0).unwrap();
+        b.write32(a, 4 << 24 | 0x1234).unwrap();
+        b.write32(SPI0_CMD, SPI_PP).unwrap();
+        assert_eq!(b.flash.bytes[0x1234..0x1238], [0, 0, 0, 0]);
+        b.write32(a, 0x1000).unwrap();
+        b.write32(SPI0_CMD, SPI_SE).unwrap();
+        assert_eq!(b.flash.bytes[0x1234..0x1238], [0xff; 4]);
+        b.write32(SPI0_CMD + 0x10, 3).unwrap();
+        b.write32(SPI0_CMD, SPI_RDSR).unwrap();
+        assert_eq!(b.read32(SPI0_CMD + 0x10), Ok(0), "never busy");
     }
 
     #[test]

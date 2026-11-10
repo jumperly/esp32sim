@@ -383,3 +383,22 @@ fn spin_retires_steps_at_the_approximate_cpi_and_raises_the_timer_on_its_match()
     assert_eq!(c.state().ccount.wrapping_sub(t0), 10);
     assert_eq!(c.state().interrupt & 0x40, 0x40, "the CCOMPARE0 match raises the timer");
 }
+
+#[test]
+fn waiti_sleeps_at_the_pc_until_an_interrupt_and_returns_there() {
+    let (mut c, mut b) = machine(BASE + 0x100);
+    c.write_sr(sr::VECBASE, BASE).unwrap();
+    c.write_sr(sr::PS, ps::UM | 5).unwrap();
+    c.write_sr(sr::INTENABLE, 1 << 5).unwrap();
+    c.waiti(0);
+    assert!(c.waiting());
+    assert_eq!(c.state().ps & 0xf, 0);
+    assert_eq!(c.cycles_until_wake(), None, "no timer: only a peripheral line wakes it");
+    let t0 = c.state().ccount;
+    assert_eq!(c.run(&mut b, 10), (10, None));
+    assert_eq!((c.pc(), c.state().ccount.wrapping_sub(t0)), (BASE + 0x100, 10));
+    c.set_irq(1 << 5);
+    assert_eq!(c.run(&mut b, 10).1, Some(Trap::Interrupt(5)));
+    assert!(!c.waiting());
+    assert_eq!((c.state().epc[1], c.pc()), (BASE + 0x100, BASE + 0x50));
+}

@@ -36,17 +36,26 @@ fn uart_cooked(bus: &mut SocBus, n: usize, b: u8) {
 /// Text from the ROM itself (the boot banner) on UART0, cooked.
 pub fn rom_print(bus: &mut SocBus, text: &str) { for b in text.bytes() { uart_cooked(bus, 0, b); } }
 
-/// `b` through the character function at `f`. The ROM's own go to the UART that
-/// `uart_buff_switch` selected; a function of the guest's is not called yet (calls into the guest
-/// come with the ROM's task scheduler): what it would print is dropped, with one log line.
+/// `b` through the ROM's character function at `f`, to the UART that `uart_buff_switch` selected
+/// (0: none installed, nothing is printed).
 fn put_via(bus: &mut SocBus, f: u32, b: u8) {
     let n = bus.rom.uart_sel;
     match f {
         ETS_UART_PUTC1 => uart_cooked(bus, n, b),
         ETS_PUTC | UART_TX_ONE_CHAR => uart_raw(bus, n, b),
-        0 => {}
-        _ => bus.rom.log_once("putc1", || format!("output through the guest's character function {f:#010x} is not delivered yet (dropped)")),
+        _ => {}
     }
+}
+
+/// Whether `f` is one of the ROM's character functions (or none), which `put_via` runs here.
+fn rom_putc(f: u32) -> bool { matches!(f, ETS_UART_PUTC1 | ETS_PUTC | UART_TX_ONE_CHAR | 0) }
+
+/// `text` through the character function `f`, then return `v` to the caller: the ROM's run here,
+/// a function of the guest's is called once per character (`xtos::put_chars`).
+fn emit(core: &mut Lx106, bus: &mut SocBus, f: u32, text: Vec<u8>, v: u32) {
+    if !rom_putc(f) { super::xtos::put_chars(core, bus, f, text, v); return; }
+    for b in text { put_via(bus, f, b); }
+    ret(core, bus, v);
 }
 
 /// A NUL-terminated string at `addr`, at most `MAX_STR` bytes.
@@ -101,9 +110,8 @@ pub fn format(bus: &mut SocBus, fmt: u32, mut next: impl FnMut(&mut SocBus) -> u
 pub fn ets_printf(core: &mut Lx106, bus: &mut SocBus) {
     let (fmt, mut n) = (arg(core, bus, 0), 0);
     let text = format(bus, fmt, |bus| { n += 1; core.arg(bus, n) });
-    let f = bus.rom.putc1;
-    for &b in &text { put_via(bus, f, b); }
-    ret(core, bus, text.len() as u32);
+    let (f, n) = (bus.rom.putc1, text.len() as u32);
+    emit(core, bus, f, text, n);
 }
 
 /// `ets_uart_printf(fmt, ...)`: cooked, on the selected UART, whatever `ets_install_putc1` did
@@ -132,8 +140,8 @@ pub fn ets_vprintf(core: &mut Lx106, bus: &mut SocBus) {
         };
         bus.read32(at).unwrap_or(0)
     });
-    for &b in &text { put_via(bus, putc, b); }
-    ret(core, bus, text.len() as u32);
+    let n = text.len() as u32;
+    emit(core, bus, putc, text, n);
 }
 
 /// `ets_putc(c)`: raw, on the selected UART; returns 0 (ets_sys.h:230-237).
@@ -156,8 +164,7 @@ pub fn ets_uart_putc1(core: &mut Lx106, bus: &mut SocBus) {
 /// `ets_write_char(c)`: one character of `ets_printf`, through the installed character function.
 pub fn ets_write_char(core: &mut Lx106, bus: &mut SocBus) {
     let (c, f) = (arg(core, bus, 0) as u8, bus.rom.putc1);
-    put_via(bus, f, c);
-    ret(core, bus, 0);
+    emit(core, bus, f, vec![c], 0);
 }
 
 /// `ets_install_putc1(f)` (ets_sys.h:221).

@@ -37,7 +37,8 @@ impl Soc for Esp8266 {
     }
     /// The ROM loader runs at the reset vector, after the host's last word on strapping and cause.
     fn rom_boot(m: &mut Machine) { m.bus.rom.boot_pending = true; }
-    fn irqs(_bus: &SocBus, out: &mut [u32]) { out[0] = 0; }
+    /// Lines 0..13 and the NMI at 14 (`Lx106::set_irq`), as `refresh_irq` derived them.
+    fn irqs(bus: &SocBus, out: &mut [u32]) { out[0] = bus.lines; }
     fn function_hooks(_bus: &SocBus) -> &[u32] { rom::hooks() }
     fn function_hook(core: &mut Lx106, bus: &mut SocBus) -> bool { rom::dispatch(core, bus, 1) > 0 }
     fn function_hook_steps(core: &mut Lx106, bus: &mut SocBus, budget: u32) -> u32 { rom::dispatch(core, bus, budget) }
@@ -59,7 +60,16 @@ impl Soc for Esp8266 {
 impl esp_soc::SocBus for SocBus {
     fn cycles(&self) -> u64 { self.cycles }
     fn irq_dirty(&mut self) -> &mut bool { &mut self.irq_dirty }
-    fn refresh_irq(&mut self) -> bool { true }
+    fn refresh_irq(&mut self) -> bool {
+        let (lines, edge_waiting) = self.periph.refresh_lines();
+        self.lines = lines;
+        if edge_waiting { self.irq_dirty = true; }
+        true
+    }
+    /// The next timer event: an idle core is not fast-forwarded past it.
+    fn next_deadline(&self) -> Option<u64> {
+        match self.periph.next_event() { u64::MAX => None, at => Some(at.saturating_sub(self.cycles).max(1)) }
+    }
     fn misc(&mut self) -> &mut Misc { &mut self.periph.misc }
     fn take_stop(&mut self) -> Option<Stop> { self.rom.take_stop() }
     fn load_bytes(&mut self, addr: u32, data: &[u8]) -> Result<(), String> { SocBus::load_bytes(self, addr, data) }
@@ -82,6 +92,11 @@ impl esp_soc::SocBus for SocBus {
     fn reboot(&mut self, mac: [u8; 6]) -> u32 {
         let old = std::mem::replace(&mut self.periph, Peripherals::new(mac));
         self.periph.misc.log_unknown = old.misc.log_unknown;
+        self.periph.now = self.cycles;
+        self.periph.gpio.strap = self.strap;
+        self.periph.gpio.host_in = old.gpio.host_in;
+        self.periph.gpio.observe = old.gpio.observe;
+        self.periph.gpio.events = old.gpio.events;
         self.periph.misc.log_all = self.debug.has("mmio");
         self.rom.reset();
         self.cache_base = 0;
@@ -104,18 +119,20 @@ impl esp_soc::SocBus for SocBus {
         self.irq_dirty = true;
     }
     fn gpio_set_input(&mut self, pin: u8, level: bool) {
-        if pin < 64 { if level { self.gpio_in |= 1 << pin } else { self.gpio_in &= !(1 << pin) } }
+        let g = &mut self.periph.gpio;
+        if pin < 16 { if level { g.host_in |= 1 << pin } else { g.host_in &= !(1 << pin) } }
+        self.irq_dirty = true;
     }
-    fn gpio_input(&self) -> u64 { self.gpio_in }
-    fn observe_gpio(&mut self, _on: bool) {}
-    fn take_gpio_events(&mut self) -> Vec<(u64, u8, bool)> { Vec::new() }
+    fn gpio_input(&self) -> u64 { u64::from(self.periph.gpio.input() & 0xffff) }
+    fn observe_gpio(&mut self, on: bool) { self.periph.gpio.observe = on; }
+    fn take_gpio_events(&mut self) -> Vec<(u64, u8, bool)> { std::mem::take(&mut self.periph.gpio.events) }
     fn board(&mut self) -> &mut dyn BoardModel { &mut *self.board }
     fn board_ref(&self) -> &dyn BoardModel { &*self.board }
     fn audio(&self) -> (&[i16], u32) { (&[], 44100) }
     fn irq_sources_of(&self, _core: usize, _line: u32) -> Vec<usize> { Vec::new() }
     fn set_debug(&mut self, f: &esp_soc::DebugFlags) { self.debug = f.clone(); self.periph.misc.log_all = f.has("mmio"); }
     fn set_flash_size(&mut self, bytes: usize) { self.flash = crate::flash::Flash::new(bytes); }
-    fn set_strap(&mut self, v: u32) { self.strap = v & 7; }
+    fn set_strap(&mut self, v: u32) { self.strap = v & 7; self.periph.gpio.strap = self.strap; }
     fn set_reset_cause(&mut self, cause: u32) { self.reset_cause = cause; }
 }
 

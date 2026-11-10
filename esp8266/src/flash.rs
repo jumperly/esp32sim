@@ -15,6 +15,13 @@ impl Flash {
     pub fn len(&self) -> usize { self.bytes.len() }
     pub fn is_empty(&self) -> bool { self.bytes.is_empty() }
 
+    /// The JEDEC id the chip answers RDID (0x9F) with, as the SPI0 W0 register and the ROM's
+    /// `flashchip->deviceId` (spi_flash.h:40-41) hold it: manufacturer, memory type, capacity
+    /// (log2 of the size), low byte first; cores/esp8266/Esp.cpp:286 takes the vendor from the
+    /// low byte and :291 the size as `1 << (id >> 16 & 0xff)`. Model choice: a Winbond W25Q-series
+    /// id (EF 40 xx), the parts ESP-12F modules commonly carry.
+    pub fn jedec_id(&self) -> u32 { 0x40ef | (self.bytes.len().max(1).ilog2() << 16) }
+
     /// `out.len()` bytes from `off`; false (and `out` untouched) past the end.
     pub fn read(&self, off: u32, out: &mut [u8]) -> bool {
         let Some(src) = (off as usize).checked_add(out.len()).and_then(|end| self.bytes.get(off as usize..end)) else { return false };
