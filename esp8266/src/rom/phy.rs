@@ -100,17 +100,28 @@ pub fn nop(core: &mut Lx106, bus: &mut SocBus) { ret(core, bus, 0); }
 mod tests {
     use super::*;
 
+    /// Call `f` with `args` in a2.. (call0, returning to a0) and give back a2.
+    fn call(f: fn(&mut Lx106, &mut SocBus), core: &mut Lx106, bus: &mut SocBus, args: &[u32]) -> u32 {
+        core.set_ar(0, 0x4010_0000);
+        for (i, &v) in args.iter().enumerate() { core.set_ar(2 + i as u8, v); }
+        f(core, bus);
+        assert_eq!(emu_core::Core::pc(core), 0x4010_0000, "returned");
+        core.get_ar(2)
+    }
+
     #[test]
     fn the_pll_calibrated_bit_reads_set_and_fields_merge() {
-        let mut bus = SocBus::new(1 << 20, [0; 6]);
-        assert_eq!(i2c_value(&bus, 98, 0, 7), 0x80);
-        assert_eq!(i2c_value(&bus, 98, 0, 6), 0);
-        assert_eq!(field(5, 2), (2, 0xf));
-        bus.rom.i2c.insert(key(103, 4, 9), 0xff);
-        let (lsb, mask) = field(5, 2);
-        let k = key(103, 4, 9);
-        let old = bus.rom.i2c[&k];
-        bus.rom.i2c.insert(k, (old & !(mask << lsb)) | ((0x5 & mask) << lsb));
-        assert_eq!(bus.rom.i2c[&k], 0b1101_0111);
+        let (mut core, mut bus) = (Lx106::new(), SocBus::new(1 << 20, [0; 6]));
+        let (c, b) = (&mut core, &mut bus);
+        assert_eq!(call(i2c_read, c, b, &[98, 0, 7]), 0x80, "PLL calibrated");
+        assert_eq!(call(i2c_read, c, b, &[98, 0, 6]), 0);
+        assert_eq!(call(i2c_read_mask, c, b, &[98, 0, 7, 7, 7]), 1);
+        // block 103 host 4 register 9: 0xff, then bits 5..2 = 0b0101
+        call(i2c_write, c, b, &[103, 4, 9, 0xff]);
+        call(i2c_write_mask, c, b, &[103, 4, 9, 5, 2, 0x5]);
+        assert_eq!(call(i2c_read, c, b, &[103, 4, 9]), 0b1101_0111);
+        assert_eq!(call(i2c_read_mask, c, b, &[103, 4, 9, 5, 2]), 0x5);
+        // the same registers through the table's slots
+        assert_eq!(call(|c, b| slot(c, b, STUBS + 4 * I2C_READ), c, b, &[103, 4, 9]), 0b1101_0111);
     }
 }

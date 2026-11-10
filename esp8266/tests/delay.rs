@@ -69,3 +69,36 @@ fn ets_delay_us_waits_cycles_and_takes_a_timer_interrupt_inside_the_wait() { che
 
 #[test]
 fn ets_delay_us_waits_cycles_under_an_approximate_cpi() { check(2); }
+
+/// CPU2X (DPORT 0x14 bit 0, esp8266_peri.h:40) doubles the core's clock and nothing else: 1000
+/// CPU cycles of a `j .` loop are 12.5 us of device time at 80 MHz and 6.25 us at 160 MHz, while
+/// the timers keep the 80 MHz APB clock. `ets_delay_us` at the 160 MHz the core then announces
+/// (`ets_update_cpu_frequency(160)`, cores/esp8266/core_esp8266_main.cpp:96-102) still waits its
+/// microseconds: twice the CCOUNT cycles, the same device time.
+#[test]
+fn cpu2x_halves_the_device_time_of_a_cpu_cycle() {
+    for (cpu2x, apb) in [(false, 1000), (true, 500)] {
+        let (mut m, _) = machine(1);
+        m.cores[0].write_sr(sr::INTENABLE, 0).unwrap();
+        m.bus.load_bytes(MAIN, &[0x06, 0xff, 0xff]).unwrap();       // j .
+        m.bus.write32(0x3FF0_0014, u32::from(cpu2x)).unwrap();
+        let (t0, c0) = (m.bus.cycles, m.cores[0].read_sr(sr::CCOUNT).unwrap());
+        m.run(1000);
+        let ccount = m.cores[0].read_sr(sr::CCOUNT).unwrap().wrapping_sub(c0);
+        // `run` stops at a quantum's end: scale to 1000 CPU cycles
+        let per_1000 = (m.bus.cycles - t0) * 1000 / u64::from(ccount);
+        println!("CPU2X {cpu2x}: CCOUNT +{ccount}, device time +{} cycles: {} us per 1000 CPU cycles", m.bus.cycles - t0, per_1000 as f64 / 80.0);
+        assert!(ccount >= 1000);
+        assert_eq!(per_1000, apb);
+    }
+    let (mut m, t0) = machine(1);
+    m.cores[0].write_sr(sr::INTENABLE, 0).unwrap();
+    m.bus.write32(0x3FF0_0014, 1).unwrap();
+    m.bus.rom.cpu_mhz = 160;
+    let cycles0 = m.bus.cycles;
+    while m.bus.read32(OUT + 4).unwrap() == 0 && m.insns() < 400_000 { m.run(1000); }
+    let done = m.bus.read32(OUT + 4).unwrap().wrapping_sub(t0);
+    println!("ets_delay_us(1000) at 160 MHz: CCOUNT +{done}, device time +{}", m.bus.cycles - cycles0);
+    assert!((160_000..160_010).contains(&done), "{done}");
+    assert!((m.bus.cycles - cycles0).abs_diff(80_000 + 500) <= 500, "about 1000 us: {}", m.bus.cycles - cycles0);
+}

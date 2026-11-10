@@ -1,12 +1,16 @@
-//! The ESP8266 as a `Soc`: one LX106 core on `bus::SocBus`, a bare module (no board), booted by
-//! the modelled mask ROM (`rom`).
-use crate::bus::{SocBus, IRAM_HIGH, IRAM_LOW, ROM_HIGH, ROM_LOW};
-use crate::periph::{self, Peripherals};
+//! The ESP8266 as a `Soc`: one LX106 core on `bus::SocBus`, booted by the modelled mask ROM
+//! (`rom`), on a board from `board::make_board` (a bare module by default).
+use crate::bus::{ResetKind, SocBus, IRAM_HIGH, IRAM_LOW, ROM_HIGH, ROM_LOW};
+use crate::periph::{self, Peripherals, Rtc};
 use crate::rom::{self, boot};
 use emu_core::Core;
 use esp_periph::Misc;
 use esp_soc::{BoardModel, Soc, Stop};
 use xtensa_lx7::{state::{ps, sr}, Lx106};
+
+/// Where an Arduino ESP8266 flash image keeps its app: eboot sits at 0 and loads the image at
+/// 0x1000 (bootloaders/eboot/eboot.c:33-89; tools/elf2bin.py writes the app there).
+pub const APP_OFFSET: usize = 0x1000;
 
 pub struct Esp8266;
 pub type Machine = esp_soc::Machine<Esp8266>;
@@ -25,6 +29,8 @@ impl Soc for Esp8266 {
     const ROM_BOOT_DEFAULT: bool = true;
     /// The image at flash 0 is the one the ROM boots (eboot on Arduino builds).
     const BOOTLOADER_OFFSET: usize = 0;
+    /// The app follows eboot at 0x1000; flash 0x10000 is the app's IROM there, no image header.
+    const APP_OFFSET: usize = APP_OFFSET;
     const ROM_DATA_TABLE: &'static [&'static str] = &[];
     fn new_core(_i: usize) -> Lx106 { Lx106::new() }
     fn reset_core(c: &mut Lx106, _i: usize) { c.reset(); }
@@ -39,6 +45,12 @@ impl Soc for Esp8266 {
     fn rom_boot(m: &mut Machine) { m.bus.rom.boot_pending = true; }
     /// Lines 0..13 and the NMI at 14 (`Lx106::set_irq`), as `refresh_irq` derived them.
     fn irqs(bus: &SocBus, out: &mut [u32]) { out[0] = bus.lines; }
+    /// In deep sleep the core is off: parked in WAITI with every interrupt masked, until a reset.
+    fn peripheral_event(bus: &SocBus, cores: &mut [Lx106]) {
+        if bus.deep_sleep() {
+            for c in cores { c.waiti(15); c.write_sr(sr::INTENABLE, 0).unwrap(); }
+        }
+    }
     fn function_hooks(_bus: &SocBus) -> &[u32] { rom::hooks() }
     fn function_hook(core: &mut Lx106, bus: &mut SocBus) -> bool { rom::dispatch(core, bus, 1) > 0 }
     fn function_hook_steps(core: &mut Lx106, bus: &mut SocBus, budget: u32) -> u32 { rom::dispatch(core, bus, budget) }
@@ -46,7 +58,8 @@ impl Soc for Esp8266 {
     const FUNCTION_HOOK_RANGE: Option<(u32, u32)> = Some((ROM_LOW, ROM_HIGH));
     /// An image with the 0xE9 magic must enter in IRAM, where every ESP8266 image (eboot, the
     /// SDK's, the Arduino app) does; an ESP32-family image enters elsewhere (0x4008xxxx,
-    /// 0x403xxxxx, 0x408xxxxx) and is refused. Anything else is no image header and passes.
+    /// 0x403xxxxx, 0x408xxxxx) and is refused. Anything else is no image header and passes. A
+    /// whole flash image is judged at 0 and at `APP_OFFSET` (`esp_soc::load::check_flash_image`).
     fn check_image(image: &[u8]) -> Result<(), String> {
         let Some(h) = image.get(..8) else { return Ok(()) };
         if h[0] != 0xE9 { return Ok(()); }
@@ -66,10 +79,18 @@ impl esp_soc::SocBus for SocBus {
         if edge_waiting { self.irq_dirty = true; }
         true
     }
-    /// The next timer event: an idle core is not fast-forwarded past it.
-    fn next_deadline(&self) -> Option<u64> {
-        match self.periph.next_event() { u64::MAX => None, at => Some(at.saturating_sub(self.cycles).max(1)) }
+    /// APB cycles from now as CPU cycles: twice as many with CPU2X (`tick`).
+    #[inline]
+    fn cpu_cycles_for_bus(&self, cycles: u64) -> u64 {
+        cycles.saturating_mul(2).saturating_sub(self.clock_half).div_ceil(self.periph.cpu_scale_half)
     }
+    /// The next timer, watchdog or deep-sleep event, in CPU cycles: an idle core is not
+    /// fast-forwarded past it.
+    fn next_deadline(&self) -> Option<u64> {
+        match self.periph.next_event() { u64::MAX => None, at => Some(self.cpu_cycles_for_bus(at.saturating_sub(self.cycles)).max(1)) }
+    }
+    /// An SPI1 transaction waits for the host (`Hspi::host_wait`).
+    fn take_host_event(&mut self) -> bool { std::mem::take(&mut self.host_event) }
     fn misc(&mut self) -> &mut Misc { &mut self.periph.misc }
     fn take_stop(&mut self) -> Option<Stop> { self.rom.take_stop() }
     fn load_bytes(&mut self, addr: u32, data: &[u8]) -> Result<(), String> { SocBus::load_bytes(self, addr, data) }
@@ -87,17 +108,37 @@ impl esp_soc::SocBus for SocBus {
         self.rom.boot_pending = false;
         Ok(img.entry)
     }
-    /// Digital peripherals re-created; DRAM, IRAM and RTC memory kept. The ROM boots again at the
-    /// reset vector. Returns the cause the ROM will report.
+    /// Digital peripherals re-created; DRAM and IRAM kept; the RTC registers (with GPIO16's) and
+    /// RTC memory as the reset's kind has it (`ResetKind`). The ROM boots again at the reset
+    /// vector, reading the strapping then. Returns the cause the ROM will report.
     fn reboot(&mut self, mac: [u8; 6]) -> u32 {
-        let old = std::mem::replace(&mut self.periph, Peripherals::new(mac));
+        let mut old = std::mem::replace(&mut self.periph, Peripherals::new(mac));
         self.periph.misc.log_unknown = old.misc.log_unknown;
         self.periph.now = self.cycles;
-        self.periph.gpio.strap = self.strap;
-        self.periph.gpio.host_in = old.gpio.host_in;
-        self.periph.gpio.observe = old.gpio.observe;
-        self.periph.gpio.events = old.gpio.events;
+        let g = &mut self.periph.gpio;
+        (g.host_driven, g.host_level, g.observe, g.events) = (old.gpio.host_driven, old.gpio.host_level, old.gpio.observe, std::mem::take(&mut old.gpio.events));
+        match self.reset_kind {
+            ResetKind::Jump | ResetKind::Core => {
+                self.periph.rtc = Rtc { regs: old.rtc.regs.clone(), sleep: None };
+                self.periph.gpio.gp16 = old.gpio.gp16;
+            }
+            ResetKind::Chip => {}
+            ResetKind::PowerOn => {
+                self.rtc_mem.fill(0);
+                self.dram.fill(0);
+                self.iram.fill(0);
+            }
+        }
+        self.periph.gpio.level = old.gpio.level;
+        let before = old.gpio.output();
+        let g = &mut self.periph.gpio;
+        g.update_levels();
+        g.status = 0;
+        g.note(before, self.cycles);
         self.periph.misc.log_all = self.debug.has("mmio");
+        self.reset_kind = ResetKind::Jump;
+        self.clock_half = 0;
+        self.host_event = false;
         self.rom.reset();
         self.cache_base = 0;
         self.cache_enabled = false;
@@ -106,7 +147,9 @@ impl esp_soc::SocBus for SocBus {
         self.reset_cause
     }
     fn sw_reset(&self) -> bool { self.sw_reset }
-    fn request_reset(&mut self, cause: u32) { self.sw_reset = true; self.reset_cause = cause; }
+    /// A reset from outside with the ROM's `cause` (`rom::boot::RST_*`): RST_EXT is the RST pin,
+    /// and in deep sleep that is the wake-up (`chip_reset`).
+    fn request_reset(&mut self, cause: u32) { self.chip_reset(cause); }
     fn reset_cause(&self) -> u32 { self.reset_cause }
     fn last_fault(&self) -> Option<(u32, bool)> { self.last_fault }
     /// No USB serial on the ESP8266; UART0 and UART1.
@@ -119,11 +162,11 @@ impl esp_soc::SocBus for SocBus {
         self.irq_dirty = true;
     }
     fn gpio_set_input(&mut self, pin: u8, level: bool) {
-        let g = &mut self.periph.gpio;
-        if pin < 16 { if level { g.host_in |= 1 << pin } else { g.host_in &= !(1 << pin) } }
+        self.periph.gpio_set_input(pin, Some(level));
         self.irq_dirty = true;
     }
-    fn gpio_input(&self) -> u64 { u64::from(self.periph.gpio.input() & 0xffff) }
+    /// The pads' levels, GPIO0..16.
+    fn gpio_input(&self) -> u64 { u64::from(self.periph.gpio.level & 0x1_ffff) }
     fn observe_gpio(&mut self, on: bool) { self.periph.gpio.observe = on; }
     fn take_gpio_events(&mut self) -> Vec<(u64, u8, bool)> { std::mem::take(&mut self.periph.gpio.events) }
     fn board(&mut self) -> &mut dyn BoardModel { &mut *self.board }
@@ -132,7 +175,8 @@ impl esp_soc::SocBus for SocBus {
     fn irq_sources_of(&self, _core: usize, _line: u32) -> Vec<usize> { Vec::new() }
     fn set_debug(&mut self, f: &esp_soc::DebugFlags) { self.debug = f.clone(); self.periph.misc.log_all = f.has("mmio"); }
     fn set_flash_size(&mut self, bytes: usize) { self.flash = crate::flash::Flash::new(bytes); }
-    fn set_strap(&mut self, v: u32) { self.strap = v & 7; self.periph.gpio.strap = self.strap; }
+    /// The host's strapping instead of the pins' levels (`--strap`).
+    fn set_strap(&mut self, v: u32) { self.strap = Some(v & 7); self.periph.gpio.strap = v & 7; }
     fn set_reset_cause(&mut self, cause: u32) { self.reset_cause = cause; }
 }
 
@@ -153,5 +197,19 @@ mod tests {
             let e = Esp8266::check_image(&h).unwrap_err();
             assert!(e.contains("not an ESP8266 image"), "{e}");
         }
+    }
+
+    /// A whole flash image is judged at 0 (eboot) and at 0x1000 (the app); at 0x10000 the app's
+    /// IROM may hold any word, an 0xE9 byte followed by an ESP32-like entry too.
+    #[test]
+    fn a_flash_image_is_judged_at_0_and_at_the_app_at_0x1000() {
+        let mut flash = vec![0xff; 0x2_0000];
+        flash[..8].copy_from_slice(&[0xe9, 2, 3, 0x20, 0x80, 0xf4, 0x10, 0x40]);
+        flash[APP_OFFSET..APP_OFFSET + 8].copy_from_slice(&[0xe9, 5, 3, 0x20, 0xc0, 0x00, 0x10, 0x40]);
+        flash[0x1_0000..0x1_0008].copy_from_slice(&[0xe9, 3, 2, 0x20, 0x00, 0x0c, 0x08, 0x40]);
+        assert!(esp_soc::load::check_flash_image::<Esp8266>(&flash).is_ok());
+        flash[APP_OFFSET + 4..APP_OFFSET + 8].copy_from_slice(&0x4008_0c00u32.to_le_bytes());
+        let e = esp_soc::load::check_flash_image::<Esp8266>(&flash).unwrap_err();
+        assert!(e.contains("app at 0x1000"), "{e}");
     }
 }

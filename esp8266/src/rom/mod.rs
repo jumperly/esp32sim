@@ -208,8 +208,9 @@ fn ret64(core: &mut Lx106, bus: &mut SocBus, v: u64) { core.set_ar(3, (v >> 32) 
 // ------------------------------------------------------------------ small functions
 
 /// `ets_delay_us(us)`: a busy-wait on CCOUNT until `us` microseconds of CPU cycles have passed,
-/// at the frequency `ets_update_cpu_frequency` set, the cycle count computed in 32 bits as a
-/// CCOUNT difference is. The call itself is one step; the
+/// at the frequency `ets_update_cpu_frequency` set (160 with CPU2X, whose CPU cycles take half the
+/// device time: `SocBus::tick`), the cycle count computed in 32 bits as a CCOUNT difference is.
+/// The call itself is one step; the
 /// wait goes on at `DELAY_LOOP` (`delay_loop`) with its state in a3 and a4, scratch registers of
 /// the call0 ABI (an interrupt handler saves them as it saves any interrupted code's).
 fn ets_delay_us(core: &mut Lx106, bus: &mut SocBus) {
@@ -258,10 +259,7 @@ fn rtc_get_reset_reason(core: &mut Lx106, bus: &mut SocBus) { let c = bus.reset_
 
 /// `software_reset()`: the chip resets with the ROM's SW_RESET cause. The core stays here; the
 /// machine reboots it.
-fn software_reset(_core: &mut Lx106, bus: &mut SocBus) {
-    bus.reset_cause = boot::RST_SW;
-    bus.sw_reset = true;
-}
+fn software_reset(_core: &mut Lx106, bus: &mut SocBus) { bus.chip_reset(boot::RST_SW); }
 
 /// The ROM's watchdog API (`ets_wdt_enable/disable/get_mode/init/restore`): no watchdog yet.
 fn ets_wdt_nop(core: &mut Lx106, bus: &mut SocBus) { ret(core, bus, 0); }

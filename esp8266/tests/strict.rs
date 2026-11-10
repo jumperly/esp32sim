@@ -1,6 +1,7 @@
 //! Arduino ESP8266 3.1.2 sketches in strict ROM mode (an unmodelled ROM entry stops the run):
-//! the committed fixtures `fixtures/bin/esp8266-{serial,strap,wifi-off}.bin` next to this
-//! workspace (or under `JUMPERLY_FIXTURES_DIR`), contracts in `fixtures/README.md`.
+//! the committed fixtures `fixtures/bin/esp8266-{serial,wifi-off}.bin` next to this workspace (or
+//! under `JUMPERLY_FIXTURES_DIR`), contracts in `fixtures/README.md`. `esp8266-strap` is in
+//! `tests/periph.rs`, with the reset causes.
 use esp8266::{rom, Machine, Stop};
 use esp_soc::{RunUntil, SocBus};
 use std::path::PathBuf;
@@ -41,7 +42,8 @@ fn run_until(m: &mut Machine, seconds: f64, resets: bool) {
 }
 
 /// `esp8266-serial`: UART0 echoes a line the host sends (the core's UART driver: receive FIFO,
-/// interrupt 5), UART1 transmits `one <n>` every 100 ms.
+/// interrupt 5), UART1 transmits `one <n>` every 100 ms. The sketch never idles (`loop()` ends in
+/// `yield()`), so every device second is 80 M instructions: 2.5 s are enough for the contract.
 #[test]
 fn serial_echoes_uart0_lines_and_writes_uart1() {
     let mut m = machine("esp8266-serial");
@@ -55,7 +57,7 @@ fn serial_echoes_uart0_lines_and_writes_uart1() {
     let long = "0123456789abcdefghijklmnopqrstuvwxyz";
     m.bus.serial_input(format!("{long}\n").as_bytes());
     m.sync_irq();
-    run_until(&mut m, 6.0, false);
+    run_until(&mut m, 2.5, false);
     let (text, all) = (uart0(&m), String::from_utf8_lossy(&m.console.all).into_owned());
     println!("UART0:\n{text}\nall consoles: {} bytes", all.len());
     assert!(m.bus.rom.unknown.is_empty(), "{:?}", unknown(&m));
@@ -64,22 +66,7 @@ fn serial_echoes_uart0_lines_and_writes_uart1() {
     assert!(m.irq_hist[0][5] > 0, "the UART interrupt was taken");
     // `console.all` has UART0 and UART1: what UART0 does not have is UART1's
     assert!(all.contains("one 1\n") && !text.contains("one "), "{all}");
-    assert!(all.contains("one 50\n"), "every 100 ms for 5 s: {all}");
-}
-
-/// `esp8266-strap`: the reset reason after power-on, then `ESP.restart()` after 1 s, which jumps
-/// to the ROM's reset vector; the second start finds its word in RTC memory and only prints.
-#[test]
-fn strap_restarts_once_and_keeps_rtc_memory() {
-    let mut m = machine("esp8266-strap");
-    run_until(&mut m, 6.0, true);
-    let text = uart0(&m);
-    println!("UART0:\n{text}");
-    assert!(m.bus.rom.unknown.is_empty(), "{:?}", unknown(&m));
-    assert_eq!(m.reboots, 1, "one restart: {text}");
-    assert_eq!(text.matches("reset=").count(), 2, "{text}");
-    assert!(text.contains("reset=Power On info=Power On\n"), "{text}");
-    assert_eq!(text.matches(" ets Jan  8 2013,rst cause:").count(), 2, "the ROM booted twice: {text}");
+    assert!(all.contains("one 10\n"), "every 100 ms: {all}");
 }
 
 /// `esp8266-wifi-off`: `WiFi.begin("Jumperly")` with no radio. The SDK's connect never completes
@@ -94,7 +81,8 @@ fn wifi_begin_without_a_radio_leaves_the_station_disconnected() {
     println!("UART0:\n{text}");
     assert!(m.bus.rom.unknown.is_empty(), "{:?}", unknown(&m));
     assert!(text.contains("Ready\n"), "{text}");
-    assert!(text.matches("status=7\n").count() >= 5, "{text}");
+    let status: Vec<&str> = text.lines().filter(|l| l.starts_with("status=")).collect();
+    assert_eq!(status, ["status=7"; 10], "{text}");
     assert!(text.contains("alive\n"), "{text}");
     assert_eq!(m.reboots, 0);
     assert_eq!(text.matches(" ets Jan  8 2013").count(), 1, "no reset: {text}");

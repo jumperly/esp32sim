@@ -43,6 +43,40 @@ const SPI_CE: u32 = 1 << 22;
 /// Where an address goes.
 enum At { Dram(usize), Iram(usize), Rtc(usize), Flash(usize), Rom, Mmio, Unmapped }
 
+/// SPI1's CMD register (esp8266_peri.h:337 SPI1CMD).
+const SPI1_CMD: u32 = PERIPH_BASE + 0x100;
+
+/// What a reset keeps (`SocBus::reboot`). The ROM numbering of the causes is `rom::boot`'s.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ResetKind {
+    /// A jump to the ROM's reset vector (`system_restart_core` does it for `ESP.restart()`, after
+    /// an exception and after a soft watchdog reset): nothing is reset by hardware, so the ROM's
+    /// cause stays what it was (digitake esp8266-emulator src/main.c:281,635-636: "jump to the
+    /// reset vector: peripherals and RAM keep their state"; Arduino ESP8266 3.1.2
+    /// cores/esp8266/hwdt_app_entry.cpp:596-597: the ROM API "does not change the status after a
+    /// software restart"; the table in `rom::boot`). Model choice: the digital peripherals are
+    /// re-created anyway; the ROM and the SDK set them up again.
+    #[default]
+    Jump,
+    /// The digital core resets (hardware watchdog, RTC software reset): the RTC domain stays.
+    Core,
+    /// The chip resets through EXT_RSTB (the RST pin, also the deep-sleep wake through GPIO16):
+    /// the RTC registers clear, RTC memory stays. The SDK needs both: it tells an external reset
+    /// ("External System") from a watchdog one by RTC STORE0 being 0 again (libmain's start-up,
+    /// Blink image 0x4023383c..0x40233886), and finds its deep-sleep record in RTC memory.
+    Chip,
+    /// Power-on: RTC memory and RAM clear too.
+    PowerOn,
+}
+
+impl ResetKind {
+    /// The kind of reset a ROM cause stands for.
+    pub fn of(cause: u32) -> Self {
+        use crate::rom::boot::{RST_DEEPSLEEP, RST_EXT, RST_POWERON};
+        match cause { RST_POWERON => ResetKind::PowerOn, RST_EXT | RST_DEEPSLEEP => ResetKind::Chip, _ => ResetKind::Core }
+    }
+}
+
 pub struct SocBus {
     pub dram: Vec<u8>,
     pub iram: Vec<u8>,
@@ -65,8 +99,16 @@ pub struct SocBus {
     /// the reset cause as the ROM numbers it (`rom::boot::RST_*`); power-on at first
     pub reset_cause: u32,
     pub sw_reset: bool,
-    /// strapping as the ROM reads it: GPIO15 << 2 | GPIO0 << 1 | GPIO2 (3: boot from flash)
-    pub strap: u32,
+    /// what the pending reset keeps
+    pub reset_kind: ResetKind,
+    /// the host's strapping (`--strap`), GPIO15 << 2 | GPIO0 << 1 | GPIO2; `None`: the pins' levels
+    pub strap: Option<u32>,
+    /// a host serves SPI1's transactions (`Hspi::host_wait`); without one the board answers at once
+    pub spi_host: bool,
+    /// something the host must see happened (an SPI1 transaction waits): `take_host_event`
+    pub host_event: bool,
+    /// the half APB cycle a CPU2X core clock has run past `cycles`
+    pub clock_half: u64,
     /// the interrupt lines as last derived (`Peripherals::refresh_lines`)
     pub lines: u32,
     pub debug: esp_soc::DebugFlags,
@@ -79,7 +121,8 @@ impl SocBus {
             rtc_mem: vec![0; (RTC_MEM_HIGH - RTC_MEM_LOW) as usize], flash: Flash::new(flash_size), cache_base: 0, cache_enabled: false,
             periph: Peripherals::new(mac), rom: RomState::default(), board: Box::new(esp_soc::NoBoard),
             cycles: 0, irq_dirty: true, last_fault: None, rom_data_reads: 0, reset_cause: crate::rom::boot::RST_POWERON,
-            sw_reset: false, strap: crate::rom::boot::STRAP_FLASH, lines: 0, debug: Default::default(),
+            sw_reset: false, reset_kind: ResetKind::Jump, strap: None, spi_host: false, host_event: false, clock_half: 0, lines: 0,
+            debug: Default::default(),
         }
     }
 
@@ -164,6 +207,57 @@ impl SocBus {
         self.periph.write32(a, w);
         self.irq_dirty = true;
         if a == SPI0_CMD && w != 0 { self.spi0_command(w); }
+        if a == SPI1_CMD { self.spi1_transfer(); }
+        if let Some(cause) = self.periph.reset.take() { self.chip_reset(cause); }
+    }
+
+    /// A transaction SPI1's USR started goes to the host (`spi_host`) or, without one, to the
+    /// board, which answers at once (the bare module: nothing on MISO, 0xFF).
+    fn spi1_transfer(&mut self) {
+        let Some(t) = self.periph.spi1.take_transfer() else { return };
+        if self.spi_host {
+            self.periph.spi1.host_wait = Some(t);
+            self.host_event = true;
+        } else {
+            let rx = self.board.spi_transfer(1, &t.tx, t.rx_len);
+            self.periph.spi1.finish_transfer(t, &rx);
+        }
+    }
+
+    /// Complete the transaction the host was given (`Hspi::host_wait`) with the bytes it read.
+    pub fn finish_spi_transfer(&mut self, rx: &[u8]) {
+        if let Some(t) = self.periph.spi1.host_wait.take() { self.periph.spi1.finish_transfer(t, rx); }
+    }
+
+    /// A reset with the ROM's `cause`: an external reset of a chip in deep sleep is its wake-up,
+    /// DEEPSLEEP_RESET (the GPIO16 wire to RST does it).
+    pub fn chip_reset(&mut self, cause: u32) {
+        use crate::rom::boot::{RST_DEEPSLEEP, RST_EXT};
+        let cause = if cause == RST_EXT && self.deep_sleep() { RST_DEEPSLEEP } else { cause };
+        self.reset_cause = cause;
+        self.reset_kind = ResetKind::of(cause);
+        self.sw_reset = true;
+    }
+
+    /// The guest jumped to the ROM's reset vector: a restart that resets nothing (`ResetKind::Jump`).
+    pub fn restart_from_reset_vector(&mut self) {
+        self.reset_kind = ResetKind::Jump;
+        self.sw_reset = true;
+    }
+
+    /// Whether the chip is in deep sleep.
+    pub fn deep_sleep(&self) -> bool { self.periph.rtc.sleep.is_some() }
+
+    /// When the deep-sleep timer runs out (it then pulls GPIO16 low for
+    /// `periph::WAKE_PULSE_CYCLES`); `None` when awake, after it ran out, or with no timer.
+    pub fn deep_sleep_until(&self) -> Option<u64> { self.periph.rtc.sleep.and_then(|s| s.until) }
+
+    /// The boot mode at reset release: the host's `--strap`, or the strapping pins' levels, which
+    /// GPIO_IN then reports in its bits 16 and up.
+    pub fn latch_strap(&mut self) -> u32 {
+        let mode = self.periph.latch_strap();
+        if let Some(s) = self.strap { self.periph.gpio.strap = s; return s; }
+        mode
     }
 
     /// A command written to SPI0's CMD register (esp8266_peri.h:301-320 for the registers,
@@ -244,8 +338,8 @@ impl SocBus {
 
     pub fn write_flash(&mut self, offset: usize, data: &[u8]) -> Result<(), String> { self.flash.load(offset, data) }
 
-    /// The GPIO output register (GPIO_OUT, esp8266_peri.h:48): the levels of the pins GPIO_ENABLE drives.
-    pub fn gpio_output(&self) -> u32 { self.periph.gpio.out }
+    /// The pins the chip drives high: GPIO_OUT & GPIO_ENABLE (esp8266_peri.h:48,51), bit 16 GPIO16.
+    pub fn gpio_output(&self) -> u32 { self.periph.gpio_output() }
 }
 
 impl Bus for SocBus {
@@ -270,12 +364,19 @@ impl Bus for SocBus {
         Ok(b)
     }
     fn note_pc(&mut self, pc: u32) { self.periph.misc.cur_pc = pc; }
-    /// Device time moves on; a timer that fell due re-derives the interrupt lines.
+    /// Device time moves on by `cycles` CPU cycles: as many APB cycles, or half as many with
+    /// CPU2X (the timers, the UARTs and WDEV keep the 80 MHz APB clock; Arduino ESP8266 3.1.2
+    /// core_esp8266_waveform_pwm.cpp:664 halves its CPU-cycle counts for FRC1 at 160 MHz). A timer
+    /// that fell due re-derives the interrupt lines.
+    #[inline]
     fn tick(&mut self, cycles: u32) -> u32 {
-        self.cycles += cycles as u64;
+        let half = u64::from(cycles) * self.periph.cpu_scale_half + self.clock_half;
+        self.clock_half = half & 1;
+        self.cycles += half >> 1;
         self.periph.now = self.cycles;
         if self.cycles < self.periph.next_event() { return 0; }
         self.periph.advance(self.cycles);
+        if let Some(cause) = self.periph.reset.take() { self.chip_reset(cause); }
         self.irq_dirty = true;
         1
     }
@@ -393,6 +494,27 @@ mod tests {
         b.write32(SPI0_CMD + 0x10, 3).unwrap();
         b.write32(SPI0_CMD, SPI_RDSR).unwrap();
         assert_eq!(b.read32(SPI0_CMD + 0x10), Ok(0), "never busy");
+    }
+
+    #[test]
+    fn spi1_transfers_wait_for_a_host_or_complete_at_once_from_the_board() {
+        let (mut b, spi) = (bus(), PERIPH_BASE + 0x100);
+        b.write32(spi + 0x1C, 1 << 27 | 1).unwrap();          // USER: MOSI, full duplex
+        b.write32(spi + 0x20, 7 << 17 | 7 << 8).unwrap();     // USER1: 8 bits
+        b.write32(spi + 0x40, 0x55).unwrap();
+        b.write32(spi, 1 << 18).unwrap();                     // CMD: USR
+        assert_eq!(b.read32(spi), Ok(0), "no host: done at once");
+        assert_eq!(b.read32(spi + 0x40), Ok(0xff), "the bare module's MISO");
+        assert!(!b.host_event);
+        b.spi_host = true;
+        b.write32(spi + 0x40, 0x54).unwrap();
+        b.write32(spi, 1 << 18).unwrap();
+        assert_eq!(b.read32(spi), Ok(1 << 18), "busy until the host answers");
+        assert!(std::mem::take(&mut b.host_event));
+        assert_eq!(b.periph.spi1.host_wait.as_ref().map(|t| t.tx.clone()), Some(vec![0x54]));
+        b.finish_spi_transfer(&[0x12]);
+        assert_eq!((b.read32(spi), b.read32(spi + 0x40)), (Ok(0), Ok(0x12)));
+        assert_eq!(b.periph.spi1.transfers, 2);
     }
 
     #[test]

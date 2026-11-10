@@ -3,7 +3,8 @@
 //! which loads the application at 0x1000 itself through `SPIRead`) and jumps to its entry.
 //!
 //! The ROM's code is not available; the banner and the per-segment lines reproduce what the real
-//! ROM prints (" ets Jan  8 2013,rst cause:2, boot mode:(3,6)", then for an Arduino 3.x image
+//! ROM prints (" ets Jan  8 2013,rst cause:2, boot mode:(3,6)" after an external reset, then for
+//! an Arduino 3.x image
 //! "load 0x4010f000, len 3424, room 16 ", "tail 0", "chksum 0x2e", ... "csum 0x2b"). `room` and
 //! `tail` are derived from those logs: `room` is the distance from a segment's data to the next
 //! 16-byte boundary of the flash image (16 when it is on one), `tail` what is left of the segment
@@ -17,9 +18,32 @@ use xtensa_lx7::{state::{ps, sr}, Lx106};
 /// `rst cause` prints): Arduino ESP8266 3.1.2 cores/esp8266/hwdt_app_entry.cpp:580-589,
 /// ROM_RST_REASON: 0 NO_MEAN, 1 POWERON_RESET, 2 EXT_RESET ("External reset or wake-up from
 /// Deep-sleep"), 3 SW_RESET, 4 OWDT_RESET ("Hardware WDT reset"), 5 DEEPSLEEP_RESET, 6 SDIO_RESET.
-/// The SDK's `rst_info.reason` (tools/sdk/include/user_interface.h:58-64: 0 power-on, 1 hardware
-/// WDT, 2 exception, 3 soft WDT, 4 soft restart, 5 deep-sleep wake, 6 external) is another
-/// numbering, which the SDK derives from this one and from what it left in RTC memory.
+/// `SocBus::reset_cause` and `request_reset` use this numbering.
+///
+/// The SDK's `rst_info.reason`, which `ESP.getResetReason()` names (tools/sdk/include/
+/// user_interface.h:58-64, cores/esp8266/Esp.cpp:486-500), is another numbering. libmain's start-up
+/// (Blink image 0x4023383c..0x40233886) derives it: RTC STORE0 (0x60000730) in 1..6 means "take
+/// the record in RTC memory" (the SDK writes STORE0 and the record before it restarts: 4 in
+/// `system_restart_local`, 0x40234aba; 5 before a deep sleep, 0x40105f7b; 2 after an exception;
+/// 3 for a soft watchdog, 0x4010197f; 1 while it runs, 0x401019a9); with STORE0 0 a ROM cause of
+/// 1 is a power-on (record cleared), 2 an external reset (6) unless the record says a deep-sleep
+/// wake (5), any other the record as it is.
+///
+/// | What happened | ROM `rst cause` | SDK reason, `getResetReason()` |
+/// | --- | --- | --- |
+/// | power-on | 1 | 0 `Power On` |
+/// | RST pin (external reset) | 2 | 6 `External System` |
+/// | `ESP.restart()`, `ESP.reset()` (a jump to `_ResetVector`) | unchanged | 4 `Software/System restart` |
+/// | an exception (the core's postmortem restarts the same way) | unchanged | 2 `Exception` |
+/// | soft watchdog (the SDK's, restarts the same way) | unchanged | 3 `Software Watchdog` |
+/// | hardware watchdog | 4 | 1 `Hardware Watchdog` |
+/// | RTC software reset (`software_reset`, RTC 0x700 bit 31) | 3 | from the RTC record |
+/// | deep-sleep timer, GPIO16 wired to RST | 5 | 5 `Deep-Sleep Wake` |
+///
+/// "Unchanged": the jump resets no hardware, so the ROM reports the last hardware reset again
+/// (hwdt_app_entry.cpp:596-597: the ROM API "does not change the status after a software
+/// restart"): `rst cause:1` after a power-on, `rst cause:2` on a board a programmer's auto-reset
+/// started. That is why real boards' logs show `rst cause:2` after `ESP.restart()` and crashes.
 pub const RST_POWERON: u32 = 1;
 pub const RST_EXT: u32 = 2;
 pub const RST_SW: u32 = 3;
@@ -114,15 +138,15 @@ pub fn parse(flash: &[u8], at: usize) -> Result<Image, String> {
 /// the guest's, it is a request to start over: the chip resets with the cause it had.
 pub fn reset_vector(core: &mut Lx106, bus: &mut SocBus) {
     if bus.rom.boot_pending { boot(core, bus); return; }
-    eprintln!("[emu] rom: _ResetVector reached by a jump (a0={:#010x}): chip reset", core.get_ar(0));
-    bus.sw_reset = true;
+    eprintln!("[emu] rom: _ResetVector reached by a jump (a0={:#010x}): restart", core.get_ar(0));
+    bus.restart_from_reset_vector();
 }
 
 /// The boot from the reset vector.
 pub fn boot(core: &mut Lx106, bus: &mut SocBus) {
     bus.rom.boot_pending = false;
     bus.periph.uart[0].write(0x14, UART0_BOOT_DIV);       // uart_register.h:60 UART_CLKDIV(0)
-    let mode = bus.strap & 7;
+    let mode = bus.latch_strap();
     rom_data_init(bus);
     rom_print(bus, &format!("\n ets Jan  8 2013,rst cause:{}, boot mode:({mode},6)\n\n", bus.reset_cause));
     if mode != STRAP_FLASH {

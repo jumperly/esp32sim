@@ -46,6 +46,8 @@ pub trait Soc: 'static {
     const NAME: &'static str;
     /// Flash offset for a separately supplied bootloader image.
     const BOOTLOADER_OFFSET: usize = 0;
+    /// Flash offset of the app image in a whole flash image (`load::check_flash_image`).
+    const APP_OFFSET: usize = 0x10000;
     /// The mask ROM ELF's file name in espressif/esp-rom-elfs; `None` for a chip whose ROM is
     /// modelled in Rust (Espressif publishes no ELF for the ESP8266's), which needs no file.
     const ROM_ELF: Option<&'static str>;
