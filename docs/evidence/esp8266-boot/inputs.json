@@ -1,0 +1,24 @@
+{
+  "arduino_core": {
+    "repository": "https://github.com/esp8266/Arduino",
+    "version": "3.1.2",
+    "sdk": "nonosdk_190703 (SDK ver: 2.2.2-dev(38a443e))",
+    "fqbn": "esp8266:esp8266:generic:xtal=80,CrystalFreq=26,eesz=4M1M,FlashMode=dio,FlashFreq=40,led=2,sdk=nonosdk_190703"
+  },
+  "fixtures": {
+    "repository": "jumperly fixtures (emulator/fixtures)",
+    "revision": "24e60dc1c3467aa717c22eb62698d40d972d4737",
+    "sha256": {
+      "bin/esp8266-blink.bin": "75e140d46d9630188fe1008d5e4f354791094e0fde7652f6f429c0c1c9c9a4a6",
+      "bin/esp8266-serial.bin": "1e67928f26448d802013600072a72e375153b5067e47b693e4e2314649e2e15f",
+      "bin/esp8266-strap.bin": "9d946e64426d8a52235eb056b6bab8c150db6a409a62d777f78c29e7ad1a9dd9",
+      "bin/esp8266-wifi-off.bin": "dfd2a2d2d21fa1ea5bba240380cbef215026906600c8b18a72feb2c868db213e"
+    }
+  },
+  "reference_emulator": {
+    "repository": "https://github.com/digitake/esp8266-emulator",
+    "revision": "c4c840d59b6081c01cab56c6079fc089243c294d",
+    "license": "MIT",
+    "use": "observed register and ROM behaviour cited for the concessions; no code copied"
+  }
+}

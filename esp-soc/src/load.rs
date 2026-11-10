@@ -51,11 +51,11 @@ impl TryFrom<u32> for LoadKind {
     }
 }
 
-/// `Soc::check_image` for a whole flash image: its bootloader and the app at 0x10000, where the
-/// loaders put one. The partition table is not read, so an app at another offset is not checked;
-/// its bootloader still is.
+/// `Soc::check_image` for a whole flash image: its bootloader and the app at `Soc::APP_OFFSET`
+/// (0x10000 unless the chip says otherwise), where the loaders put one. The partition table is not
+/// read, so an app at another offset is not checked; its bootloader still is.
 pub fn check_flash_image<S: Soc>(flash: &[u8]) -> Result<(), String> {
-    for (what, off) in [("bootloader", S::BOOTLOADER_OFFSET), ("app", 0x10000)] {
+    for (what, off) in [("bootloader", S::BOOTLOADER_OFFSET), ("app", S::APP_OFFSET)] {
         if let Some(image) = flash.get(off..) { S::check_image(image).map_err(|e| format!("({what} at {off:#x}) {e}"))?; }
     }
     Ok(())

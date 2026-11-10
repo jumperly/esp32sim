@@ -286,7 +286,7 @@ fn step_outcome_inner<B: Bus>(cpu: &mut Cpu, bus: &mut B) -> StepOutcome {
     StepOutcome { pc, next_pc: cpu.pc, bytes: Some(bytes), length: i.len, kind, control }
 }
 
-fn control_event(cpu: &Cpu, i: &Insn) -> Option<ControlEvent> {
+pub(crate) fn control_event(cpu: &Cpu, i: &Insn) -> Option<ControlEvent> {
     use CacheOperation as Cache;
     use ControlEventKind::{Cache as CacheEvent, Tlb as TlbEvent};
     use Op::*;
@@ -315,14 +315,21 @@ fn control_event(cpu: &Cpu, i: &Insn) -> Option<ControlEvent> {
     Some(ControlEvent { kind, address })
 }
 
+/// The exception a bus fault raises: LoadStoreError for a width the memory does not take (the
+/// ESP8266's IRAM and flash cache), else the access's own `prohibited` cause.
+#[inline(always)]
+fn fault_cause(f: crate::Fault, prohibited: u32) -> u32 {
+    if f == crate::Fault::LoadStoreError { exc::LOAD_STORE_ERROR } else { prohibited }
+}
+
 macro_rules! ld {
     ($cpu:expr, $bus:expr, $f:ident, $addr:expr) => {
-        match $bus.$f($addr) { Ok(v) => v as u32, Err(_) => return Err($cpu.raise_mem(exc::LOAD_PROHIBITED, $addr)) }
+        match $bus.$f($addr) { Ok(v) => v as u32, Err(f) => return Err($cpu.raise_mem(fault_cause(f, exc::LOAD_PROHIBITED), $addr)) }
     };
 }
 macro_rules! st {
     ($cpu:expr, $bus:expr, $f:ident, $addr:expr, $v:expr) => {
-        if $bus.$f($addr, $v).is_err() { return Err($cpu.raise_mem(exc::STORE_PROHIBITED, $addr)); }
+        if let Err(f) = $bus.$f($addr, $v) { return Err($cpu.raise_mem(fault_cause(f, exc::STORE_PROHIBITED), $addr)); }
     };
 }
 

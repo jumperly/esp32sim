@@ -14,7 +14,7 @@ impl Soc for C6 {
     type Core = Cpu;
     type Bus = SocBus;
     const NAME: &'static str = "esp32c6";
-    const ROM_ELF: &'static str = "esp32c6_rev0_rom.elf";
+    const ROM_ELF: Option<&'static str> = Some("esp32c6_rev0_rom.elf");
     const CPU_HZ: u64 = periph::CPU_HZ;
     const CORES: usize = 1;
     const IDLE_CHUNK: u64 = 64;

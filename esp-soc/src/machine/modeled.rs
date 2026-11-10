@@ -77,10 +77,8 @@ impl<B: Bus> Bus for RecordingBus<'_, B> {
 impl<S: Soc> Machine<S> {
     pub(super) fn run_approximate_jit_frontiers(&mut self, max_insns: u64) -> Stop {
         let (cpi, quantum) = self.approximate_jit_timing.unwrap();
-        self.stub_bloom = self.stubs.keys().chain(S::function_hooks(&self.bus)).fold(0, |m, &pc| m | pc_bit(pc));
-        self.probe_bloom = self.fn_probes.keys().fold(0, |m, &pc| m | pc_bit(pc));
+        self.arm_boundaries();
         for core in &mut self.cores {
-            core.set_boundaries(self.stub_bloom | self.probe_bloom);
             core.set_block_observation(self.probes.contains(Wants::BLOCK | Wants::TRAP_PC));
         }
         let trace = self.has_observer("trace");
@@ -155,9 +153,8 @@ impl<S: Soc> Machine<S> {
 
     pub(super) fn run_modeled(&mut self, max_insns: u64) -> Stop {
         if let Some(stop) = &self.model_stop { return stop.clone(); }
-        self.stub_bloom = self.stubs.keys().chain(S::function_hooks(&self.bus)).fold(0, |mask, &pc| mask | pc_bit(pc));
-        self.probe_bloom = self.fn_probes.keys().fold(0, |mask, &pc| mask | pc_bit(pc));
-        for core in &mut self.cores { core.set_boundaries(self.stub_bloom | self.probe_bloom); core.flush_caches(); }
+        self.arm_boundaries();
+        for core in &mut self.cores { core.flush_caches(); }
         for observer in &mut self.observers { observer.on_modeled_run(); }
 
         let trace = self.has_observer("trace");
