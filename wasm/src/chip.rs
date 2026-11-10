@@ -47,6 +47,9 @@ pub(crate) trait JumperlyChip {
     fn adc_set(&mut self, gpio: u32, mv: u32) -> bool;
     /// Restart the chip from the host (RESET / EN), like a guest software reset.
     fn reset(&mut self);
+    /// Jumperly patch J29: restart the chip from the host with the ROM's reset cause `cause`;
+    /// false, and nothing done, for a cause the chip does not take (only `reset` by default).
+    fn reset_with_cause(&mut self, cause: u32) -> bool { let _ = cause; false }
     /// Turn the I2C / SPI host bridges on or off, finishing what still waits without the host.
     fn bus_host(&mut self, i2c: bool, spi: bool);
     /// Run the waiting bus transactions through the host imports: how many ran.

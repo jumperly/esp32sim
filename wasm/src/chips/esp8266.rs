@@ -105,6 +105,18 @@ impl JumperlyChip for ::esp8266::Machine {
         crate::machine::reboot(self);
     }
 
+    /// The ROM's causes from outside the chip: 1 power-on (the supply switched on: RTC memory,
+    /// RAM and the RTC registers cleared, the strapping latched again; the SDK reports "Power
+    /// On") and 2 the RST pad, as `reset` (RTC memory kept; "External System", or the wake-up in
+    /// deep sleep). The others are the chip's own doing.
+    fn reset_with_cause(&mut self, cause: u32) -> bool {
+        use ::esp8266::rom::boot::{RST_EXT, RST_POWERON};
+        if cause != RST_POWERON && cause != RST_EXT { return false; }
+        self.bus.chip_reset(cause);
+        crate::machine::reboot(self);
+        true
+    }
+
     /// I2C: the soft I2C decoders run on the registered pairs; SPI: HSPI waits for the host. A
     /// transfer still waiting when the SPI bridge goes off reads 0xFF.
     fn bus_host(&mut self, i2c: bool, spi: bool) {

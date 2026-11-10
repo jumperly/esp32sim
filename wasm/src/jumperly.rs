@@ -213,6 +213,26 @@ pub unsafe extern "C" fn esp32sim_reset(e: *mut Emu) -> u32 {
     0
 }
 
+/// Jumperly patch J29: restart the chip from the host with the ROM's reset cause `cause`, for a
+/// chip whose host side has more than one reset. The ESP8266 takes 1 (power-on: RTC memory and
+/// registers cleared, the strapping latched again, the SDK's reason "Power On") and 2 (the RST
+/// pad, as `esp32sim_reset`: RTC memory kept, "External System"). The cycle count keeps going.
+/// Returns 0, or 1 (logged) for another cause or chip, and before boot. Call it between runs.
+///
+/// # Safety
+/// `e` must point to a live emulator to which the caller has exclusive access.
+#[no_mangle]
+pub unsafe extern "C" fn esp32sim_reset_cause(e: *mut Emu, cause: u32) -> u32 {
+    // SAFETY: the caller provides exclusive access to a live emulator.
+    let e = unsafe { &mut *e };
+    if !e.booted { return 1; }
+    let chip = e.m.chip();
+    let Some(c) = e.m.chip_mut() else { log("[emu] reset cause: ESP8266 only"); return 1 };
+    if c.reset_with_cause(cause) { return 0; }
+    log(&format!("[emu] reset cause {cause}: not taken on the {chip} (the ESP8266 takes 1 power-on and 2 RST pad; esp32sim_reset is the chip's reset)"));
+    1
+}
+
 /// Jumperly patch J16: the module's flash is octal SPI (ESP32-S3-WROOM-2: Macronix octal commands,
 /// JEDEC ID C2 80 xx, efuse FLASH_TYPE octal) when `on` is nonzero, quad SPI otherwise (the
 /// default). It survives a chip reset. Before boot, ESP32-S3 only; returns 1 otherwise.

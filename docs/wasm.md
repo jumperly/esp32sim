@@ -642,6 +642,11 @@ The Jumperly ABI (`wasm/src/chips/esp8266.rs`, `esp8266/src/jumperly.rs`):
   memory kept, the RTC registers cleared; during deep sleep it is the wake-up (cause 5). The
   strapping (GPIO15, GPIO0, GPIO2) is read from the circuit at every hardware reset: GPIO0 held low
   before boot gives `boot mode:(1,6)` and the ROM waits in UART download mode.
+- `esp32sim_reset_cause(e, cause)` restarts the chip with the ROM's reset cause: 1 is the power-on
+  (`rst cause:1`, the SDK's "Power On": RTC memory, RAM and the RTC registers cleared, the strapping
+  latched again), 2 the RST pad, the same as `esp32sim_reset`. It returns 0, or 1 before boot and
+  for another cause (logged); the cycle count keeps going. The other chips have one host reset,
+  `esp32sim_reset`, and refuse every cause here (1, logged).
 - No radio: the Wi-Fi and BLE exports answer as for a chip without them (no access point, no virtual
   controller). When the sketch starts Wi-Fi (its first transmit-queue write), the host log gets
   `[emu] wifi: ESP8266 Wi-Fi is not modelled: ...` once; the sketch keeps running and `WiFi.status()`
@@ -652,4 +657,5 @@ The Jumperly ABI (`wasm/src/chips/esp8266.rs`, `esp8266/src/jumperly.rs`):
 3.1.2): blink on GPIO2, the console ports and pin ranges, the ROM's 74880 baud, `analogWrite` at 25 %
 then 75 % and `tone` as PWM events, the servo at 50 Hz, HSPI to the host beside `shiftOut` edges, the
 BME280 chip id through soft I2C, `analogRead(A0)` at 500 mV, the host reset with RTC memory kept,
-`WiFi.begin` with its note, deep sleep with its note and GPIO16, and IO0 held low at boot.
+the host's power-on reset clearing it (and a C3 refusing the cause), `WiFi.begin` with its note,
+deep sleep with its note and GPIO16, and IO0 held low at boot.
