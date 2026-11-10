@@ -1,7 +1,7 @@
 # Command line
 
 ```
-esp32sim [--chip esp32|s3|c3|c6|p4] --boot rom --bootloader B.bin --ptable P.bin --app A.bin [--elf X.elf ...] [options]
+esp32sim [--chip esp32|s3|c3|c6|p4|esp8266] --boot rom --bootloader B.bin --ptable P.bin --app A.bin [--elf X.elf ...] [options]
 esp32sim --flash-image flash.bin --boot rom ...
 ```
 
@@ -10,7 +10,9 @@ One binary for every chip; `esp32sim-c3` is `esp32sim --chip c3`, `esp32sim-c6` 
 where the chip does (`--boot rom`, `--console uart0`, `--flash-mb 4`) and they refuse the flags
 their chip has nothing behind: the C3 board, camera, PSRAM and register presets; the C6, which has
 a board and WiFi, only camera, PSRAM and register presets. The P4 boots from its ROM on UART0 by
-default too, with 16 MB of flash ([esp32p4.md](esp32p4.md)).
+default too, with 16 MB of flash ([esp32p4.md](esp32p4.md)). The ESP8266 (`--chip esp8266`) boots
+its flash image (`--flash-image`, the `.bin` an Arduino build writes for offset 0) from a mask ROM
+modelled in Rust: it needs no ROM ELF.
 
 ## Images and boot
 | Flag | Meaning |
@@ -18,7 +20,7 @@ default too, with 16 MB of flash ([esp32p4.md](esp32p4.md)).
 | `--boot rom\|app` | `rom`: start at the mask ROM reset vector (real boot chain). `app`: load the app image segments and jump to its entry |
 | `--bootloader F`, `--ptable F`, `--app F` | written to flash at 0x0 / 0x8000 / 0x10000 |
 | `--flash-image F` | whole flash dump written at 0 |
-| `--chip esp32\|s3\|c3\|c6\|p4` | which chip (default s3; `esp32` is the classic ESP32) |
+| `--chip esp32\|s3\|c3\|c6\|p4\|esp8266` | which chip (default s3; `esp32` is the classic ESP32) |
 | `--rom F` | mask ROM ELF (default: the chip's in `ESP32SIM_ROM_DIR`, then `~/.espressif/tools/esp-rom-elfs/*/`) |
 | `--mac xx:xx:xx:xx:xx:xx` | the station MAC the efuses report |
 | `--cam-stream PATH\|-`, `--cam-size WIDTHxHEIGHT` | live RGB24 camera source and its dimensions; requires `waveshare-cam` |

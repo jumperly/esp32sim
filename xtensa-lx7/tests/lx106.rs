@@ -1,5 +1,5 @@
 //! Hermetic LX106 corpus, generated with the pinned toolchains in corpus/build-lx106.py.
-use emu_core::{Bus, Core, StepKind};
+use emu_core::{Bus, Core, Fault, StepKind};
 use xtensa_lx7::{decode, lx106::supports, state::{exc, ps, sr}, FlatRam, Lx106, Trap};
 #[allow(dead_code)]
 mod corpus { include!("corpus/lx106-generated.rs"); }
@@ -301,4 +301,50 @@ fn unaligned_word_access_has_lx106_alignment_exception() {
         assert_eq!(c.state().epc[1], pc);
         assert_eq!(c.state().excvaddr, BASE + 0x8001 + if pc == corpus::LEAF { 0 } else { 28 });
     }
+}
+
+/// A bus that takes only 32-bit accesses, as the ESP8266's IRAM and flash cache do.
+struct WordOnly(FlatRam);
+impl Bus for WordOnly {
+    fn note_code_page(&mut self, _vidx: u32) {}
+    fn read8(&mut self, _: u32) -> Result<u8, Fault> { Err(Fault::LoadStoreError) }
+    fn read16(&mut self, _: u32) -> Result<u16, Fault> { Err(Fault::LoadStoreError) }
+    fn read32(&mut self, a: u32) -> Result<u32, Fault> { self.0.read32(a) }
+    fn write8(&mut self, _: u32, _: u8) -> Result<(), Fault> { Err(Fault::LoadStoreError) }
+    fn write16(&mut self, _: u32, _: u16) -> Result<(), Fault> { Err(Fault::LoadStoreError) }
+    fn write32(&mut self, a: u32, v: u32) -> Result<(), Fault> { self.0.write32(a, v) }
+    fn fetch(&mut self, pc: u32) -> Result<[u8; 4], Fault> { self.0.fetch(pc) }
+}
+
+#[test]
+fn narrow_access_to_word_only_memory_is_a_load_store_error() {
+    // l8ui a2, a3, 1 / s8i a2, a3, 1 (Xtensa ISA RRI8: imm8 r s t op0=2; r = 0 L8UI, 4 S8I)
+    for (raw, op) in [([0x22, 0x03, 0x01], xtensa_lx7::Op::L8ui), ([0x22, 0x43, 0x01], xtensa_lx7::Op::S8i)] {
+        let (mut c, b) = machine(BASE);
+        let mut b = WordOnly(b);
+        b.0.mem[..3].copy_from_slice(&raw);
+        assert_eq!(decode(BASE, [raw[0], raw[1], raw[2], 0]).op, op);
+        c.set_ar(3, BASE + 0x100);
+        assert_eq!(c.step(&mut b).trap(), Some(Trap::Exception(exc::LOAD_STORE_ERROR)), "{op:?}");
+        assert_eq!((c.state().exccause, c.state().excvaddr, c.state().epc[1]), (exc::LOAD_STORE_ERROR, BASE + 0x101, BASE));
+        assert_eq!(c.pc(), 0x40000030);
+    }
+    // any other fault keeps its prohibited cause
+    let (mut c, mut b) = machine(BASE);
+    b.mem[..3].copy_from_slice(&[0x22, 0x03, 0x01]);
+    c.set_ar(3, 0x1000);
+    assert_eq!(c.step(&mut b).trap(), Some(Trap::Exception(exc::LOAD_PROHIBITED)));
+}
+
+#[test]
+fn run_returns_in_front_of_a_boundary_pc() {
+    // four NOPs; the third is a boundary: run executes two and leaves pc on it
+    let (mut c, mut b) = machine(BASE);
+    for i in 0..4 { b.mem[i * 3..i * 3 + 3].copy_from_slice(&[0xf0, 0x20, 0x00]); }
+    c.set_boundaries(emu_core::core::pc_bit(BASE + 6));
+    assert_eq!(c.run(&mut b, 10), (2, None));
+    assert_eq!(c.pc(), BASE + 6);
+    // starting on it, the machine has already looked: it runs
+    assert_eq!(c.run(&mut b, 1), (1, None));
+    assert_eq!(c.pc(), BASE + 9);
 }

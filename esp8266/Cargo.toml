@@ -1,0 +1,12 @@
+[package]
+name = "esp8266"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "ESP8266 SoC model: memory map, flash, a mask ROM modelled in Rust, machine"
+
+[dependencies]
+emu-core = { path = "../emu-core" }
+esp-periph = { path = "../esp-periph" }
+esp-soc = { path = "../esp-soc" }
+xtensa-lx7 = { path = "../xtensa-lx7" }

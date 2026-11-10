@@ -46,8 +46,9 @@ pub trait Soc: 'static {
     const NAME: &'static str;
     /// Flash offset for a separately supplied bootloader image.
     const BOOTLOADER_OFFSET: usize = 0;
-    /// The mask ROM ELF's file name in espressif/esp-rom-elfs.
-    const ROM_ELF: &'static str;
+    /// The mask ROM ELF's file name in espressif/esp-rom-elfs; `None` for a chip whose ROM is
+    /// modelled in Rust (Espressif publishes no ELF for the ESP8266's), which needs no file.
+    const ROM_ELF: Option<&'static str>;
     const CPU_HZ: u64;
     const CORES: usize;
     /// How far time jumps when every core sleeps (at most; deadlines and limits cut it).
@@ -72,6 +73,9 @@ pub trait Soc: 'static {
     fn reset_core_with_bus(core: &mut Self::Core, _bus: &mut Self::Bus, i: usize) { Self::reset_core(core, i); }
     /// Set a core up to start the app image at `entry` as the 2nd-stage bootloader would have.
     fn boot_core(core: &mut Self::Core, entry: u32);
+    /// A cold boot from the mask ROM (`Machine::boot_rom`), after core 0's reset: the place for a
+    /// chip whose ROM is modelled in Rust to start it. A ROM ELF needs nothing here.
+    fn rom_boot(_m: &mut crate::Machine<Self>) where Self: Sized {}
     /// The interrupt input of every core, from the bus's current source state.
     fn irqs(bus: &Self::Bus, out: &mut [<Self::Core as Core>::Irq]);
     /// Cold peripheral-change boundary, after interrupt presentation. A chip that powers
@@ -80,6 +84,8 @@ pub trait Soc: 'static {
     fn peripheral_event(_bus: &Self::Bus, _cores: &mut [Self::Core]) {}
     /// Optional function-entry substitutions, resolved from a guest ELF by the chip.
     fn function_hooks(_bus: &Self::Bus) -> &[u32] { &[] }
+    /// Run the substitution at the core's pc if there is one; true when it ran instead of the
+    /// instruction there. It may ask to end the run (`SocBus::take_stop`).
     fn function_hook(_core: &mut Self::Core, _bus: &mut Self::Bus) -> bool { false }
     fn core_state(_bus: &Self::Bus, _core: usize) -> CoreState { CoreState::Running }
     /// Core `core` took interrupt `irq` (the number its `Trap::Interrupt` carries): the place for
@@ -163,6 +169,9 @@ pub trait SocBus: Bus {
     /// `RunUntil::Yield`. Reading it clears it.
     fn take_host_event(&mut self) -> bool { false }
     fn misc(&mut self) -> &mut Misc;
+    /// A stop a function hook asked for (a modelled ROM met an entry it does not implement): the
+    /// run ends with it right after the hook. Reading it clears it.
+    fn take_stop(&mut self) -> Option<Stop> { None }
     fn load_bytes(&mut self, addr: u32, data: &[u8]) -> Result<(), String>;
     fn write_flash(&mut self, offset: usize, data: &[u8]) -> Result<(), String>;
     /// Map and copy the app image at flash `app_off` as the bootloader would; returns the entry point.

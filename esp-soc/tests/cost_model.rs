@@ -322,7 +322,7 @@ impl Soc for TestSoc {
     type Core = TestCore;
     type Bus = TestBus;
     const NAME: &'static str = "test";
-    const ROM_ELF: &'static str = "test.elf";
+    const ROM_ELF: Option<&'static str> = Some("test.elf");
     const CPU_HZ: u64 = 100;
     const CORES: usize = 2;
     const IDLE_CHUNK: u64 = 64;

@@ -298,7 +298,7 @@ impl<S: Soc> Machine<S> {
     }
 
     /// Cold boot from the mask ROM reset vector (needs ROM + flash image with bootloader).
-    pub fn boot_rom(&mut self) { S::reset_core(&mut self.cores[0], 0); }
+    pub fn boot_rom(&mut self) { S::reset_core(&mut self.cores[0], 0); S::rom_boot(self); }
 
     /// Chip reset (software / watchdog): cores back to the reset vector, digital peripherals
     /// re-initialised; SRAM, RTC memories, efuses and the RTC-domain registers survive, as on
@@ -410,7 +410,7 @@ impl<S: Soc> Machine<S> {
                 let (args, ret) = (cpu.probe_args(&mut self.bus), cpu.return_address(&mut self.bus));
                 eprintln!("[fn] i={} t={:.4}s c{} {}({}) ret={:#x}", cpu.insn_count(), self.bus.cycles() as f64 / S::CPU_HZ as f64, core, name, args, ret);
             }
-            if S::function_hook(cpu, &mut self.bus) { return (1, None); }
+            if S::function_hook(cpu, &mut self.bus) { return (1, self.bus.take_stop()); }
             if let Some(&ret) = self.stubs.get(&pc) { cpu.return_from_stub(&mut self.bus, ret); self.stub_hits += 1; return (1, None); }
         }
         let (used, trap) = cpu.run(&mut self.bus, budget);
@@ -484,7 +484,7 @@ impl<S: Soc> Machine<S> {
             }
         }
         if self.stub_bloom & pc_bit(pc) != 0 && !cpu.waiting() {
-            if S::function_hook(cpu, &mut self.bus) { return None; }
+            if S::function_hook(cpu, &mut self.bus) { return self.bus.take_stop(); }
             if let Some(&ret) = self.stubs.get(&pc) { cpu.return_from_stub(&mut self.bus, ret); self.stub_hits += 1; return None; }
         }
         {

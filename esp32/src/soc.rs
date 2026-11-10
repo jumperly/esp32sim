@@ -18,7 +18,7 @@ impl Soc for Esp32 {
     type Bus = SocBus;
     const NAME: &'static str = "esp32";
     const BOOTLOADER_OFFSET: usize = 0x1000;
-    const ROM_ELF: &'static str = "esp32_rev300_rom.elf";
+    const ROM_ELF: Option<&'static str> = Some("esp32_rev300_rom.elf");
     const CPU_HZ: u64 = periph::CPU_HZ;
     const CORES: usize = 2;
     const IDLE_CHUNK: u64 = 512;

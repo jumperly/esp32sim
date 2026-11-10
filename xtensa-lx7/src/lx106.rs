@@ -6,6 +6,7 @@
 //! This adapter intentionally never enters the LX6/LX7 block caches or either JIT.
 use crate::{decode, disasm, exec, Bus, Core, Cpu, Insn, Op, Trap};
 use crate::state::{exc, ps, sr};
+use emu_core::core::pc_bit;
 use emu_core::{StepKind, StepOutcome};
 
 // core-isa.h:260-343,390-419. Reset selection 1 is the ESP8266 ROM entry
@@ -72,6 +73,8 @@ fn exchangeable_sr(n: u32) -> bool {
 pub struct Lx106 {
     cpu: Cpu,
     litbase: u32,
+    /// `Core::set_boundaries`: pcs (a bloom over `pc_bit`) the machine must see before they run
+    boundaries: u64,
 }
 
 impl Default for Lx106 {
@@ -80,7 +83,7 @@ impl Default for Lx106 {
 
 impl Lx106 {
     pub fn new() -> Self {
-        let mut c = Self { cpu: Cpu::new(0), litbase: 0 };
+        let mut c = Self { cpu: Cpu::new(0), litbase: 0, boundaries: 0 };
         c.reset();
         c
     }
@@ -255,6 +258,16 @@ impl Core for Lx106 {
         out.next_pc = self.pc();
         out
     }
+    /// `step` until the budget is spent or a trap, returning in front of a boundary pc (a stub or
+    /// a function hook, such as a SoC's high-level ROM) so the machine intercepts it there.
+    fn run<B: Bus>(&mut self, bus: &mut B, budget: u32) -> (u32, Option<Trap>) {
+        for i in 0..budget {
+            if i > 0 && self.boundaries & pc_bit(self.cpu.pc) != 0 && !self.cpu.waiting { return (i, None); }
+            if let Some(t) = self.step(bus).trap() { return (i + 1, Some(t)); }
+        }
+        (budget, None)
+    }
+    fn set_boundaries(&mut self, bloom: u64) { self.boundaries = bloom; }
     fn regs(&self, out: &mut Vec<(&'static str, u32)>) { self.cpu.regs(out); }
     fn arg<B: Bus>(&self, bus: &mut B, n: usize) -> u32 {
         if n < 6 { self.get_ar(2 + n as u8) } else { bus.read32(self.get_ar(1).wrapping_add(((n - 6) * 4) as u32)).unwrap_or(0) }
