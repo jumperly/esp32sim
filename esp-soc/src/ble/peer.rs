@@ -94,27 +94,6 @@ impl Air {
 }
 
 impl Nearby {
-    /// `esp32sim_ble_nearby`'s list: entries of `[addr 6][addr_type u8][rssi i8][adv_len u8][adv]
-    /// [rsp_len u8][rsp]`, the data at most 31 bytes each, at most `NEARBY_MAX`.
-    pub fn parse_list(mut d: &[u8]) -> Result<Vec<Nearby>, String> {
-        let mut out = Vec::new();
-        while !d.is_empty() {
-            if d.len() < 9 { return Err("a device entry is cut short".into()); }
-            let addr: [u8; 6] = d[..6].try_into().unwrap();
-            let (addr_type, rssi, n) = (d[6], d[7] as i8, d[8] as usize);
-            if addr_type > 1 || n > 31 || d.len() < 9 + n + 1 { return Err("a device entry is cut short or too long".into()); }
-            let adv = d[9..9 + n].to_vec();
-            let m = d[9 + n] as usize;
-            if m > 31 || d.len() < 10 + n + m { return Err("a device scan response is cut short or too long".into()); }
-            out.push(Nearby { addr, addr_type, rssi, adv, scan_response: d[10 + n..10 + n + m].to_vec() });
-            if out.len() > NEARBY_MAX { return Err(format!("more than {NEARBY_MAX} devices")); }
-            d = &d[10 + n + m..];
-        }
-        Ok(out)
-    }
-}
-
-impl Nearby {
     /// `--ble-nearby`'s `key=value,...`: `name` (a Complete Local Name after the LE General
     /// Discoverable Flags, at most 26 bytes so both fit the 31-byte advertising data), `adv` and
     /// `rsp` (the advertising data and the scan response as hex, at most 31 bytes each; `adv`

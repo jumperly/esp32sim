@@ -530,39 +530,6 @@ pub unsafe extern "C" fn esp32sim_wifi_beacons(e: *mut Emu, data: *const u8, len
     0
 }
 
-/// Jumperly patch J25: the Bluetooth devices around the user (the web page found them), heard by
-/// the guest's scans and not connectable, replacing the ones there were. `data`: entries of
-/// `[addr 6][addr_type u8 (0 public, 1 random)][rssi i8][adv_len u8][adv][rsp_len u8][rsp]`, the
-/// data at most 31 bytes each, at most `NEARBY_MAX` (32) devices (empty: none). Returns 0, or 1 (no virtual
-/// controller, bad data; logged).
-///
-/// # Safety
-/// `e` must point to a live emulator to which the caller has exclusive access; for a nonzero `len`,
-/// `data` must be readable for `len` bytes throughout this call.
-#[no_mangle]
-pub unsafe extern "C" fn esp32sim_ble_nearby(e: *mut Emu, data: *const u8, len: usize) -> u32 {
-    // SAFETY: the caller provides exclusive access to a live emulator.
-    let e = unsafe { &mut *e };
-    // SAFETY: the caller provides a readable buffer for this call.
-    let data = unsafe { bytes(data, len) };
-    let list = match esp_soc::ble::peer::Nearby::parse_list(data) {
-        Ok(list) => list,
-        Err(reason) => { log(&format!("[emu] ble: {reason}")); return 1; }
-    };
-    let result = match e.m.chip_mut() {
-        Some(c) => {
-            let cycles = c.flush_ticks();
-            let hz = c.cpu_hz();
-            match c.ble() { Some(b) => b.set_nearby(list, cycles, hz), None => Err(no_ble()) }
-        }
-        None => Err(no_ble()),
-    };
-    match result {
-        Ok(()) => 0,
-        Err(reason) => { log(&format!("[emu] ble: {reason}")); 1 }
-    }
-}
-
 /// Jumperly patch J26: the air between the boards of a project: this board's public address
 /// (`addr`: 6 bytes, least significant first; READ_BD_ADDR answers it) and connections to other
 /// boards through the host (`esp32sim_ble_air_take` / `esp32sim_ble_air_put`). After

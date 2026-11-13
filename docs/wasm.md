@@ -280,14 +280,10 @@ The exports are upstream's ([below](#virtual-ble-controller-and-its-peer)). Jump
 widens the peer's commands: `disconnect`, and `write HANDLE HEX` up to 512 bytes (long values as
 prepared writes); the connection's MTU comes as an `mtu N` line.
 
-`esp32sim_ble_nearby(e, ptr, len)` (Jumperly patch J25): the Bluetooth devices around the user,
-heard by the guest's scans, replacing the ones there were. Entries of `[addr 6,
-least significant byte first][addr_type u8: 0 public, 1 random][rssi i8][adv_len u8][adv][rsp_len
-u8][rsp]`, the data at most 31 bytes each, at most 32 devices (`len` 0: none). Each scan of the
-guest — and a running one when the list changes — gets an LE Advertising Report per device
-(ADV_IND with the air on — `esp32sim_ble_air`, the host carries a connection — else ADV_SCAN_IND,
-not connectable; SCAN_RSP too for an active scan, an empty one included). 0, or 1 without the virtual
-controller or for bad data.
+`esp32sim_ble_nearby` (the devices around the user) is upstream's since #351 and takes the
+`--ble-nearby` specs as text. The fork changes what a device is with the air on
+(`esp32sim_ble_air`): the guest hears it as ADV_IND, since the host carries a connection to it;
+without the air it is ADV_SCAN_IND, not connectable, as upstream's.
 
 `esp32sim_ble_air(e, addr)` (Jumperly patch J26): Bluetooth LE between the boards of a project.
 `addr` points to the board's public address (6 bytes, least significant first), which READ_BD_ADDR
@@ -591,6 +587,15 @@ length at `esp32sim_ble_ptr(emu)`, valid until the next take or emulator deletio
 lines wait; lines lost to the bound come first as `dropped=N`. A line's time is when the
 controller hands it over, so it can differ by microseconds from the CLI's, which slices
 differently; the lines and their order are the same ([EX264](evidence/ble-wasm-api/README.md)).
+
+`esp32sim_ble_nearby(emu, ptr, len)` sets the devices around the station, the CLI's
+`--ble-nearby`, replacing the ones there were: UTF-8 text with one of the option's specs per line
+(`name=`, `adv=` / `rsp=` hex, `addr=`, `type=`, `rssi=`; blank lines are skipped, no lines means
+none), at most 32. After `esp32sim_ble_virtual`, before or after boot: the guest's scans report
+them from then on, a running scan at once, as the option's devices ([EX246](evidence/ble-nearby/README.md)).
+0, or 1 without the virtual controller or for text the option would refuse (an unknown key, two
+devices on one address, more than 32), with the reason on `host_log` and the devices unchanged
+([EX266](evidence/ble-nearby-wasm/README.md)).
 
 ## ESP8266 in the browser
 

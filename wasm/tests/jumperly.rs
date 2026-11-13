@@ -1203,15 +1203,15 @@ fn ble_server_on_the_s3_through_the_virtual_peer() { ble_server_through_the_virt
 #[test]
 fn ble_server_on_the_c3_through_the_virtual_peer() { ble_server_through_the_virtual_peer("c3", C3_MHZ); }
 
-/// Jumperly patch J25: one entry of `esp32sim_ble_nearby`'s list.
-fn nearby(addr_le: [u8; 6], rssi: i8, adv: &[u8], rsp: &[u8]) -> Vec<u8> {
-    let mut v = addr_le.to_vec();
-    v.extend_from_slice(&[1, rssi as u8, adv.len() as u8]);
-    v.extend_from_slice(adv);
-    v.push(rsp.len() as u8);
-    v.extend_from_slice(rsp);
-    v
+/// One device of `esp32sim_ble_nearby`'s list (a `--ble-nearby` spec): its address least significant
+/// byte first, as the controller has it.
+fn nearby(addr_le: [u8; 6], random: bool, rssi: i8, adv: &[u8], rsp: &[u8]) -> String {
+    let hex = |d: &[u8]| d.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    let addr = addr_le.iter().rev().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(":");
+    format!("addr={addr},type={},rssi={rssi},adv={},rsp={}", if random { "random" } else { "public" }, hex(adv), hex(rsp))
 }
+/// Set the devices around: the specs, one per line.
+fn set_nearby(e: &Emu, specs: &str) -> u32 { unsafe { esp32sim_ble_nearby(e.0, specs.as_ptr(), specs.len()) } }
 
 /// A scanning sketch hears the devices around the user (and the virtual `esp32sim`), with their
 /// names (also from a scan response), services and signal; a new list reaches a running scan.
@@ -1220,11 +1220,11 @@ fn ble_scan_hears_the_devices_around(chip: &str, mhz: u64) {
     let enable = |e: *mut esp32sim_wasm::Emu| assert_eq!(unsafe { esp32sim_ble_virtual(e, elf.as_ptr(), elf.len()) }, 0);
     let mut e = if chip == "c3" { Emu::boot_c3_with("c3-ble-scan", enable) } else { Emu::boot_with("ble-scan", enable) };
     // Heart rate: flags, the 0x180d service, a complete name; Tag: its name only in the scan response.
-    let hr = nearby([0x55, 0x44, 0x33, 0x22, 0x11, 0xc2], -60, &[[2, 1, 6, 3, 3, 0x0d, 0x18, 10, 9].as_slice(), b"HeartRate"].concat(), b"");
-    let tag = nearby([0x66, 0x55, 0x44, 0x33, 0x22, 0xd1], -80, &[2, 1, 6], &[[4u8, 9].as_slice(), b"Tag"].concat());
-    let list = [hr, tag].concat();
-    assert_eq!(unsafe { esp32sim_ble_nearby(e.0, [1u8, 2].as_ptr(), 2) }, 1, "cut short");
-    assert_eq!(unsafe { esp32sim_ble_nearby(e.0, list.as_ptr(), list.len()) }, 0);
+    let hr = nearby([0x55, 0x44, 0x33, 0x22, 0x11, 0xc2], true, -60, &[[2, 1, 6, 3, 3, 0x0d, 0x18, 10, 9].as_slice(), b"HeartRate"].concat(), b"");
+    let tag = nearby([0x66, 0x55, 0x44, 0x33, 0x22, 0xd1], true, -80, &[2, 1, 6], &[[4u8, 9].as_slice(), b"Tag"].concat());
+    assert_eq!(set_nearby(&e, "colour=red"), 1, "not a spec");
+    assert_eq!(set_nearby(&e, &format!("{hr}
+{tag}")), 0);
     let run = |e: &mut Emu, us: u64| {
         let end = e.cycles() + us * mhz;
         let mut text = String::new();
@@ -1241,7 +1241,7 @@ fn ble_scan_hears_the_devices_around(chip: &str, mhz: u64) {
     assert!(text.contains("found name=Tag addr=d1:22:33:44:55:66 rssi=-80"), "{text}");
     assert!(text.contains("scan done n=3"), "{text}");
     // An empty list: only the virtual peripheral is left.
-    assert_eq!(unsafe { esp32sim_ble_nearby(e.0, [].as_ptr(), 0) }, 0);
+    assert_eq!(set_nearby(&e, ""), 0);
     // The scan running then still had them; the next one does not.
     let later = run(&mut e, 7_000_000);
     let last = later.lines().rfind(|l| l.starts_with("scan done"));
@@ -1304,16 +1304,11 @@ fn two_boards_talk_ble(server_chip: &str, client_chip: &str) {
                         let n = f[1] as usize;
                         adv = Some((f[2..2 + n].to_vec(), f[3 + n..].to_vec()));
                         let (a, r) = adv.clone().unwrap();
-                        let mut entry = addr_server.to_vec();
-                        entry.extend_from_slice(&[0, (-50i8) as u8, a.len() as u8]);
-                        entry.extend_from_slice(&a);
-                        entry.push(r.len() as u8);
-                        entry.extend_from_slice(&r);
-                        assert_eq!(unsafe { esp32sim_ble_nearby(boards[1].0, entry.as_ptr(), entry.len()) }, 0);
+                        assert_eq!(set_nearby(&boards[1], &nearby(addr_server, false, -50, &a, &r)), 0);
                     }
                     2 if i == 0 => {
                         adv = None;
-                        assert_eq!(unsafe { esp32sim_ble_nearby(boards[1].0, [].as_ptr(), 0) }, 0);
+                        assert_eq!(set_nearby(&boards[1], ""), 0);
                     }
                     3 if i == 1 => {
                         assert_eq!(&f[1..7], &addr_server);
@@ -1362,11 +1357,7 @@ fn a_sketch_asks_the_host_for_a_device_around() {
     // Flags, then the ble-server service (128-bit, least significant byte first).
     let mut adv = vec![2, 1, 6, 17, 7];
     adv.extend_from_slice(&[0x4b, 0x91, 0x31, 0xc3, 0xc9, 0xc5, 0xcc, 0x8f, 0x9e, 0x45, 0xb5, 0x1f, 0x01, 0xc2, 0xaf, 0x4f]);
-    let mut entry = device.to_vec();
-    entry.extend_from_slice(&[1, (-60i8) as u8, adv.len() as u8]);
-    entry.extend_from_slice(&adv);
-    entry.push(0);
-    assert_eq!(unsafe { esp32sim_ble_nearby(e.0, entry.as_ptr(), entry.len()) }, 0);
+    assert_eq!(set_nearby(&e, &nearby(device, true, -60, &adv, &[])), 0);
     let mut text = String::new();
     let mut asked = false;
     for _ in 0..6000 {
