@@ -92,9 +92,9 @@ impl JumperlyChip for esp32s3::Machine {
 
     fn bus_service(&mut self) -> u32 {
         let mut n = 0;
-        for bus in 0..2 {
+        for (bus, i2c) in self.bus.periph.i2c.iter_mut().enumerate() {
             let mut host = HostI2c { bus: bus as u32 };
-            if self.bus.periph.i2c[bus].service(&mut host) { n += 1; }
+            if i2c.service(&mut host) { n += 1; }
         }
         for host in [2u8, 3] {                                              // Jumperly patch J18: SPI3 too
             let c = self.bus.periph.gpspi_mut(host);

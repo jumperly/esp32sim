@@ -124,9 +124,9 @@ impl JumperlyChip for ::esp32::Machine {
     /// controller's (at most two rounds).
     fn bus_service(&mut self) -> u32 {
         let mut n = 0;
-        for bus in 0..2 {
+        for (bus, i2c) in self.bus.periph.i2c.iter_mut().enumerate() {
             let mut host = HostI2c { bus: bus as u32 };
-            if self.bus.periph.i2c[bus].service(&mut host) { n += 1; }
+            if i2c.service(&mut host) { n += 1; }
         }
         while let Some((host, tx, rx_len)) = self.bus.pending_spi_host() {
             let rx = host_transfer(u32::from(host), &tx, rx_len);
