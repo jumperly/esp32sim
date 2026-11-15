@@ -1,7 +1,8 @@
-//! Jumperly patch J13: a NAT transport for a host without sockets (the browser). The guest's socket
-//! operations queue up as records the host takes after every run (`QueueHandle::take_ops`); the
-//! host answers with events (`QueueHandle::event`) before the next run. No threads, no sockets:
-//! the transport and its handle share one `HostQueue`.
+//! A NAT transport for a host without sockets (the browser build). The guest's socket operations
+//! queue up as records the host takes after every run (`QueueHandle::take_ops`); the host answers
+//! with events (`QueueHandle::event`) before the next run, from whatever network it has (a
+//! WebSocket relay, say). No threads, no sockets: the transport and its handle share one
+//! `HostQueue`.
 //!
 //! Records (little-endian, each padded to a multiple of 4 bytes):
 //! `[u8 op][u8 flags][u16 port][u32 id][u32 len][len bytes]` — see `op` for the kinds.
@@ -57,7 +58,7 @@ pub mod op {
     pub const INCOMING_RESULT: u8 = 9;
 }
 
-/// Event kinds of the ABI (`esp32sim_net_event`), for `HostEvent::from_abi`.
+/// Event kinds of the browser build's `esp32sim_nat_event`, for `HostEvent::from_abi`.
 pub mod ev {
     pub const CONNECTED: u32 = 1;
     pub const FAILED: u32 = 2;

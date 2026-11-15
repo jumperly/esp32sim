@@ -234,6 +234,19 @@ which requests Binaryen `wasm-opt -O3` and requires that tool to be installed.
 The measured configuration used no Binaryen postprocessing. `CARGO_ENCODED_RUSTFLAGS`,
 when set, takes precedence over `RUSTFLAGS` under Cargo's usual rules.
 
+## Networks around the station
+
+`esp32sim_wifi_nearby(e, ptr, len)` sets the networks around the station, the CLI's
+`--wifi-nearby`, replacing the ones there were: UTF-8 text with one of the option's specs per
+line (`ssid=`, `chan=`, `rssi=`, `secure=`, `bssid=`; blank lines are skipped, no lines means
+none), at most 32. A scan lists them with their channel, signal and security, and joining one
+fails as out of reach ([EX237](evidence/wifi-nearby/README.md)). Call it after `esp32sim_wifi`,
+before or after boot; a new `esp32sim_wifi` starts with none around. The P4 with its C6 gives
+them to the C6's access point. A network with the access point's own SSID or BSSID is left out,
+as the option leaves it out, and `host_log` says why. 0, or 1 without the access point or for
+text the option would refuse (an unknown key, two networks on one BSSID, more than 32), with the
+reason on `host_log` and the networks unchanged ([EX267](evidence/wifi-nearby-wasm/README.md)).
+
 ## Host Ethernet relay
 
 S3, C3 and C6 provide an optional Ethernet transport behind their virtual AP.
@@ -267,6 +280,39 @@ batch remains readable until the next `ethernet_take` or emulator deletion.
 
 The [Arduino relay check](evidence/ethernet-c3-2026-10-02/relay.mjs) shows the ABI
 with a host DHCP responder.
+
+## NAT through the page
+
+The other way to give the guest the real network keeps `VirtualNet` and its NAT in the emulator
+and hands the page only socket operations, one level above the Ethernet relay: the page relays
+connects, bytes and closes per flow (a WebSocket per flow, say), not frames, and DHCP, ARP and the
+guest's TCP stay here. Configure the AP with `esp32sim_wifi`, then call `esp32sim_nat_relay(e,
+flags)`, before or after boot (S3, C3, C6, the classic ESP32, and the P4's C6). The NAT runs over
+`esp_soc::nat::QueueTransport`; after each run slice take the records and answer with events
+before the next one.
+
+| Export | Contract |
+| --- | --- |
+| `esp32sim_nat_relay(e, flags)` | bit 0: on (off: no NAT, as before); bit 1: the page resolves A / AAAA (`RESOLVE`), else DNS goes out as UDP to 10.0.2.3:53; bit 2: SNTP answered here from the network clock. 0, or 1 without an access point. |
+| `esp32sim_nat_take(e)` | The records queued since the last take: their byte length, the bytes at `esp32sim_nat_ptr(e)`. |
+| `esp32sim_nat_event(e, kind, id, arg, ptr, len)` | One event; 1 applied (or the bytes taken), 0 for a flow or lookup not waiting for it. |
+
+Records are `u8 op, u8 flags, u16 port, u32 id, u32 len` and `len` bytes, little-endian, each
+padded to a multiple of 4: 1 TCP_CONNECT (port, IPv4[4]), 2 TCP_DATA, 3 TCP_SHUTDOWN, 4 TCP_CLOSE
+(flags bit 0 abort), 5 UDP_OPEN (port, IPv4[4]), 6 UDP_DATA, 7 UDP_CLOSE, 8 RESOLVE (id = query,
+port = qtype, the name). Events are 1 CONNECTED (`arg` = bytes the page takes before its first
+TX_CREDIT), 2 FAILED (`arg` 1 refused, 2 unreachable, 3 policy, 4 offline), 3 TCP_DATA (returns
+the bytes taken; offer the rest again after the next run), 4 TCP_EOF, 5 TCP_RESET, 6 TX_CREDIT
+(`arg` bytes written), 7 UDP_DATA, 8 RESOLVED (`id` = query, `arg` = TTL, n × IPv4[4]),
+9 UNRESOLVED (`arg` = rcode 2 or 3). Bounds per emulator: 16 TCP flows (a 17th SYN waits for its
+retransmission), 64 KiB waiting for the guest per flow, 256 KiB of untaken data, 16 datagrams per
+UDP flow. A chip reset aborts the open flows (TCP_CLOSE with abort), and so does switching the
+relay off or on again, or a new `esp32sim_wifi`, which also drops the relay: the next take hands
+over the old queue's records, those closes last, before any new ones. Take between switches: from
+the first of a replaced queue's records that would bring the waiting ones past 256 KiB, only its
+closes (TCP_CLOSE, UDP_CLOSE) are kept, so a close can name a flow whose earlier records the page
+never got. [EX268](evidence/nat-relay/README.md) runs an Arduino station through it with Node's
+sockets in place of a page.
 
 Camera frames use `esp32sim_in_bin` type 3: `[3, width u16le, height u16le, RGBA...]`.
 The entire message must fit 8 MiB, with nonzero dimensions and exact pixel length.
@@ -332,71 +378,25 @@ for model limits and the production-module reconnect test.
 
 ## Host network
 
-Jumperly patch J13. The page can carry the station's traffic itself: the user-mode NAT runs in
-the module as natively, but over a `QueueTransport` (`esp-soc/src/nat/queue.rs`) instead of
-sockets. The guest's socket operations queue up as records the page takes after every run, and
-the page answers with events before the next one — the deferred-bridge pattern of the I2C / SPI
-bridges, without threads.
+Jumperly patch J13. The station's NAT carried by the page is upstream's since #350: see "NAT
+through the page" above (`esp32sim_nat_relay`, `esp32sim_nat_take` + `esp32sim_nat_ptr`,
+`esp32sim_nat_event`, the records and the events). The fork's `esp32sim_net_host`,
+`esp32sim_net_take` and `esp32sim_net_event` are gone. The fork's access point
+(`esp32sim_wifi_ap`) ends the relay as `esp32sim_wifi` does: call `esp32sim_nat_relay` again
+after every one. What the fork still adds:
 
 | Export | Contract |
 | --- | --- |
-| `esp32sim_net_host(e, flags)` | bit 0 host transport, bit 1 the host resolves A / AAAA (`RESOLVE`), bit 2 SNTP answered locally. After `esp32sim_wifi_ap` (a new access point drops it), before or after boot; survives a chip reset. Flags without bit 0 restore the stage-1 subnet. 1 without an access point. |
-| `esp32sim_net_take(e)` | The records queued since the last call: their count; bytes in the buffer (`esp32sim_buf_ptr`, `esp32sim_buf_len`). |
-| `esp32sim_buf_len(e)` | Length of the buffer of the last `*_take` call. |
-| `esp32sim_net_event(e, kind, id, arg, ptr, len)` | One event (below). `TCP_DATA` returns the bytes taken, `UDP_DATA` 1 taken / 0 dropped, the rest 1 applied / 0 not waited for. |
-| `esp32sim_wifi_stat(e, which)` | 0 associated (keys installed), 1 DHCP lease given, 2 TCP flows open through the host, 3 bytes to the host, 4 bytes from the host, 5 TCP flows the host could not open, 6 DNS answers from the host, 7 / 8 LAN packets out / in. |
-
-Records, little-endian, each padded to a multiple of 4 bytes:
-`u8 op, u8 flags, u16 port, u32 id, u32 len, len bytes`.
+| `esp32sim_wifi_stat(e, which)` | 0 associated (keys installed), 1 DHCP lease given, 2 TCP flows open through the page, 3 bytes to the page, 4 bytes from the page, 5 TCP flows the page could not open, 6 DNS answers from the page, 7 / 8 LAN packets out / in. |
+| `esp32sim_buf_len(e)` | Length of the buffer of the last `*_take` call of the fork's ABI (`esp32sim_buf_ptr`); the NAT's records are at `esp32sim_nat_ptr`. |
 
 | op | Record | Fields |
 | --- | --- | --- |
-| 1 | TCP_CONNECT | `id` = flow, `port`, data = IPv4[4] |
-| 2 | TCP_DATA | the guest's bytes, never more than the host's credit |
-| 3 | TCP_SHUTDOWN | the guest finished sending (FIN, every byte before it written) |
-| 4 | TCP_CLOSE | the NAT forgot the flow; flags bit 0 = abort (guest RST, reboot) |
-| 5 | UDP_OPEN | `port`, data = IPv4[4] |
-| 6 | UDP_DATA | one datagram |
-| 7 | UDP_CLOSE | |
-| 8 | RESOLVE | `id` = query, `port` = qtype (1 A, 28 AAAA), data = the name (UTF-8) |
 | 9 | INCOMING_RESULT | J15: `id` = the host's incoming flow, flags bit 0 = the guest accepted it |
 
 | kind | Event | `arg` / data |
 | --- | --- | --- |
-| 1 | CONNECTED | `arg` = bytes the host takes before its first credit |
-| 2 | FAILED | `arg` 1 refused, 2 unreachable / timed out, 3 policy, 4 offline; the guest gets RST\|ACK. On an open flow it is a reset |
-| 3 | TCP_DATA | the host's bytes; at most 64 KiB wait per flow, the rest is offered again later |
-| 4 | TCP_EOF | the remote side finished sending |
-| 5 | TCP_RESET | after the bytes already taken |
-| 6 | TX_CREDIT | `arg` more bytes |
-| 7 | UDP_DATA | one datagram; 16 wait per flow |
-| 8 | RESOLVED | `id` = query, `arg` = TTL, data = n × IPv4[4] (none: an empty answer) |
-| 9 | UNRESOLVED | `arg` = rcode 2 SERVFAIL or 3 NXDOMAIN |
 | 10 | INCOMING | J15: the host opens flow `id` to the guest's port `arg`; data = the peer's IPv4[4] + port u16 LE |
-
-Limits per board: 16 TCP flows (the 17th SYN is dropped and retried by the guest), 64 KiB waiting
-for the guest per TCP flow, 256 KiB of data in untaken records (`tcp_write` blocks, a datagram is
-dropped), 16 datagrams per UDP flow. Flow ids grow and are not reused while a flow lives. No
-TCP_CLOSE follows FAILED or TCP_RESET: the host has forgotten the flow already. Data for a flow
-the guest has forgotten is taken and dropped. With bit 1 the host sees no DNS datagrams: A and AAAA
-go as `RESOLVE`, any other query is answered here, empty (NOERROR). With bit 2 SNTP is answered
-from `esp32sim_run`'s `unix_ms`; without it the guest's NTP goes to the host as UDP. ICMP echo
-is answered locally for any address.
-
-A host loop:
-
-```js
-for (;;) {
-  for (const ev of dueEvents()) {                                  // in arrival order
-    const taken = deliver(ev);                                     // esp32sim_net_event
-    if (ev.kind === 3 && taken < ev.bytes.length) keep(ev, taken); // offer the rest next time
-  }
-  exports.esp32sim_run(e, cycles, Date.now());
-  const n = exports.esp32sim_net_take(e);
-  const records = new DataView(memory.buffer, exports.esp32sim_buf_ptr(e), exports.esp32sim_buf_len(e));
-  forward(records, n);                                             // to the gateway
-}
-```
 
 `wasm/tests/jumperly.rs` (`wifi_net_reaches_a_scripted_internet_through_the_host`) runs the
 `wifi-net` fixture against a scripted host: `dns: example.com -> 93.184.215.14`, SNTP time,
@@ -507,7 +507,6 @@ reading it) or on its own IO_MUX pads with the matrix bypassed (S3: UART0 on 43 
 | Export | Contract |
 | --- | --- |
 | `esp32sim_uart_pins(e, port)` | The pads of UART `port` as `tx \| rx << 8`, 255 for none: TX is the pad routed to TXD_OUT through the matrix, else the IO_MUX TX pad in its UART function; RX the pad the matrix routes to RXD_IN, else (matrix bypassed) the IO_MUX RX pad in its UART function with input enabled. S3: ports 0..2; C3: 0, 1; the classic ESP32: 0..2 (UART0 on 1 / 3). |
-| `esp32sim_wifi_beacons(e, ptr, len)` | Jumperly patch J22: the networks around (beacon-only, not joinable), replacing the ones there were. Entries `[ssid_len u8][ssid][channel u8][rssi i8][secure u8][bssid 6]`, SSID 1..=32 bytes of UTF-8, channel 1..=14, at most 32; `len` 0 clears them. They answer wildcard or matching probe requests addressed to them from their own BSSID with their channel, signal and security; a network on a BSSID already listed, or with the access point's SSID or BSSID, is left out with a log line. After `esp32sim_wifi_ap` (a new access point drops them), before or after boot. 0 ok; 1 without an access point or for bad data (logged). |
 | `esp32sim_uart_baud(e, port)` | Jumperly patch J21: the baud UART `port` is set to (its clock source and dividers, upstream's `uart_route`), 0 when not configured or no such port. |
 | `esp32sim_gpio_in_pin(e, signal)` | The pad a matrix input signal reads, 255 if none. On the C3 it now decodes the C3 layout (SIG_IN_SEL at bit 6, pad in bits 0..4; the S3: bit 7, 0..5). On the classic ESP32 (J28) also a pad that carries the signal on its IO_MUX function with the matrix bypassed; the pad needs FUN_IE. |
 

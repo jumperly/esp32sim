@@ -610,14 +610,14 @@ fn a_sketch_joining_another_network_shows_its_ssid_and_joins_once_the_ap_matches
 
 // ------------------------------------------------------------------ Jumperly patch J13: the host's network
 
-/// One record of `esp32sim_net_take`: (op, flags, port, id, data).
+/// One record of `esp32sim_nat_take`: (op, flags, port, id, data).
 type NetOp = (u8, u8, u16, u32, Vec<u8>);
 
 fn net_take(e: &mut Emu) -> Vec<NetOp> {
-    let n = unsafe { esp32sim_net_take(e.0) } as usize;
-    let b = e.buf(unsafe { esp32sim_buf_len(e.0) });
+    // SAFETY: `e` is live and exclusively ours; the bytes are copied before the next call.
+    let b = unsafe { let n = esp32sim_nat_take(e.0); std::slice::from_raw_parts(esp32sim_nat_ptr(e.0), n).to_vec() };
     let (mut out, mut at) = (Vec::new(), 0);
-    for _ in 0..n {
+    while at < b.len() {
         let r = &b[at..];
         let len = u32::from_le_bytes(r[8..12].try_into().unwrap()) as usize;
         out.push((r[0], r[1], u16::from_le_bytes([r[2], r[3]]), u32::from_le_bytes(r[4..8].try_into().unwrap()), r[12..12 + len].to_vec()));
@@ -629,7 +629,7 @@ fn net_take(e: &mut Emu) -> Vec<NetOp> {
 
 fn net_event(e: &mut Emu, kind: u32, id: u32, arg: u32, data: &[u8]) -> u32 {
     // SAFETY: `e` is live and exclusively ours; `data` is readable for the call.
-    unsafe { esp32sim_net_event(e.0, kind, id, arg, data.as_ptr(), data.len()) }
+    unsafe { esp32sim_nat_event(e.0, kind, id, arg, data.as_ptr(), data.len()) }
 }
 
 /// A scripted internet: names resolve (example.com to 93.184.215.14, mcu1.jumperly.internal to the
@@ -671,43 +671,34 @@ fn net_host_needs_an_access_point_and_without_it_nothing_is_queued() {
     let board = "none";
     let e = unsafe { esp32sim_new(board.as_ptr(), board.len(), 4, 0) };
     assert!(!e.is_null());
-    assert_eq!(unsafe { esp32sim_net_host(e, 0b111) }, 1);
-    assert_eq!(unsafe { esp32sim_net_take(e) }, 0);
-    assert_eq!(unsafe { esp32sim_net_event(e, 1, 1, 0, std::ptr::null(), 0) }, 0);
+    assert_eq!(unsafe { esp32sim_nat_relay(e, 0b111) }, 1);
+    assert_eq!(unsafe { esp32sim_nat_take(e) }, 0);
+    assert_eq!(unsafe { esp32sim_nat_event(e, 1, 1, 0, std::ptr::null(), 0) }, 0);
     assert_eq!(wifi_ap(e, "Jumperly", "", 6), 0);
-    assert_eq!(unsafe { esp32sim_net_host(e, 0b111) }, 0);
+    assert_eq!(unsafe { esp32sim_nat_relay(e, 0b111) }, 0);
     assert_eq!(unsafe { esp32sim_wifi_stat(e, 0) }, 0.0);
-    assert_eq!(unsafe { esp32sim_net_event(e, 99, 1, 0, std::ptr::null(), 0) }, 0, "unknown kind");
+    assert_eq!(unsafe { esp32sim_nat_event(e, 99, 1, 0, std::ptr::null(), 0) }, 0, "unknown kind");
     assert_eq!(wifi_ap(e, "Jumperly", "", 6), 0);
-    assert_eq!(unsafe { esp32sim_net_event(e, 9, 1, 3, std::ptr::null(), 0) }, 0, "a new access point drops the host transport");
+    assert_eq!(unsafe { esp32sim_nat_event(e, 9, 1, 3, std::ptr::null(), 0) }, 0, "a new access point ends the relay");
     unsafe { esp32sim_delete(e) };
 }
 
-/// One `esp32sim_wifi_beacons` entry.
-fn beacon(ssid: &str, channel: u8, rssi: i8, secure: bool, bssid: [u8; 6]) -> Vec<u8> {
-    let mut v = vec![ssid.len() as u8];
-    v.extend_from_slice(ssid.as_bytes());
-    v.extend_from_slice(&[channel, rssi as u8, secure as u8]);
-    v.extend_from_slice(&bssid);
-    v
-}
-
-/// Jumperly patch J22: networks around the user are heard by a scan with their own channel, signal
-/// and security; one with the access point's own SSID is that AP; bad lists are refused.
+/// J22 over upstream's `esp32sim_wifi_nearby` and the fork's access point (`esp32sim_wifi_ap`):
+/// networks around the user are heard by a scan with their own channel, signal and security; one
+/// with the access point's own SSID is that AP; bad specs are refused and change nothing.
 #[test]
 fn a_scan_lists_the_networks_around_with_their_channel_signal_and_security() {
-    let list = [
-        beacon("Home", 11, -55, true, [0x02, 0, 0, 0, 0, 0x11]),
-        beacon("Cafe", 1, -72, false, [0x02, 0, 0, 0, 0, 0x22]),
-        beacon("Jumperly", 3, -30, false, [0x02, 0, 0, 0, 0, 0x33]),
-    ]
-    .concat();
+    let specs = "ssid=Home,chan=11,rssi=-55,secure=1,bssid=02:00:00:00:00:11
+        ssid=Cafe,chan=1,rssi=-72,secure=0,bssid=02:00:00:00:00:22
+        ssid=Jumperly,chan=3,rssi=-30,secure=0,bssid=02:00:00:00:00:33";
     let mut e = Emu::boot_with("wifi-net", |e| {
+        let nearby = |s: &str| unsafe { esp32sim_wifi_nearby(e, s.as_ptr(), s.len()) };
+        assert_eq!(nearby(specs), 1, "no access point yet");
         assert_eq!(wifi_ap(e, "Jumperly", "", 6), 0);
-        assert_eq!(unsafe { esp32sim_wifi_beacons(e, list.as_ptr(), list.len()) }, 0);
-        assert_eq!(unsafe { esp32sim_wifi_beacons(e, [3u8, b'a'].as_ptr(), 2) }, 1, "cut short");
-        let bad = beacon("x", 15, -50, false, [0; 6]);
-        assert_eq!(unsafe { esp32sim_wifi_beacons(e, bad.as_ptr(), bad.len()) }, 1, "channel 15");
+        assert_eq!(nearby(specs), 0);
+        assert_eq!(nearby("ssid=x,chan=15"), 1, "channel 15");
+        assert_eq!(nearby("ssid=a,bssid=02:00:00:00:00:44
+ssid=b,bssid=02:00:00:00:00:44"), 1, "one BSSID twice");
     });
     let (_, text) = e.run_for(8_000_000 * MHZ);
     assert!(text.contains("scan: 3 network(s)"), "{text}");
@@ -720,7 +711,7 @@ fn a_scan_lists_the_networks_around_with_their_channel_signal_and_security() {
 fn wifi_net_reaches_a_scripted_internet_through_the_host() {
     let mut e = Emu::boot_with("wifi-net", |e| {
         assert_eq!(wifi_ap(e, "Jumperly", "", 6), 0);
-        assert_eq!(unsafe { esp32sim_net_host(e, 0b111) }, 0);
+        assert_eq!(unsafe { esp32sim_nat_relay(e, 0b111) }, 0);
     });
     let mut host = ScriptedHost::default();
     let mut text = String::new();
@@ -837,7 +828,7 @@ fn lan_board(app: &str, ip: [u8; 4], mac_last: u8, peers: &[[u8; 4]], host: bool
         assert_eq!(unsafe { esp32sim_net_station(e, ip.as_ptr()) }, 0);
         let flat: Vec<u8> = peers.concat();
         assert_eq!(unsafe { esp32sim_lan_peers(e, flat.as_ptr(), peers.len() as u32) }, 0);
-        if host { assert_eq!(unsafe { esp32sim_net_host(e, 0b111) }, 0); }
+        if host { assert_eq!(unsafe { esp32sim_nat_relay(e, 0b111) }, 0); }
     });
     Board { e, ip, inbox: Vec::new(), text: String::new(), host: host.then(ScriptedHost::default) }
 }
@@ -895,7 +886,7 @@ fn the_station_mac_reaches_the_firmware_and_is_fixed_at_boot() {
 fn the_host_connects_to_a_guest_server_and_a_closed_port_refuses() {
     let mut e = Emu::boot_with("lan-server", |e| {
         assert_eq!(wifi_ap(e, "Jumperly", "", 6), 0);
-        assert_eq!(unsafe { esp32sim_net_host(e, 0b111) }, 0);
+        assert_eq!(unsafe { esp32sim_nat_relay(e, 0b111) }, 0);
     });
     let (mut text, _) = run_until(&mut e, "server ip=", 10_000_000);
     assert!(text.contains("server ip=10.0.2.15 port=7000"), "{text}");
@@ -952,7 +943,7 @@ fn bulk_transfer(down: u32, cpi: u32) -> Bulk {
     let mut e = Emu::boot_with("net-bulk", |e| {
         if cpi > 1 { assert_eq!(unsafe { esp32sim_set_approximate_jit_timing(e, cpi, 256 / cpi) }, 0); }
         assert_eq!(wifi_ap(e, "Jumperly", "", 6), 0);
-        assert_eq!(unsafe { esp32sim_net_host(e, 0b111) }, 0);
+        assert_eq!(unsafe { esp32sim_nat_relay(e, 0b111) }, 0);
     });
     let (mut text, _) = run_until(&mut e, "wifi: connected", 20_000_000);
     let (mut down_id, mut up_id, mut sent, mut eof, mut got) = (None, None, 0u32, false, 0u32);
@@ -2094,7 +2085,7 @@ fn esp8266_wifi_begin_logs_a_note_and_stays_alive() {
     // the Wi-Fi exports answer as without a radio
     unsafe {
         assert_eq!(esp32sim_wifi_probe_take(e.0), 0);
-        assert_eq!(esp32sim_net_host(e.0, 1), 1);
+        assert_eq!(esp32sim_nat_relay(e.0, 1), 1);
     }
     let mut blink = Emu::boot_esp8266("blink");
     blink.run_esp8266(600_000);

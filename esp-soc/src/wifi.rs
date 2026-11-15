@@ -220,26 +220,6 @@ impl BeaconAp {
         }
         Ok(list)
     }
-
-    /// Jumperly patch J22: the list `esp32sim_wifi_beacons` takes: entries of `[ssid_len u8][ssid][channel u8][rssi i8]
-    /// [secure u8][bssid 6]`, at most `BEACONS_MAX`; the SSID 1..=32 bytes of UTF-8, the channel 1..=14.
-    pub fn parse_list(mut data: &[u8]) -> Result<Vec<BeaconAp>, String> {
-        let mut out = Vec::new();
-        while !data.is_empty() {
-            let n = data[0] as usize;
-            if !(1..=32).contains(&n) || data.len() < 1 + n + 9 { return Err("a beacon entry is cut short or its SSID is not 1..=32 bytes".into()); }
-            let ssid = std::str::from_utf8(&data[1..1 + n]).map_err(|_| "a beacon SSID is not UTF-8".to_string())?.to_string();
-            let rest = &data[1 + n..];
-            let channel = rest[0];
-            if !(1..=14).contains(&channel) { return Err(format!("beacon '{ssid}': channel {channel}, expected 1 through 14")); }
-            let mut bssid = [0u8; 6];
-            bssid.copy_from_slice(&rest[3..9]);
-            out.push(BeaconAp { ssid, bssid, channel, rssi: rest[1] as i8, secure: rest[2] != 0 });
-            if out.len() > BEACONS_MAX { return Err(format!("more than {BEACONS_MAX} beacons")); }
-            data = &rest[9..];
-        }
-        Ok(out)
-    }
 }
 
 pub struct VirtualAp {
@@ -643,6 +623,17 @@ impl StationLink {
         net.nat = nat;
         net.epoch_us = cfg.epoch_s.map(|s| s.saturating_mul(1_000_000));
         self.attach(Some(VirtualAp::new(cfg, debug.has("wifi-frames"))), Some(net));
+    }
+    /// Give the network behind the access point `nat` (None: none, connections past the gateway
+    /// refused), with SNTP answered here even with a NAT when `local_ntp`. The old NAT's flows are
+    /// aborted first, so its transport hears of each (`Nat::abort_all`); the access point and the
+    /// guest's lease stay. An error without a network.
+    pub fn set_nat(&mut self, nat: Option<crate::nat::Nat>, local_ntp: bool) -> Result<(), String> {
+        let net = self.net.as_mut().ok_or("no virtual network: attach the access point first")?;
+        if let Some(old) = net.nat.as_mut() { old.abort_all(); }
+        net.nat = nat;
+        net.local_ntp = local_ntp;
+        Ok(())
     }
     /// What a guest reboot keeps: the host's access point, network and relay mode. The queues, the
     /// pacing and the counts start again. The NAT's flows belonged to the old

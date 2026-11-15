@@ -19,7 +19,7 @@ mod transport;
 #[cfg(not(target_arch = "wasm32"))]
 pub use std_transport::StdTransport;
 pub use transport::{Connect, FlowId, NatTransport, Resolve};
-// Jumperly patch J13: the transport of a host without sockets, driven through a queue.
+// A transport driven through a queue, for a host without sockets.
 pub mod queue;
 pub use queue::{HostEvent, QueueHandle, QueueTransport};
 

@@ -16,9 +16,11 @@ mod chips;
 pub mod psram_tests;
 mod network;
 mod ethernet;
+mod nat;
 mod ble;
 pub use ble::*;
 pub use ethernet::*;
+pub use nat::*;
 mod s3;
 mod jumperly;
 mod net_host;
@@ -63,11 +65,14 @@ pub struct Emu {
     out: Vec<(u8, Vec<u8>)>,
     ethernet_out: Vec<Vec<u8>>,
     ble_out: String,
+    /// the host side of the station's NAT queue (`esp32sim_nat_relay`), and the records last taken
+    nat: Option<esp_soc::nat::QueueHandle>,
+    nat_out: Vec<u8>,
+    /// records of a relay `esp32sim_nat_relay` replaced, not taken yet: the next take hands them over first
+    nat_left: Vec<u8>,
     booted: bool,
     /// Jumperly patch J3: the result of the last `esp32sim_*_take` call
     buf: Vec<u8>,
-    /// Jumperly patch J13: the host's side of the station's NAT (`esp32sim_net_host`)
-    net: Option<esp_soc::nat::QueueHandle>,
     /// a mask ROM ELF was loaded: a ROM boot without one would run from empty memory and print nothing
     rom_loaded: bool,
     #[cfg(target_arch = "wasm32")]
@@ -240,10 +245,9 @@ pub unsafe extern "C" fn esp32sim_new(board: *const u8, board_len: usize, flash_
     }
     Box::into_raw(Box::new(Emu {
         m,
-        out: Vec::new(), ethernet_out: Vec::new(), ble_out: String::new(),
+        out: Vec::new(), ethernet_out: Vec::new(), ble_out: String::new(), nat: None, nat_out: Vec::new(), nat_left: Vec::new(),
         booted: false, rom_loaded: false,
         buf: Vec::new(),
-        net: None,
         #[cfg(target_arch = "wasm32")]
         jit: BrowserJit::default(),
     }))

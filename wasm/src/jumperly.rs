@@ -491,42 +491,8 @@ pub unsafe extern "C" fn esp32sim_wifi_ap(e: *mut Emu, ssid: *const u8, ssid_len
         Err(reason) => { log(&format!("[emu] wifi: {reason}")); return 1; }
     };
     log(&format!("[emu] virtual AP '{}' ({}, channel {}), subnet 10.0.2.0/24, no NAT in the browser", cfg.ssid, if cfg.psk.is_some() { "WPA2-PSK" } else { "open" }, cfg.channel));
+    super::nat::end_relay(e);   // a new network has no relay until esp32sim_nat_relay
     if let Err(reason) = e.m.bus().attach_wifi(cfg, None) { log(&format!("[emu] wifi: {reason}")); return 1; }
-    e.net = None;   // Jumperly patch J13: a new network has no host transport until esp32sim_net_host
-    0
-}
-
-/// Jumperly patch J22: the networks around the user (the local helper's scan), heard by the
-/// board's scans but not joinable, replacing the ones there were. `data` holds entries of
-/// `[ssid_len u8][ssid][channel u8][rssi i8][secure u8][bssid 6]` (empty: none), at most 32. A network
-/// on a BSSID already listed, or with the access point's own SSID or BSSID, is left out with a log
-/// line (`StationLink::set_beacons`). Returns 0, or 1 (no access point, bad data; logged).
-///
-/// # Safety
-/// `e` must point to a live emulator to which the caller has exclusive access; for a nonzero `len`,
-/// `data` must be readable for `len` bytes throughout this call.
-#[no_mangle]
-pub unsafe extern "C" fn esp32sim_wifi_beacons(e: *mut Emu, data: *const u8, len: usize) -> u32 {
-    // SAFETY: the caller provides exclusive access to a live emulator.
-    let e = unsafe { &mut *e };
-    // SAFETY: the caller provides a readable buffer for this call.
-    let data = unsafe { bytes(data, len) };
-    let list = match esp_soc::wifi::BeaconAp::parse_list(data) {
-        Ok(list) => list,
-        Err(reason) => { log(&format!("[emu] wifi: {reason}")); return 1; }
-    };
-    // a real scan may list one BSSID twice: the first one answers, as on the air
-    let mut seen = Vec::new();
-    let list = list.into_iter().filter(|b| {
-        let first = !seen.contains(&b.bssid);
-        if first { seen.push(b.bssid); } else { log(&format!("[emu] wifi: network around '{}' left out: its BSSID {} is listed already", b.ssid, esp_soc::wifi::mac_str(&b.bssid))); }
-        first
-    }).collect();
-    let Some(left_out) = e.m.chip_mut().and_then(|c| c.wifi_link()?.set_beacons(list)) else {
-        log("[emu] wifi: beacons need the virtual access point (esp32sim_wifi_ap)");
-        return 1;
-    };
-    for (b, why) in left_out { log(&format!("[emu] wifi: network around '{}' left out: it has {why}", b.ssid)); }
     0
 }
 
