@@ -678,8 +678,15 @@ fn net_host_needs_an_access_point_and_without_it_nothing_is_queued() {
     assert_eq!(unsafe { esp32sim_nat_relay(e, 0b111) }, 0);
     assert_eq!(unsafe { esp32sim_wifi_stat(e, 0) }, 0.0);
     assert_eq!(unsafe { esp32sim_nat_event(e, 99, 1, 0, std::ptr::null(), 0) }, 0, "unknown kind");
+    // a live relay takes a flow the host opens (J15) and counts it; a new access point ends the relay
+    let peer = [203u8, 0, 113, 9, 0x50, 0xc3];
+    assert_eq!(unsafe { esp32sim_nat_event(e, 10, 0x8000_0001, 80, peer.as_ptr(), peer.len()) }, 1);
+    assert_eq!(unsafe { esp32sim_wifi_stat(e, 2) }, 1.0);
     assert_eq!(wifi_ap(e, "Jumperly", "", 6), 0);
-    assert_eq!(unsafe { esp32sim_nat_event(e, 9, 1, 3, std::ptr::null(), 0) }, 0, "a new access point ends the relay");
+    assert_eq!(unsafe { esp32sim_nat_event(e, 10, 0x8000_0002, 80, peer.as_ptr(), peer.len()) }, 0, "a new access point ends the relay");
+    assert_eq!(unsafe { esp32sim_wifi_stat(e, 2) }, 0.0, "and its flows are not counted");
+    assert_eq!(unsafe { esp32sim_nat_relay(e, 0b111) }, 0);
+    assert_eq!(unsafe { esp32sim_nat_event(e, 10, 0x8000_0002, 80, peer.as_ptr(), peer.len()) }, 1, "a new relay after it");
     unsafe { esp32sim_delete(e) };
 }
 

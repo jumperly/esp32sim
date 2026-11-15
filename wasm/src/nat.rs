@@ -44,7 +44,8 @@ fn keep_left(e: &mut Emu) {
         let len = u32::from_le_bytes([left[at + 8], left[at + 9], left[at + 10], left[at + 11]]) as usize;
         let end = at + (RECORD_HEADER + len).next_multiple_of(4);
         fits = fits && e.nat_left.len() + (end - at) <= OUT_MAX;
-        if fits || matches!(left[at], op::TCP_CLOSE | op::UDP_CLOSE) { e.nat_left.extend_from_slice(&left[at..end]); }
+        // Jumperly patch J15: an incoming flow's answer is kept like a close (the page waits for it)
+        if fits || matches!(left[at], op::TCP_CLOSE | op::UDP_CLOSE | op::INCOMING_RESULT) { e.nat_left.extend_from_slice(&left[at..end]); }
         at = end;
     }
 }
@@ -211,6 +212,31 @@ mod tests {
         assert_eq!(unsafe { esp32sim_nat_relay(e, 0) }, 0);
         assert_eq!(take(e), [(op::UDP_DATA, 0), (op::UDP_CLOSE, 0), (op::TCP_CLOSE, 1)]);
         assert!(take(e).is_empty());
+        // SAFETY: the emulator is live and not used again.
+        unsafe { esp32sim_delete(e) };
+    }
+
+    /// Jumperly patch J15: past the bound the answer to an incoming flow is kept with the closes,
+    /// since no `TCP_CLOSE` follows a refused one and the page waits for it.
+    #[test]
+    fn the_answer_to_an_incoming_flow_is_kept_past_the_bound() {
+        let board = "none";
+        // SAFETY: the board name is readable; the emulator is deleted below.
+        let e = unsafe { esp32sim_new(board.as_ptr(), board.len(), 4, 0) };
+        let spec = "ssid=esp32sim";
+        // SAFETY: the test owns the live emulator; `spec` is readable for the call.
+        assert_eq!(unsafe { esp32sim_wifi(e, spec.as_ptr(), spec.len()) }, 0);
+        let (mut transport, handle) = QueueTransport::new();
+        let from = std::net::SocketAddrV4::new([203, 0, 113, 9].into(), 50000);
+        assert_eq!(handle.event(HostEvent::Incoming { id: 0x8000_0001, port: 81, from }), 1);
+        assert!(transport.incoming().is_some());
+        transport.incoming_result(0x8000_0001, false);
+        // SAFETY: the test owns the live emulator.
+        unsafe { &mut *e }.nat = Some(handle);
+        leave_room(e, 8);   // the 12-byte record does not fit
+        // SAFETY: as above.
+        assert_eq!(unsafe { esp32sim_nat_relay(e, 0) }, 0);
+        assert_eq!(take(e), [(op::UDP_DATA, 0), (op::INCOMING_RESULT, 0)]);
         // SAFETY: the emulator is live and not used again.
         unsafe { esp32sim_delete(e) };
     }
