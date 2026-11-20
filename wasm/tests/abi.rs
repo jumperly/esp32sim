@@ -115,6 +115,60 @@ fn c6_speaks_the_web_protocol() {
     assert_eq!(unsafe { esp32sim_cpu_hz(e.0) }, 160e6);
 }
 
+/// The ESP-Mosaico demo the page runs (`web/wasm/fw/s31-mosaico.json`): the S31 from its ROM,
+/// the board's scripted motion selected before boot, the LVGL UI up on the 480 x 480 CO5300, and a
+/// touch and the AI button through the web protocol reaching the firmware.
+#[test]
+#[ignore = "needs the ESP32-S31 mask ROM ELF"]
+fn s31_mosaico_speaks_the_web_protocol() {
+    let mut e = Emu::new("mosaico", 16, 16);
+    // SAFETY: `e.0` is live and this test retains exclusive access to its wrapper.
+    assert_eq!(unsafe { esp32sim_set_imu_motion(e.0, 1) }, 0, "the Mosaico has an IMU model");
+    e.load(0, &std::fs::read(common::rom("esp32s31_rev0")).unwrap());
+    e.load_file(1, "web/wasm/fw/public/s31-mosaico-demo-bootloader.bin"); e.load_file(2, "web/wasm/fw/public/s31-mosaico-demo-ptable.bin");
+    e.load_file(3, "web/wasm/fw/public/s31-mosaico-demo.bin");
+    e.boot();
+    let mut all = e.out();
+    let ui_up = |all: &[(u32, Vec<u8>)]| has(&texts(all), "demo: ui up");
+    for _ in 0..40 { if ui_up(&all) { break; } assert_eq!(e.run(32_000_000), 0); all.extend(e.out()); }   // up to 4 s
+    assert!(ui_up(&all), "the UI never came up: {:?}", texts(&all).iter().filter(|t| t.contains("serial")).collect::<Vec<_>>());
+    let ts = texts(&all);
+    assert!(has(&ts, "\"t\":\"board\",\"name\":\"mosaico\",\"chip\":\"esp32s31\""), "{:?}", &ts[..ts.len().min(3)]);
+    assert!(has(&ts, "demo: sensors imu=1 mag0=1 mag1=1"), "the BMI270 and both BMM150 answer");
+    e.text_in("{\"t\":\"touch\",\"x\":300,\"y\":200,\"down\":1}");
+    for _ in 0..3 { assert_eq!(e.run(32_000_000), 0); all.extend(e.out()); }
+    e.text_in("{\"t\":\"touch\",\"x\":300,\"y\":200,\"down\":0}");
+    e.text_in("{\"t\":\"btn\",\"pin\":7,\"v\":1}");
+    for _ in 0..3 { assert_eq!(e.run(32_000_000), 0); all.extend(e.out()); }
+    e.text_in("{\"t\":\"btn\",\"pin\":7,\"v\":0}");
+    for _ in 0..6 { assert_eq!(e.run(32_000_000), 0); all.extend(e.out()); }
+    let ts = texts(&all);
+    assert!(has(&ts, "demo: touch 1 at 300,200"), "the touch reached LVGL");
+    assert!(has(&ts, "demo: AI button 1"), "the AI button reached iot_button");
+    let frame = all.iter().rev().find(|m| m.0 == 2 && m.1[0] == 1).expect("a display frame went out");
+    assert_eq!(&frame.1[1..5], &[0xe0, 1, 0xe0, 1], "the CO5300 frame is 480x480");
+    // SAFETY: `e.0` stays live and neither query overlaps mutable access.
+    assert_eq!(unsafe { esp32sim_cpu_hz(e.0) }, 320e6);
+    // SAFETY: `e.0` is live and exclusively borrowed by this test.
+    assert_eq!(unsafe { esp32sim_set_imu_motion(e.0, 0) }, 1, "not once the machine has run");
+}
+
+/// The ESP32-S31 boards the page offers: `esp32s31` is a bare module, `mosaico` the ESP-Mosaico;
+/// scripted IMU motion needs a board with an IMU model.
+#[test]
+fn s31_boards_and_imu_motion() {
+    for (board, flash, motion) in [("mosaico", 16, 0), ("esp32s31", 2, 1), ("esp32c3", 4, 1), ("waveshare-amoled18-v2", 16, 0)] {
+        let e = Emu::new(board, flash, 0);
+        // SAFETY: `e.0` is live and exclusively borrowed by this test.
+        assert_eq!(unsafe { esp32sim_set_imu_motion(e.0, 1) }, motion, "{board}");
+        // SAFETY: as above.
+        assert_eq!(unsafe { esp32sim_set_imu_motion(e.0, 2) }, 1, "{board}: no mode 2");
+    }
+    let e = Emu::new("esp32s31", 2, 0);
+    // SAFETY: `e.0` stays live and the query does not overlap mutable access.
+    assert_eq!(unsafe { esp32sim_cpu_hz(e.0) }, 320e6);
+}
+
 #[test]
 fn camera_binary_input_reports_boards_without_a_camera() {
     for board in ["none", "atech14", "waveshare-cam", "c3", "c6"] {
@@ -259,4 +313,66 @@ fn nat_relay_needs_the_access_point_and_answers_unknown_flows_with_zero() {
     assert_eq!(event(3, 1, 0, b"late"), 4);
     assert_eq!(relay(0), 0, "off again");
     assert_eq!(event(3, 1, 0, b"late"), 0, "no relay");
+}
+
+/// Several access points from one `esp32sim_wifi` text, a line each, refused as the CLI's repeated
+/// `--wifi` refuses them; and the Network panel only on a chip with WiFi, announced once.
+#[test]
+fn wifi_takes_several_access_points_and_the_network_panel_needs_a_radio() {
+    // SAFETY: each emulator is live and used by this thread alone; the buffers are readable for the call.
+    let wifi = |e: &Emu, spec: &[u8]| unsafe { esp32sim_wifi(e.0, spec.as_ptr(), spec.len()) };
+    // SAFETY: as above.
+    let netmon = |e: &Emu| unsafe { esp32sim_netmon(e.0) };
+    let p4 = Emu::new("esp32p4", 2, 0);
+    assert_eq!(netmon(&p4), 1, "no radio on the P4 without its co-processor");
+    let mut s3 = Emu::new("none", 4, 0);
+    assert_eq!(wifi(&s3, b""), 0, "an empty text is the default access point, as before");
+    assert_eq!(wifi(&s3, b"ssid=home,psk=password1\r\n\r\n  ssid=guest,chan=11\n"), 0, "two access points, blank lines and CRLF");
+    assert_eq!(wifi(&s3, b"ssid=home\nssid=home"), 1, "two access points with one SSID");
+    assert_eq!(wifi(&s3, b"ssid=a\nssid=b,bssid=02:53:49:4d:00:01"), 1, "two access points on one BSSID");
+    assert_eq!(wifi(&s3, b"ssid=a\nssid=b,epoch=1700000000"), 1, "the clock belongs to the first");
+    let nine: String = (0..9).map(|i| format!("ssid=ap{i}\n")).collect();
+    assert_eq!(wifi(&s3, nine.as_bytes()), 1, "more than 8");
+    assert_eq!(wifi(&s3, b"ssid=home\n\xff"), 1, "not UTF-8");
+    assert_eq!(netmon(&s3), 0);
+    assert_eq!(netmon(&s3), 0, "a second call changes nothing");
+    let hello = texts(&s3.out()).into_iter().filter(|t| t.contains("\"t\":\"netmon\"")).count();
+    assert_eq!(hello, 1, "the panel is announced once");
+}
+
+/// The page's WiFi demo (`web/wasm/fw/c6-wifi-station.json`): the committed station firmware of
+/// `examples/c6-wifi-station` on a bare C6, two access points and two networks around it. The
+/// scan lists all four, the station joins the first, takes its lease and pings the gateway, and
+/// the Network panel gets those frames both ways: ARP, and DHCP to port 67.
+#[test]
+#[ignore = "needs the ESP32-C6 mask ROM ELF"]
+fn c6_station_frames_reach_the_network_panel() {
+    let mut e = Emu::new("esp32c6", 4, 0);
+    e.load(0, &std::fs::read(common::rom("esp32c6_rev0")).unwrap());
+    e.load_file(1, "web/wasm/fw/public/c6-wifi-bootloader.bin"); e.load_file(2, "web/wasm/fw/public/c6-wifi-ptable.bin"); e.load_file(3, "web/wasm/fw/public/c6-wifi_station.bin");
+    let aps = "ssid=esp32sim,psk=esp32sim-pass\nssid=esp32sim-guest,chan=11";
+    let near = "ssid=Workshop,chan=1,rssi=-67\nssid=Cafe,chan=11,rssi=-81,secure=0";
+    // SAFETY: `e.0` is live and this test retains exclusive access to its wrapper; the texts are readable for the calls.
+    unsafe {
+        assert_eq!(esp32sim_wifi(e.0, aps.as_ptr(), aps.len()), 0);
+        assert_eq!(esp32sim_wifi_nearby(e.0, near.as_ptr(), near.len()), 0);
+        assert_eq!(esp32sim_netmon(e.0), 0);
+    }
+    e.boot();
+    let mut all = e.out();
+    for _ in 0..140 { assert_eq!(e.run(16_000_000), 0); all.extend(e.out()); }   // 14 s: the fifth ping's answer is at 12.6 s
+    let ts = texts(&all);
+    assert!(has(&ts, "\"t\":\"netmon\",\"linktype\":1"), "the panel was announced");
+    let console = ts.iter().filter(|t| t.contains("\"t\":\"serial\"")).cloned().collect::<String>();
+    for line in ["SCAN found=4", "ssid=\\\"esp32sim-guest\\\" channel=11", "ssid=\\\"Workshop\\\" channel=1", "ssid=\\\"Cafe\\\" channel=11",
+                 "CONNECTED channel=6 bssid=02:53:49:4d:00:01", "GOT_IP ip=10.0.2.15", "PING done sent=5 received=5"] {
+        assert!(console.contains(line), "{line} missing from the console:\n{console}");
+    }
+    let frames: Vec<&[u8]> = all.iter().filter(|m| m.0 == 2 && m.1[0] == 5).map(|m| &m.1[..]).collect();
+    let ethertype = |f: &[u8]| u16::from_be_bytes([f[22], f[23]]);
+    assert!(frames.iter().all(|f| f.len() >= 10 + 14 && f[1] <= 1), "[5][dir][µs u64][Ethernet frame]");
+    assert!(frames.iter().any(|f| f[1] == 0) && frames.iter().any(|f| f[1] == 1), "frames both ways");
+    assert!(frames.iter().any(|f| ethertype(f) == 0x0806), "ARP");
+    // IPv4 (20-byte header) carrying UDP to the DHCP server port
+    assert!(frames.iter().any(|f| ethertype(f) == 0x0800 && f[24 + 9] == 17 && u16::from_be_bytes([f[24 + 22], f[24 + 23]]) == 67), "DHCP");
 }

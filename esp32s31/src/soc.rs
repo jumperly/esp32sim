@@ -37,6 +37,8 @@ pub fn machine(mac: [u8; 6], flash_size: usize) -> Machine {
 const TIME_HZ: u64 = crate::periph::CPU_HZ;
 /// Modem TSF timer latch request (bits 0-3); the latched value follows at +0xC/+0x10.
 const TSF_LATCH: u32 = 0x2010_d814;
+#[cfg(test)]
+use crate::ledc::BASE as LEDC_BASE;
 
 impl Soc for S31 {
     type Core = Cpu;
@@ -131,6 +133,9 @@ pub struct SocBus {
     pub board_inputs: Option<BoardInputs>,
     /// The pad levels last given to the board (`Pads::board_levels`).
     pin_levels: u64,
+    /// Pins the GPIO matrix routes from an LEDC channel (`routed_signal` + `ledc_output`), kept
+    /// at every pad write so an LEDC write re-evaluates only these.
+    ledc_pins: u64,
     /// Device state may differ from what the last interrupt refresh saw: set at every dispatch
     /// (`select_core`) and by every access that is not plain memory or that faults; cleared by a
     /// refresh. See `memory_written`.
@@ -181,11 +186,15 @@ impl BoardInputs {
     /// Winbond W25Q16 (0xef4015) — 2 MiB, matching the IDF hello_world image header
     /// (`flash_size = 2MB`). Prefer this for BoardInputs + Machine flash sizing so the
     /// image-header / modelled-flash mismatch warning does not fire.
-    pub fn hello_w25q16() -> Self {
-        let mut sfdp = vec![0x53, 0x46, 0x44, 0x50, 0x05, 0x01, 0x00, 0xff, 0x00, 0x05, 0x01, 0x10, 0x80, 0x00, 0x00, 0xff];
-        sfdp.extend([0xff; 0x70]);
-        Self { flash_id: [0xef, 0x40, 0x15], sfdp, bias: [0; 2], perif_glitch: 0, dig_reg: [0; 4], bod: 0,
-            bbpll_hz: 480_000_000, idle_level: Some(false), inputs: vec![(36, true)], psram_bytes: 0, flash_status: 0, efuse: Vec::new() }
+    pub fn hello_w25q16() -> Self { Self::devkit_sized(2 << 20).expect("2 MiB is a W25Q part") }
+
+    /// The devkit's inputs with the Winbond W25Q part of `bytes` capacity: W25Q80 (1 MiB) to
+    /// W25Q128 (16 MiB), JEDEC 0xef40nn where nn = log2(bytes). `None` for any other size.
+    pub fn devkit_sized(bytes: usize) -> Option<Self> {
+        if !bytes.is_power_of_two() || !(1 << 20..=16 << 20).contains(&bytes) { return None; }
+        let mut inputs = Self::devkit_w25q128();
+        inputs.flash_id[2] = bytes.trailing_zeros() as u8;
+        Some(inputs)
     }
     /// ESP-Mosaico CoreBoard: GigaDevice GD25Q128E (JEDEC 0xc84018, read from the board with
     /// esptool 5.6.0 `flash-id`), 16 MiB, and the ESP32-S31NRV16's 16 MiB in-package PSRAM. The
@@ -257,6 +266,7 @@ impl SocBus {
             rom_image: None,
             board_inputs: None,
             pin_levels: !0,
+            ledc_pins: 0,
         }
     }
 
@@ -332,6 +342,7 @@ impl SocBus {
         if address >> 24 != 0x20 { return; }
         if address & !3 == TSF_LATCH { self.latch_tsf(); }
         if crate::pads::Pads::is_mmio(address) { self.deliver_pin_levels(); self.irq_dirty = true; }
+        else if crate::ledc::group(address).is_some() && self.ledc_pins != 0 { self.deliver_ledc_levels(); }
         self.deliver_spi();
     }
 
@@ -371,6 +382,37 @@ impl SocBus {
         self.irq_dirty = true;
     }
 
+    /// The level an LEDC channel puts on its GPIO-matrix output (LEDCn_LS_SIG_OUT_PAD_OUTm_IDX,
+    /// 126-133 and 230-237; soc/esp32s31 ledc_reg.h): with SIG_OUT_EN (CONF0 bit 2) high while
+    /// the duty in effect (DUTY_R, `ledc.rs`, integer part bits 24:4) is above zero and the
+    /// channel's timer (CONF0 TIMER_SEL bits 1:0) neither paused (TIMERn_CONF bit 23) nor held
+    /// in reset (bit 24), and the idle level (CONF0 bit 3) otherwise. The waveform itself is not
+    /// modelled: a board sees PWM as on or off. None for other signals.
+    fn ledc_output(&self, signal: u32) -> Option<bool> {
+        let (group, channel) = match signal { 126..=133 => (0, signal - 126), 230..=237 => (1, signal - 230), _ => return None };
+        let g = &self.inner.ledc.groups[group];
+        let conf0 = g.read(channel * 0x14);
+        let running = g.read(0xa0 + (conf0 & 3) * 8) & (3 << 23) == 0;
+        Some(if conf0 & 1 << 2 != 0 && running { g.read(channel * 0x14 + 0x10) >> 4 & 0x1f_ffff != 0 } else { conf0 & 1 << 3 != 0 })
+    }
+    /// The LEDC groups' source clocks (HP_SYS_CLKRST LEDC_CTRL0, register storage here).
+    fn ledc_source_hz(&self) -> [u64; 2] {
+        let ctrl = self.inner.unmodelled.get(&crate::ledc::CLK_CTRL).copied().unwrap_or(0);
+        let rc = self.inner.clocks.rc_fast_hz();
+        [crate::ledc::Ledc::source_hz(0, ctrl, rc), crate::ledc::Ledc::source_hz(1, ctrl, rc)]
+    }
+    /// Runs the LEDC duty changes; the pins they drive follow, and an ended change may interrupt.
+    fn advance_ledc(&mut self, cycles: u64) {
+        if !self.inner.ledc.running() { return; }
+        let hz = self.ledc_source_hz();
+        let before: [[u32; 8]; 2] = std::array::from_fn(|g| std::array::from_fn(|ch| self.inner.ledc.groups[g].read(ch as u32 * 0x14 + 0x10)));
+        let mut ended = false;
+        for g in 0..2 { ended |= self.inner.ledc.groups[g].advance(cycles, hz[g], TIME_HZ); }
+        if ended { self.irq_dirty = true; }
+        let moved = (0..2).any(|g| (0..8).any(|ch| self.inner.ledc.groups[g].read(ch as u32 * 0x14 + 0x10) != before[g][ch]));
+        if moved && self.ledc_pins != 0 { self.deliver_ledc_levels(); }
+    }
+
     /// The modem's TSF timers (802.11 timing synchronization, microseconds). The Wi-Fi library
     /// reads timer n (0-3) by setting bit n of 0x2010D814, reading the latched value from
     /// 0x2010D820 (low) and 0x2010D824 (high), then clearing the bit (`hal_get_tsf_time`). With the block as plain storage the latch never moved, so every
@@ -386,7 +428,25 @@ impl SocBus {
     }
 
     fn deliver_pin_levels(&mut self) {
-        let levels = self.inner.pads.board_levels();
+        let levels = self.inner.pads.board_levels(self.board.pull_downs());
+        self.ledc_pins = (0..62).filter(|&p| self.inner.pads.routed_signal(p).is_some_and(|(s, _)| self.ledc_output(s).is_some())).fold(0, |m, p| m | 1 << p);
+        self.apply_pin_levels(self.ledc_levels(levels));
+    }
+    /// After an LEDC write: only the LEDC-routed pins can change (`ledc_pins`).
+    fn deliver_ledc_levels(&mut self) { self.apply_pin_levels(self.ledc_levels(self.pin_levels)); }
+    /// `levels` with each LEDC-routed pin set to its channel's output, through the matrix's
+    /// output invert (FUNC_OUT_SEL_CFG bit 9).
+    fn ledc_levels(&self, mut levels: u64) -> u64 {
+        let mut pins = self.ledc_pins;
+        while pins != 0 {
+            let pin = pins.trailing_zeros() as usize; pins &= pins - 1;
+            let Some((signal, invert)) = self.inner.pads.routed_signal(pin) else { continue };
+            let Some(level) = self.ledc_output(signal) else { continue };
+            if level ^ invert { levels |= 1 << pin; } else { levels &= !(1u64 << pin); }
+        }
+        levels
+    }
+    fn apply_pin_levels(&mut self, levels: u64) {
         let diff = levels ^ self.pin_levels;
         if diff == 0 { return; }
         self.pin_levels = levels;
@@ -498,6 +558,12 @@ impl esp_soc::SocBus for SocBus {
             let dt = u128::from(ns.saturating_sub(self.board_ns)) * u128::from(hz);
             (dt.div_ceil(1_000_000_000).min(u128::from(u64::MAX)) as u64).max(1)
         });
+        // The next LEDC duty step (a fade's end interrupt, or a pin's level).
+        let ledc = if self.inner.ledc.running() {
+            let hz = self.ledc_source_hz();
+            (0..2).filter_map(|g| self.inner.ledc.groups[g].cycles_until_step(hz[g], TIME_HZ)).min()
+        } else { None };
+        let board = match (board, ledc) { (Some(a), Some(b)) => Some(a.min(b)), (a, b) => a.or(b) };
         let Some(ticks) = self.inner.periph.systimer.ticks_until_irq(stalled) else { return board };
         if ticks == 0 { return Some(1); }
         let source = if self.inner.periph.systimer.source_rc_fast() {
@@ -956,6 +1022,7 @@ impl Bus for SocBus {
                 if changed { self.irq_dirty = true; }
             }
         }
+        self.advance_ledc(u64::from(cycles));
         // Emulated time for the board (TE), in nanoseconds.
         let t = u128::from(cycles) * 1_000_000_000 + u128::from(self.board_ns_frac);
         self.board_ns += (t / u128::from(hz)) as u64; self.board_ns_frac = (t % u128::from(hz)) as u64;
@@ -993,6 +1060,17 @@ impl Bus for SocBus {
 mod tests {
     use super::*;
     use esp_soc::SocBus as _;
+
+    /// The devkit part's JEDEC capacity byte follows the size (W25Q80 .. W25Q128); other sizes
+    /// have no W25Q part.
+    #[test]
+    fn devkit_flash_id_follows_the_size() {
+        for (mb, id) in [(1, 0x14), (2, 0x15), (4, 0x16), (8, 0x17), (16, 0x18)] {
+            assert_eq!(BoardInputs::devkit_sized(mb << 20).unwrap().flash_id, [0xef, 0x40, id], "{mb} MiB");
+        }
+        assert_eq!(BoardInputs::hello_w25q16().flash_id, [0xef, 0x40, 0x15]);
+        for bytes in [0, 3 << 20, 32 << 20, 512 << 10] { assert!(BoardInputs::devkit_sized(bytes).is_none(), "{bytes}"); }
+    }
 
     /// EX265: a store to plain memory no longer ends the dispatch when the interrupt refresh it
     /// would have caused cannot change anything; after a device access it refreshes on the spot.
@@ -1069,6 +1147,34 @@ mod tests {
         bus.write32(FLASH_MMU + 0x380, vpage).unwrap();
         let got = bus.read32(FLASH_MMU + 0x37c).unwrap();
         assert_eq!(got, (1 << 12) | (payload_off as u32 / 0x8000), "{got:#x}");
+    }
+
+    /// LEDC channel 0 through the matrix to GPIO 8: a new duty shows only after PARA_UP or
+    /// DUTY_START, a paused or reset timer gives the idle level, OUT_INV_SEL inverts.
+    #[test]
+    fn ledc_pin_follows_the_duty_in_effect() {
+        use crate::pads::{GPIO_BASE, IO_MUX_BASE};
+        use emu_core::Bus;
+        let mut bus = SocBus::new(1 << 20, [0; 6]);
+        let ch = LEDC_BASE[0];
+        let pin = |b: &SocBus| b.pin_levels >> 8 & 1 != 0;
+        bus.write32(IO_MUX_BASE + 8 * 4, 0x1200).unwrap();
+        bus.write32(GPIO_BASE + 0x38, 1 << 8).unwrap();
+        bus.write32(GPIO_BASE + 0xaf4 + 8 * 4, 126).unwrap();
+        bus.write32(ch + 8, 0).unwrap();
+        bus.write32(ch, 1 << 2 | 1 << 4).unwrap();                    // SIG_OUT_EN, PARA_UP, duty 0
+        assert!(!pin(&bus));
+        assert_eq!(bus.read32(ch).unwrap() & 1 << 4, 0, "PARA_UP clears itself");
+        bus.write32(ch + 8, 100 << 4).unwrap();                       // ledc_set_duty, no update
+        assert!(!pin(&bus), "the old duty stays in effect");
+        bus.write32(ch + 0xc, 1 << 31).unwrap();                      // DUTY_START
+        assert!(pin(&bus));
+        bus.write32(ch + 0xa0, 1 << 23).unwrap();                     // timer 0 paused: idle level 0
+        assert!(!pin(&bus));
+        bus.write32(ch + 0xa0, 0).unwrap();
+        assert!(pin(&bus));
+        bus.write32(GPIO_BASE + 0xaf4 + 8 * 4, 126 | 1 << 9).unwrap(); // OUT_INV_SEL
+        assert!(!pin(&bus));
     }
 
     #[test]
